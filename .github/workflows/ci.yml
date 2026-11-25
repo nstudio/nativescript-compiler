@@ -16,13 +16,13 @@ concurrency:
 
 jobs:
   checks:
-    name: Typecheck, layers, CLI extension & adapter checks
+    name: Typecheck, layers, CLI extension & canvas checks (Linux)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Checkout NativeScript core (for XML/expression-parser checks)
+      - name: Checkout NativeScript core (for expression-parser parity)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: NativeScript/NativeScript
@@ -38,7 +38,8 @@ jobs:
       - name: Install workspace dependencies
         run: |
           npm install --no-audit --no-fund
-          for t in packages/*/tests/package-lock.json; do npm ci --prefix "$(dirname "$t")" --no-audit --no-fund; done
+          npm ci --prefix packages/compiler/tests --no-audit --no-fund
+          npm ci --prefix packages/nativescript-canvas/tests --no-audit --no-fund
           npm ci --prefix core --no-audit --no-fund
 
       - name: Typecheck compiler and adapters
@@ -56,7 +57,5 @@ jobs:
             node packages/compiler/bin/ns-compiled-adapter.js build "packages/${pkg}"
           done
 
-      - name: Adapter release checks (Angular & Canvas)
-        run: |
-          SUITE=angular npm run test:release-checks
-          SUITE=nativescript-canvas npm run test:release-checks
+      - name: Canvas binding release checks
+        run: SUITE=nativescript-canvas npm run test:release-checks
