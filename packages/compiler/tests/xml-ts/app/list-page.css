@@ -1,0 +1,5 @@
+.list { height: 240; margin-top: 12; }
+.row { padding: 12 16; }
+.name { font-size: 18; color: #1c1c1e; }
+.count { font-size: 14; margin-left: 12; color: #8e8e93; }
+.picked { margin-top: 12; font-size: 16; color: #0a64d6; }

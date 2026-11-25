@@ -1,0 +1,9 @@
+.page { padding: 16; }
+.title { font-size: 24; font-weight: bold; color: #1c1c1e; }
+.line { font-size: 16; margin-top: 8; color: #3a3a3c; }
+.many { color: #d93a3a; }
+.tap { margin-top: 16; height: 44; font-size: 16; color: #ffffff; background-color: #0a64d6; border-radius: 10; }
+.card { background-color: #eef3fb; border-radius: 8; padding: 12; }
+.card-title { font-size: 17; font-weight: bold; color: #0a64d6; }
+.badge { margin-top: 8; padding: 6 10; background-color: #d93a3a; border-radius: 12; horizontal-align: left; }
+.badge-text { color: #ffffff; font-size: 13; }

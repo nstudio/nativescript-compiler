@@ -1,0 +1,1170 @@
+{
+	"node": "v26.10.0",
+	"answers": {
+		"Math.abs": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Math.acos": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Math.asin": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Math.atan": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Math.cbrt": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Math.ceil": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Math.clz32": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Math.cos": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Math.cosh": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Math.exp": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Math.expm1": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Math.floor": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Math.fround": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Math.log": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Math.log10": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Math.log1p": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Math.log2": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Math.round": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Math.sign": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Math.sin": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Math.sinh": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Math.sqrt": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Math.tan": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Math.tanh": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Math.trunc": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Math.atan2": {
+			"length": 2,
+			"result": "number",
+			"throws": false
+		},
+		"Math.imul": {
+			"length": 2,
+			"result": "number",
+			"throws": false
+		},
+		"Math.pow": {
+			"length": 2,
+			"result": "number",
+			"throws": false
+		},
+		"Math.hypot": {
+			"length": 2,
+			"result": "number",
+			"throws": false
+		},
+		"Math.max": {
+			"length": 2,
+			"result": "number",
+			"throws": false
+		},
+		"Math.min": {
+			"length": 2,
+			"result": "number",
+			"throws": false
+		},
+		"Math.random": {
+			"length": 0,
+			"result": "number",
+			"throws": false
+		},
+		"String": {
+			"length": 1,
+			"result": "string",
+			"throws": false
+		},
+		"Number": {
+			"length": 1,
+			"result": "number",
+			"throws": true
+		},
+		"Boolean": {
+			"length": 1,
+			"result": "boolean",
+			"throws": false
+		},
+		"parseInt": {
+			"length": 2,
+			"result": "number",
+			"throws": false
+		},
+		"parseFloat": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"isNaN": {
+			"length": 1,
+			"result": "boolean",
+			"throws": false
+		},
+		"isFinite": {
+			"length": 1,
+			"result": "boolean",
+			"throws": false
+		},
+		"queueMicrotask": {
+			"length": 1,
+			"result": "undefined",
+			"throws": false
+		},
+		"unescape": {
+			"length": 1,
+			"result": "string",
+			"throws": false
+		},
+		"atob": {
+			"length": 1,
+			"result": "string",
+			"throws": true
+		},
+		"btoa": {
+			"length": 1,
+			"result": "string",
+			"throws": true
+		},
+		"encodeURIComponent": {
+			"length": 1,
+			"result": "string",
+			"throws": true
+		},
+		"encodeURI": {
+			"length": 1,
+			"result": "string",
+			"throws": true
+		},
+		"decodeURIComponent": {
+			"length": 1,
+			"result": "string",
+			"throws": true
+		},
+		"decodeURI": {
+			"length": 1,
+			"result": "string",
+			"throws": true
+		},
+		"Symbol": {
+			"length": 0,
+			"result": "symbol",
+			"throws": false
+		},
+		"BigInt": {
+			"length": 1,
+			"result": "bigint",
+			"throws": true
+		},
+		"Object.assign": {
+			"length": 2,
+			"result": "object",
+			"throws": false
+		},
+		"Object.create": {
+			"length": 2,
+			"result": "object",
+			"throws": false
+		},
+		"Object.defineProperties": {
+			"length": 2,
+			"result": "object",
+			"throws": true
+		},
+		"Object.defineProperty": {
+			"length": 3,
+			"result": "object",
+			"throws": true
+		},
+		"Object.entries": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Object.freeze": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Object.fromEntries": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Object.getOwnPropertyDescriptor": {
+			"length": 2,
+			"result": "object",
+			"throws": true
+		},
+		"Object.getOwnPropertyNames": {
+			"length": 1,
+			"result": "object",
+			"throws": true
+		},
+		"Object.getOwnPropertySymbols": {
+			"length": 1,
+			"result": "object",
+			"throws": true
+		},
+		"Object.getPrototypeOf": {
+			"length": 1,
+			"result": "object",
+			"throws": true
+		},
+		"Object.groupBy": {
+			"length": 2,
+			"result": "object",
+			"throws": false
+		},
+		"Object.hasOwn": {
+			"length": 2,
+			"result": "boolean",
+			"throws": false
+		},
+		"Object.is": {
+			"length": 2,
+			"result": "boolean",
+			"throws": false
+		},
+		"Object.isExtensible": {
+			"length": 1,
+			"result": "boolean",
+			"throws": false
+		},
+		"Object.isFrozen": {
+			"length": 1,
+			"result": "boolean",
+			"throws": false
+		},
+		"Object.isSealed": {
+			"length": 1,
+			"result": "boolean",
+			"throws": false
+		},
+		"Object.keys": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Object.preventExtensions": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Object.seal": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Object.values": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Number.isFinite": {
+			"length": 1,
+			"result": "boolean",
+			"throws": false
+		},
+		"Number.isInteger": {
+			"length": 1,
+			"result": "boolean",
+			"throws": false
+		},
+		"Number.isNaN": {
+			"length": 1,
+			"result": "boolean",
+			"throws": false
+		},
+		"Number.isSafeInteger": {
+			"length": 1,
+			"result": "boolean",
+			"throws": false
+		},
+		"Number.parseFloat": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Number.parseInt": {
+			"length": 2,
+			"result": "number",
+			"throws": false
+		},
+		"BigInt.asIntN": {
+			"length": 2,
+			"result": "bigint",
+			"throws": true
+		},
+		"BigInt.asUintN": {
+			"length": 2,
+			"result": "bigint",
+			"throws": true
+		},
+		"String.fromCharCode": {
+			"length": 1,
+			"result": "string",
+			"throws": false
+		},
+		"String.fromCodePoint": {
+			"length": 1,
+			"result": "string",
+			"throws": true
+		},
+		"Array.apply": {
+			"length": 2,
+			"result": "object",
+			"throws": false
+		},
+		"Array.from": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Array.isArray": {
+			"length": 1,
+			"result": "boolean",
+			"throws": false
+		},
+		"Array.of": {
+			"length": 0,
+			"result": "object",
+			"throws": false
+		},
+		"ArrayBuffer.isView": {
+			"length": 1,
+			"result": "boolean",
+			"throws": false
+		},
+		"Int8Array.from": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Int8Array.of": {
+			"length": 0,
+			"result": "object",
+			"throws": false
+		},
+		"Uint8Array.from": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Uint8Array.of": {
+			"length": 0,
+			"result": "object",
+			"throws": false
+		},
+		"Uint8ClampedArray.from": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Uint8ClampedArray.of": {
+			"length": 0,
+			"result": "object",
+			"throws": false
+		},
+		"Int16Array.from": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Int16Array.of": {
+			"length": 0,
+			"result": "object",
+			"throws": false
+		},
+		"Uint16Array.from": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Uint16Array.of": {
+			"length": 0,
+			"result": "object",
+			"throws": false
+		},
+		"Int32Array.from": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Int32Array.of": {
+			"length": 0,
+			"result": "object",
+			"throws": false
+		},
+		"Uint32Array.from": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Uint32Array.of": {
+			"length": 0,
+			"result": "object",
+			"throws": false
+		},
+		"Float32Array.from": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Float32Array.of": {
+			"length": 0,
+			"result": "object",
+			"throws": false
+		},
+		"Float64Array.from": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Float64Array.of": {
+			"length": 0,
+			"result": "object",
+			"throws": false
+		},
+		"BigInt64Array.from": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"BigInt64Array.of": {
+			"length": 0,
+			"result": "object",
+			"throws": false
+		},
+		"BigUint64Array.from": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"BigUint64Array.of": {
+			"length": 0,
+			"result": "object",
+			"throws": false
+		},
+		"Promise.all": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Promise.allSettled": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Promise.any": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Promise.race": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Promise.reject": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Promise.resolve": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Promise.withResolvers": {
+			"length": 0,
+			"result": "object",
+			"throws": false
+		},
+		"Date.UTC": {
+			"length": 7,
+			"result": "number",
+			"throws": false
+		},
+		"Date.now": {
+			"length": 0,
+			"result": "number",
+			"throws": false
+		},
+		"Date.parse": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"JSON.parse": {
+			"length": 2,
+			"result": "object",
+			"throws": true
+		},
+		"JSON.stringify": {
+			"length": 3,
+			"result": "string",
+			"throws": true
+		},
+		"Map.groupBy": {
+			"length": 2,
+			"result": "object",
+			"throws": false
+		},
+		"Symbol.for": {
+			"length": 1,
+			"result": "symbol",
+			"throws": false
+		},
+		"Symbol.keyFor": {
+			"length": 1,
+			"result": "string",
+			"throws": false
+		},
+		"console.log": {
+			"length": 0,
+			"result": "undefined",
+			"throws": false
+		},
+		"console.info": {
+			"length": 0,
+			"result": "undefined",
+			"throws": false
+		},
+		"console.debug": {
+			"length": 0,
+			"result": "undefined",
+			"throws": false
+		},
+		"console.dirxml": {
+			"length": 0,
+			"result": "undefined",
+			"throws": false
+		},
+		"console.error": {
+			"length": 0,
+			"result": "undefined",
+			"throws": false
+		},
+		"console.warn": {
+			"length": 0,
+			"result": "undefined",
+			"throws": false
+		},
+		"console.assert": {
+			"length": 0,
+			"result": "undefined",
+			"throws": false
+		},
+		"console.count": {
+			"length": 0,
+			"result": "undefined",
+			"throws": false
+		},
+		"console.countReset": {
+			"length": 0,
+			"result": "undefined",
+			"throws": false
+		},
+		"console.dir": {
+			"length": 0,
+			"result": "undefined",
+			"throws": false
+		},
+		"console.group": {
+			"length": 0,
+			"result": "undefined",
+			"throws": false
+		},
+		"console.groupCollapsed": {
+			"length": 0,
+			"result": "undefined",
+			"throws": false
+		},
+		"console.groupEnd": {
+			"length": 0,
+			"result": "undefined",
+			"throws": false
+		},
+		"console.table": {
+			"length": 0,
+			"result": "undefined",
+			"throws": false
+		},
+		"console.time": {
+			"length": 0,
+			"result": "undefined",
+			"throws": false
+		},
+		"console.timeLog": {
+			"length": 0,
+			"result": "undefined",
+			"throws": false
+		},
+		"console.timeEnd": {
+			"length": 0,
+			"result": "undefined",
+			"throws": false
+		},
+		"console.trace": {
+			"length": 0,
+			"result": "undefined",
+			"throws": false
+		},
+		"String.prototype.at": {
+			"length": 1,
+			"result": "string",
+			"throws": false
+		},
+		"String.prototype.charAt": {
+			"length": 1,
+			"result": "string",
+			"throws": false
+		},
+		"String.prototype.charCodeAt": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"String.prototype.codePointAt": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"String.prototype.concat": {
+			"length": 1,
+			"result": "string",
+			"throws": false
+		},
+		"String.prototype.endsWith": {
+			"length": 1,
+			"result": "boolean",
+			"throws": false
+		},
+		"String.prototype.includes": {
+			"length": 1,
+			"result": "boolean",
+			"throws": false
+		},
+		"String.prototype.indexOf": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"String.prototype.lastIndexOf": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"String.prototype.localeCompare": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"String.prototype.match": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"String.prototype.padEnd": {
+			"length": 1,
+			"result": "string",
+			"throws": false
+		},
+		"String.prototype.padStart": {
+			"length": 1,
+			"result": "string",
+			"throws": false
+		},
+		"String.prototype.repeat": {
+			"length": 1,
+			"result": "string",
+			"throws": true
+		},
+		"String.prototype.replace": {
+			"length": 2,
+			"result": "string",
+			"throws": false
+		},
+		"String.prototype.replaceAll": {
+			"length": 2,
+			"result": "string",
+			"throws": true
+		},
+		"String.prototype.search": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"String.prototype.slice": {
+			"length": 2,
+			"result": "string",
+			"throws": false
+		},
+		"String.prototype.split": {
+			"length": 2,
+			"result": "object",
+			"throws": false
+		},
+		"String.prototype.startsWith": {
+			"length": 1,
+			"result": "boolean",
+			"throws": false
+		},
+		"String.prototype.substr": {
+			"length": 2,
+			"result": "string",
+			"throws": false
+		},
+		"String.prototype.substring": {
+			"length": 2,
+			"result": "string",
+			"throws": false
+		},
+		"String.prototype.toLocaleLowerCase": {
+			"length": 0,
+			"result": "string",
+			"throws": false
+		},
+		"String.prototype.toLocaleUpperCase": {
+			"length": 0,
+			"result": "string",
+			"throws": false
+		},
+		"String.prototype.toLowerCase": {
+			"length": 0,
+			"result": "string",
+			"throws": false
+		},
+		"String.prototype.toString": {
+			"length": 0,
+			"result": "string",
+			"throws": false
+		},
+		"String.prototype.toUpperCase": {
+			"length": 0,
+			"result": "string",
+			"throws": false
+		},
+		"String.prototype.trim": {
+			"length": 0,
+			"result": "string",
+			"throws": false
+		},
+		"String.prototype.trimEnd": {
+			"length": 0,
+			"result": "string",
+			"throws": false
+		},
+		"String.prototype.trimStart": {
+			"length": 0,
+			"result": "string",
+			"throws": false
+		},
+		"String.prototype.valueOf": {
+			"length": 0,
+			"result": "string",
+			"throws": false
+		},
+		"String.prototype.match/regexp": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"String.prototype.matchAll/regexp": {
+			"length": 1,
+			"result": "object",
+			"throws": true
+		},
+		"String.prototype.replace/regexp": {
+			"length": 2,
+			"result": "string",
+			"throws": false
+		},
+		"String.prototype.replaceAll/regexp": {
+			"length": 2,
+			"result": "string",
+			"throws": true
+		},
+		"String.prototype.search/regexp": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"String.prototype.split/regexp": {
+			"length": 2,
+			"result": "object",
+			"throws": false
+		},
+		"Array.prototype.at": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Array.prototype.concat": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Array.prototype.entries": {
+			"length": 0,
+			"result": "object",
+			"throws": false
+		},
+		"Array.prototype.every": {
+			"length": 1,
+			"result": "boolean",
+			"throws": false
+		},
+		"Array.prototype.fill": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Array.prototype.filter": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Array.prototype.find": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Array.prototype.findIndex": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Array.prototype.findLast": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Array.prototype.findLastIndex": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Array.prototype.flat": {
+			"length": 0,
+			"result": "object",
+			"throws": false
+		},
+		"Array.prototype.flatMap": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Array.prototype.forEach": {
+			"length": 1,
+			"result": "undefined",
+			"throws": false
+		},
+		"Array.prototype.includes": {
+			"length": 1,
+			"result": "boolean",
+			"throws": false
+		},
+		"Array.prototype.indexOf": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Array.prototype.join": {
+			"length": 1,
+			"result": "string",
+			"throws": false
+		},
+		"Array.prototype.keys": {
+			"length": 0,
+			"result": "object",
+			"throws": false
+		},
+		"Array.prototype.lastIndexOf": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Array.prototype.map": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Array.prototype.pop": {
+			"length": 0,
+			"result": "number",
+			"throws": false
+		},
+		"Array.prototype.push": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Array.prototype.reduce": {
+			"length": 1,
+			"result": "number",
+			"throws": true
+		},
+		"Array.prototype.reduceRight": {
+			"length": 1,
+			"result": "number",
+			"throws": true
+		},
+		"Array.prototype.reverse": {
+			"length": 0,
+			"result": "object",
+			"throws": false
+		},
+		"Array.prototype.shift": {
+			"length": 0,
+			"result": "number",
+			"throws": false
+		},
+		"Array.prototype.slice": {
+			"length": 2,
+			"result": "object",
+			"throws": false
+		},
+		"Array.prototype.some": {
+			"length": 1,
+			"result": "boolean",
+			"throws": false
+		},
+		"Array.prototype.sort": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Array.prototype.splice": {
+			"length": 2,
+			"result": "object",
+			"throws": false
+		},
+		"Array.prototype.toLocaleString": {
+			"length": 0,
+			"result": "string",
+			"throws": false
+		},
+		"Array.prototype.toReversed": {
+			"length": 0,
+			"result": "object",
+			"throws": false
+		},
+		"Array.prototype.toSorted": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Array.prototype.toSpliced": {
+			"length": 2,
+			"result": "object",
+			"throws": false
+		},
+		"Array.prototype.toString": {
+			"length": 0,
+			"result": "string",
+			"throws": false
+		},
+		"Array.prototype.unshift": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Array.prototype.values": {
+			"length": 0,
+			"result": "object",
+			"throws": false
+		},
+		"Array.prototype.with": {
+			"length": 2,
+			"result": "object",
+			"throws": true
+		},
+		"Number.prototype.toExponential": {
+			"length": 1,
+			"result": "string",
+			"throws": true
+		},
+		"Number.prototype.toFixed": {
+			"length": 1,
+			"result": "string",
+			"throws": true
+		},
+		"Number.prototype.toLocaleString": {
+			"length": 0,
+			"result": "string",
+			"throws": true
+		},
+		"Number.prototype.toPrecision": {
+			"length": 1,
+			"result": "string",
+			"throws": true
+		},
+		"Number.prototype.toString": {
+			"length": 1,
+			"result": "string",
+			"throws": true
+		},
+		"Number.prototype.valueOf": {
+			"length": 0,
+			"result": "number",
+			"throws": false
+		},
+		"Promise.prototype.catch": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Promise.prototype.finally": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		},
+		"Promise.prototype.then": {
+			"length": 2,
+			"result": "object",
+			"throws": false
+		},
+		"Map.prototype.clear": {
+			"length": 0,
+			"result": "undefined",
+			"throws": false
+		},
+		"Map.prototype.delete": {
+			"length": 1,
+			"result": "boolean",
+			"throws": false
+		},
+		"Map.prototype.entries": {
+			"length": 0,
+			"result": "object",
+			"throws": false
+		},
+		"Map.prototype.forEach": {
+			"length": 1,
+			"result": "undefined",
+			"throws": false
+		},
+		"Map.prototype.get": {
+			"length": 1,
+			"result": "number",
+			"throws": false
+		},
+		"Map.prototype.has": {
+			"length": 1,
+			"result": "boolean",
+			"throws": false
+		},
+		"Map.prototype.keys": {
+			"length": 0,
+			"result": "object",
+			"throws": false
+		},
+		"Map.prototype.set": {
+			"length": 2,
+			"result": "object",
+			"throws": false
+		},
+		"Map.prototype.values": {
+			"length": 0,
+			"result": "object",
+			"throws": false
+		},
+		"Set.prototype.add": {
+			"length": 1,
+			"result": "object",
+			"throws": false
+		}
+	}
+}

@@ -1,0 +1,16 @@
+<Page xmlns="http://schemas.nativescript.org/tns.xsd" xmlns:my="components/card" xmlns:x="components" navigatingTo="navigatingTo">
+  <ActionBar title="List" />
+  <StackLayout class="page">
+    <my:Card title="A code component" />
+    <x:badge text="{{ badge }}" />
+    <ListView items="{{ fruits }}" itemTap="onItemTap" class="list">
+      <ListView.itemTemplate>
+        <StackLayout orientation="horizontal" class="row">
+          <Label text="{{ name }}" class="name" />
+          <Label text="{{ count + ' left' }}" class="count" />
+        </StackLayout>
+      </ListView.itemTemplate>
+    </ListView>
+    <Label text="{{ picked }}" class="picked" />
+  </StackLayout>
+</Page>

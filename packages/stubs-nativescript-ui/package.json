@@ -1,0 +1,37 @@
+{
+  "name": "@nstudio/nativescript-compiler-stubs-nativescript-ui",
+  "version": "9.2.0-alpha.9",
+  "description": "No-op stand-ins for the binary-only nativescript-ui-* plugins, which @nstudio/nativescript-compiler builds when an app opts in with release.stubPlugins.",
+  "type": "module",
+  "files": [
+    "runtime/"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nstudio/nativescript-compiler.git",
+    "directory": "packages/stubs-nativescript-ui"
+  },
+  "peerDependencies": {
+    "@nstudio/nativescript-compiler": "9.2.0-alpha.9"
+  },
+  "nativescript": {
+    "compilerStubs": {
+      "apiVersion": 1,
+      "module": "runtime/binary-plugin-stubs.ts",
+      "packages": [
+        "nativescript-ui-listview",
+        "nativescript-ui-gauge",
+        "nativescript-ui-sidedrawer",
+        "nativescript-ui-calendar",
+        "nativescript-ui-dataform",
+        "nativescript-ui-autocomplete",
+        "nativescript-ui-chart"
+      ]
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "private": true
+}

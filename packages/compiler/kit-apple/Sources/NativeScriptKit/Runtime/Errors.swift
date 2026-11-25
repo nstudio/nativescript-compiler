@@ -1,0 +1,402 @@
+import Foundation
+
+/// What JavaScript `throw value` throws: any value, not only errors. Unchecked because `Error` must be `Sendable`:
+/// script throws and catches it on the main thread only.
+public struct JSException: Error, @unchecked Sendable, CustomStringConvertible {
+    public let value: Any?
+    public init(_ value: Any?) { self.value = value }
+    public init(value: Any?) { self.value = value }
+    public var description: String { MainActor.assumeIsolated { "Uncaught " + jsToString(value) } }
+}
+
+/// JavaScript `Error`. TypeScript classes extending `Error` subclass it and set `name` in their initializer.
+open class JSError: JSDynamic, CustomStringConvertible {
+    nonisolated deinit {}
+    open var name: String = "Error"
+    open var message: String { didSet { ownsMessage = true } }
+    open var cause: Any? { didSet { ownsCause = true } }
+    /// `message` and `cause` are own properties when the constructor is given them (a message other than "", any cause) or once set.
+    public private(set) var ownsMessage: Bool
+    public private(set) var ownsCause: Bool
+    private var storedStack: String?
+    private var properties: JSObject?
+
+    /// Where the error was made: demangled frames when the app runs with `NS_KIT_STACK` (see `NativeStack`), else return addresses.
+    private let nativeFrames: String? = NativeStack.capture()
+    private let origin: [UInt] = NativeStack.enabled ? [] : NativeStack.returnAddresses()
+
+    public init(_ message: String = "", cause: Any? = nil) {
+        self.message = message
+        self.cause = cause
+        ownsMessage = !message.isEmpty
+        ownsCause = cause != nil
+        if NativeStack.logsErrors { print("error made: \(type(of: self)) \(message)\n\(nativeFrames ?? "")") }
+    }
+
+    /// `new Error(message)` with a message of any type: undefined is "", anything else its string form.
+    public convenience init(message: Any?, cause: Any? = nil) {
+        self.init(jsFlat(message) == nil ? "" : jsToString(message), cause: cause)
+    }
+
+    /// `"Name: message"`, as `String(error)` gives it.
+    public var jsErrorString: String {
+        if message.isEmpty { return name }
+        if name.isEmpty { return message }
+        return "\(name): \(message)"
+    }
+
+    /// V8's `error.stack`: the header line and the frames the error was made in.
+    open var stack: String {
+        get { storedStack ?? "\(jsErrorString)\n\(nativeFrames ?? NativeStack.frames(origin))" }
+        set { storedStack = newValue }
+    }
+
+    open subscript(jsKey key: String) -> Any? {
+        get {
+            switch key {
+            case "name": return name
+            case "message": return message
+            case "stack": return stack
+            case "cause": return cause
+            default: return properties?[key]
+            }
+        }
+        set {
+            switch key {
+            case "name": name = jsToString(newValue)
+            case "message": message = jsToString(newValue)
+            case "stack": stack = jsToString(newValue)
+            case "cause": cause = newValue
+            default:
+                if properties == nil { properties = JSObject() }
+                properties?[key] = newValue
+            }
+        }
+    }
+
+    open var jsKeys: [String] { properties?.keys ?? [] }
+    open var jsClassName: String? { name }
+    public var description: String { jsErrorString }
+}
+
+/// A write to an accessor that has only a getter, as strict code makes it: V8's TypeError naming the class declaring it.
+public func jsGetterOnlyWrite(_ className: String, _ key: String) -> JSException {
+    JSException(JSTypeError("Cannot set property \(key) of #<\(className)> which has only a getter"))
+}
+
+/// An own property of the error that its constructor gives it (`stack` always, `message` and `cause` when given).
+func jsErrorOwns(_ error: JSError, _ key: String) -> Bool {
+    switch key {
+    case "message": return error.ownsMessage
+    case "cause": return error.ownsCause
+    case "stack": return true
+    default: return false
+    }
+}
+
+/// JavaScript `TypeError`.
+open class JSTypeError: JSError {
+    nonisolated deinit {}
+    public override init(_ message: String = "", cause: Any? = nil) {
+        super.init(message, cause: cause)
+        name = "TypeError"
+    }
+}
+
+/// JavaScript `RangeError`.
+open class JSRangeError: JSError {
+    nonisolated deinit {}
+    public override init(_ message: String = "", cause: Any? = nil) {
+        super.init(message, cause: cause)
+        name = "RangeError"
+    }
+}
+
+/// JavaScript `SyntaxError`.
+open class JSSyntaxError: JSError {
+    nonisolated deinit {}
+    public override init(_ message: String = "", cause: Any? = nil) {
+        super.init(message, cause: cause)
+        name = "SyntaxError"
+    }
+}
+
+/// JavaScript `ReferenceError`.
+open class JSReferenceError: JSError {
+    nonisolated deinit {}
+    public override init(_ message: String = "", cause: Any? = nil) {
+        super.init(message, cause: cause)
+        name = "ReferenceError"
+    }
+}
+
+/// JavaScript `AggregateError`.
+open class JSAggregateError: JSError {
+    nonisolated deinit {}
+    public var errors: JSArray<Any?>
+
+    public init(errors: JSArray<Any?>, _ message: String = "", cause: Any? = nil) {
+        self.errors = errors
+        super.init(message, cause: cause)
+        name = "AggregateError"
+    }
+
+    open override subscript(jsKey key: String) -> Any? {
+        get { key == "errors" ? errors : super[jsKey: key] }
+        set {
+            if key == "errors", let array = jsFlat(newValue) as? JSArray<Any?> {
+                errors = array
+            } else {
+                super[jsKey: key] = newValue
+            }
+        }
+    }
+}
+
+/// The JavaScript value a `catch` clause binds for a Swift error: the thrown value of a
+/// `JSException`, and a `JSError` carrying the `localizedDescription` of any other error
+/// (an `NSError` from an Objective-C API, say).
+public func jsCaught(_ error: Error) -> Any? {
+    if let exception = error as? JSException { return exception.value }
+    return JSError(error.localizedDescription)
+}
+
+/// A member read from a receiver its type promised (`x!.name`, `items[i].name`): JavaScript's TypeError when it is missing.
+@inline(__always)
+public func jsUnwrap<T>(_ value: T?, _ key: String, null: Bool = false) throws -> T {
+    guard let value else { throw jsCannotRead(key, null) }
+    return value
+}
+
+extension Optional {
+    /// `jsUnwrap` of an optional chain's link (`a?.element(0).jsUnwrap("name").name`), which Swift's `?.` reaches only
+    /// where the chain goes on.
+    @inline(__always)
+    public func jsUnwrap(_ key: String, null: Bool = false) throws -> Wrapped {
+        guard let self else { throw jsCannotRead(key, null) }
+        return self
+    }
+}
+
+/// A member written on a receiver its type promised: JavaScript's TypeError when it is missing.
+@inline(__always)
+public func jsUnwrap<T>(_ value: T?, setting key: String) throws -> T {
+    guard let value else { throw jsCannotSet(key) }
+    return value
+}
+
+@inline(never)
+public func jsCannotSet(_ key: String) -> JSException {
+    JSException(JSTypeError("Cannot set properties of undefined (setting '\(key)')"))
+}
+
+/// Kept out of line: each unwrap inlines only its test, not the message.
+@inline(never)
+public func jsCannotRead(_ key: String, _ null: Bool) -> JSException {
+    JSException(JSTypeError("Cannot read properties of \(null ? "null" : "undefined") (reading '\(key)')"))
+}
+
+/// What script meets on an OS older than an API it uses: the API's class is undefined there, and using it a TypeError.
+public func jsUnavailable(_ version: Double) -> JSException {
+    JSException(JSTypeError("This needs iOS \(jsNumberToString(version)) or newer"))
+}
+
+/// `value` as an instance of `type`, JavaScript's undefined and null, and an empty marker (`jsEmptyMarker`), as nil: a
+/// TypeError where it is another value. A cast TypeScript asserts (`view as Button`) lets any object through in
+/// JavaScript; the compiled code checks it.
+@inline(__always)
+public func jsCast<T>(_ value: Any?, _ type: T.Type = T.self) throws -> T? {
+    if let same = value as? T { return same }
+    if jsIsNullish(value) { return nil }
+    if let same = jsFlat(value) as? T { return same }
+    if jsIsEmptyMarker(value) { return nil }
+    if let same = jsIdentity(jsFlat(value)) as? T { return same }
+    throw jsNotA(value, String(describing: T.self))
+}
+
+/// As `jsCast`, where the place has no undefined either: undefined and null are refused too.
+@inline(__always)
+public func jsCastPresent<T>(_ value: Any?, _ type: T.Type = T.self) throws -> T {
+    if let same = value as? T { return same }
+    if let same = jsFlat(value) as? T { return same }
+    if let same = jsIdentity(jsFlat(value)) as? T { return same }
+    throw jsNotA(value, String(describing: T.self))
+}
+
+/// "an instance of Label is not a Button", as the Kotlin runtime words it.
+@inline(never)
+public func jsNotA(_ value: Any?, _ type: String) -> JSException {
+    let name = type.components(separatedBy: "__")[0]
+    let article = "AEIOUaeiou".contains(name.first ?? "x") ? "an" : "a"
+    return JSException(JSTypeError("\(jsValueDescription(value)) is not \(article) \(name)"))
+}
+
+/// A value as a TypeError names it: undefined, null, its typeof, "an array", or the instance of its class.
+func jsValueDescription(_ value: Any?) -> String {
+    let flat = jsFlat(value)
+    if flat == nil || flat is JSNull { return jsToString(flat) }
+    let kind = jsTypeof(flat)
+    if kind != "object" { return kind }
+    if flat is JSArrayProtocol { return "an array" }
+    if let dynamic = flat as? JSDynamic { return dynamic.jsClassName.map { "an instance of \($0)" } ?? "an object" }
+    return "an instance of \(String(describing: type(of: flat!)).components(separatedBy: "__")[0])"
+}
+
+/// An untyped value where code declares `T` (`const p: Point = JSON.parse(s)`): the value as `T`,
+/// or a TypeError where it is none, which JavaScript would let through until a member is missing.
+@inline(__always)
+public func jsChecked<T>(_ value: Any?, _ type: T.Type) throws -> T {
+    if let same = value as? T { return same }
+    if let cast: T = jsConverted(value) { return cast }
+    throw jsCastFailure(value, String(describing: T.self))
+}
+
+@inline(never)
+public func jsCastFailure(_ value: Any?, _ type: String) -> JSException {
+    JSException(JSTypeError("\(jsIsNullish(value) ? jsToString(value) : jsTypeof(value)) is not a \(type)"))
+}
+
+/// An untyped value where code declares an `Error` (`catch (e) { (e as Error).message }`,
+/// `.catch((e: Error) => …)`): the error itself, or a view reading the thrown value's members.
+public func jsErrorOf(_ value: Any?) -> JSError {
+    if let error = jsFlat(value) as? JSError { return error }
+    return JSThrownValue(value)
+}
+
+/// What was thrown or rejected that is no `Error`, seen as one: its members read as the value's own,
+/// undefined where it has none.
+public final class JSThrownValue: JSError {
+    nonisolated deinit {}
+    public let value: Any?
+
+    init(_ value: Any?) {
+        self.value = value
+        super.init("")
+        name = Self.read(value, "name")
+        message = Self.read(value, "message")
+    }
+
+    private static func isObject(_ value: Any?) -> Bool { jsFlat(value).map(jsIsObject) ?? false }
+
+    private static func read(_ value: Any?, _ key: String) -> String {
+        let v = isObject(value) ? jsField(value, key) : nil
+        return jsIsNullish(v) ? "undefined" : jsToString(v)
+    }
+
+    public override var stack: String {
+        get { Self.read(value, "stack") }
+        set { super.stack = newValue }
+    }
+
+    public override subscript(jsKey key: String) -> Any? {
+        get { Self.isObject(value) ? jsField(value, key) : nil }
+        set { if Self.isObject(value) { try? jsSet(value, key, newValue) } }
+    }
+
+    public override var jsKeys: [String] { Self.isObject(value) ? jsKeysOf(value) : [] }
+}
+
+/// A dynamic write (`obj[key] = v`, a binding's set) a typed field refused, or a defined field's setter threw: what `jsSet` throws after the write.
+var jsRefusedWrite: JSException?
+
+/// A dynamic write whose value converting throws (an array holding undefined where its elements are objects): refused, the TypeError `jsSet` throws.
+public func jsStoring(_ body: () throws -> Void) {
+    do { try body() } catch {
+        let value = jsCaught(error)
+        jsRefusedWrite = JSException(value as? JSTypeError ?? JSTypeError(jsToString(value)))
+    }
+}
+
+/// A dynamic write through a setter that throws: what it throws, `jsSet` throws after the write.
+public func jsWriting(_ body: () throws -> Void) {
+    do { try body() } catch { jsRefusedWrite = JSException(jsCaught(error)) }
+}
+
+public func jsRefuseSet(_ value: Any?, _ key: String, _ type: String) {
+    jsRefusedWrite = JSException(JSTypeError("Cannot assign \(jsIsNullish(value) ? jsToString(value) : jsTypeof(value)) to '\(key)', a \(type)"))
+}
+
+/// A truthy operand whose Swift type may still be optional (`a?.b` where TypeScript types `a` as present).
+@inline(__always) public func jsPresent<T>(_ value: T) -> T { value }
+@inline(__always) public func jsPresent<T>(_ value: T?) -> T { value! }
+
+/// A JavaScript value from a call that may throw, reported like a handler's error; nil if it threw.
+@discardableResult
+public func jsReported<T>(_ body: () throws -> T) -> T? {
+    do { return try body() } catch { jsReport { throw error }; return nil }
+}
+
+/// A template's condition: its truth, false where it throws, what it throws reported.
+public func jsReportedTruthy<T>(_ body: () throws -> T) -> Bool {
+    do { return jsTruthy(try body()) } catch { jsReportUncaught(jsCaught(error)); return false }
+}
+
+/// A native callback's result from a body that may throw: what it throws is reported as uncaught,
+/// and the callback returns its type's neutral value (`jsNativeZero`), as NativeScript's runtime
+/// returns from a delegate whose JavaScript threw.
+public func jsReportedOrZero<T>(_ body: () throws -> T) -> T {
+    do { return try body() } catch {
+        jsReportUncaught(jsCaught(error))
+        return jsNativeZero(T.self)
+    }
+}
+
+/// What `body` reads, or where it throws its type's neutral value (undefined, zero, false, empty), the error left to
+/// the code that reads it again to report; a type with no neutral value lets the error through.
+public func jsReadOrZero<T>(_ body: () throws -> T) throws -> T {
+    do { return try body() } catch {
+        guard let zero = jsNeutralValue(T.self) else { throw error }
+        return zero
+    }
+}
+
+/// The neutral value of a type, as `jsReadOrZero` gives it (the same types as kit-android's); nil where it has none.
+func jsNeutralValue<T>(_ type: T.Type) -> T? {
+    if let none = (T.self as? JSOptionalProtocol.Type)?.jsNone as? T { return none }
+    if let empty = (T.self as? JSNeutralEmpty.Type)?.jsNeutralEmpty as? T { return empty }
+    switch T.self {
+    case is Double.Type: return 0.0 as? T
+    case is Int.Type: return 0 as? T
+    case is Int64.Type: return Int64(0) as? T
+    case is Float.Type: return Float(0) as? T
+    case is Bool.Type: return false as? T
+    case is String.Type: return "" as? T
+    default: return nil
+    }
+}
+
+/// Collections `jsNeutralValue` gives empty.
+protocol JSNeutralEmpty { static var jsNeutralEmpty: Any { get } }
+extension Array: JSNeutralEmpty { static var jsNeutralEmpty: Any { [Element]() } }
+extension JSArray: JSNeutralEmpty { static var jsNeutralEmpty: Any { JSArray<Element>() } }
+
+/// Types whose neutral value is their empty one.
+protocol JSEmptyConstructible { static var jsEmpty: Self { get } }
+extension String: JSEmptyConstructible { static var jsEmpty: String { "" } }
+extension Array: JSEmptyConstructible { static var jsEmpty: Array { [] } }
+extension Dictionary: JSEmptyConstructible { static var jsEmpty: Dictionary { [:] } }
+extension Set: JSEmptyConstructible { static var jsEmpty: Set { [] } }
+
+/// A native type's neutral value: nil, zero bits for numbers, booleans, C structs and enums,
+/// empty for strings and collections, a new instance of an Objective-C class.
+public func jsNativeZero<T>(_ type: T.Type) -> T {
+    if let none = (T.self as? JSOptionalProtocol.Type)?.jsNone as? T { return none }
+    if let empty = (T.self as? JSEmptyConstructible.Type)?.jsEmpty as? T { return empty }
+    if let cls = T.self as? NSObject.Type, let made = cls.init() as? T { return made }
+    if _isPOD(T.self) {
+        return withUnsafeTemporaryAllocation(of: T.self, capacity: 1) { buffer in
+            UnsafeMutableRawPointer(buffer.baseAddress!).initializeMemory(as: UInt8.self, repeating: 0, count: MemoryLayout<T>.stride)
+            return buffer.baseAddress!.pointee
+        }
+    }
+    fatalError("\(T.self) has no neutral value to return where script threw")
+}
+
+/// A loop's items from an untyped value: an iterable's elements, none for undefined or null.
+public func jsItemsOf(_ value: Any?) throws -> [Any?] {
+    if jsIsNullish(value) { return [] }
+    let iterator = try jsIteratorOf(value)
+    var items: [Any?] = []
+    while try iterator.jsAdvance() { items.append(iterator.jsCurrent) }
+    return items
+}

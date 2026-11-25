@@ -1,0 +1,51 @@
+{
+  "name": "@nstudio/nativescript-compiler-solid",
+  "version": "9.2.0-alpha.9",
+  "description": "The Solid adapter of @nstudio/nativescript-compiler: compiles a NativeScript app written with Solid into a native iOS or Android app with no JavaScript runtime.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "source": "./index.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/"
+  ],
+  "scripts": {
+    "build": "ns-compiled-adapter build .",
+    "prepack": "npm run build"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nstudio/nativescript-compiler.git",
+    "directory": "packages/solid"
+  },
+  "peerDependencies": {
+    "@nstudio/nativescript-compiler": "9.2.0-alpha.9"
+  },
+  "nativescript": {
+    "compilerAdapter": {
+      "apiVersion": 1,
+      "detect": {
+        "priority": 20,
+        "dependencies": [
+          "@nativescript-community/solid-js",
+          "solid-js"
+        ],
+        "entryMentions": [
+          "solid-js"
+        ]
+      },
+      "testedVersions": {
+        "@nativescript-community/solid-js": ">=2.0.0-rc.0 <3.0.0",
+        "solid-js": ">=2.0.0-rc.0 <3.0.0"
+      }
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

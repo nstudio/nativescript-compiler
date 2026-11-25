@@ -1,0 +1,6 @@
+count = 0
+---
+<StackLayout padding="12">
+  <Label text="{'Tapped ' + count + ' times'}" />
+  <Button text="Tap" on:tap="count++" />
+</StackLayout>

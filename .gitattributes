@@ -1,0 +1,5 @@
+# Collapse large generated/baseline data files in GitHub PR diffs so reviewers see compiler source first.
+packages/compiler/tests/test262/baseline.json linguist-generated=true
+packages/compiler/tests/fuzz/known-fuzz-failures.json linguist-generated=true
+packages/compiler/tests/app/package-lock.json linguist-generated=true
+packages/compiler/package-lock.json linguist-generated=true

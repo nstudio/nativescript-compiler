@@ -1,0 +1,359 @@
+import ts from 'typescript';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join, matchesGlob, posix } from 'node:path';
+import type { Platform } from '../api/adapter-api.ts';
+
+export type { Platform };
+
+/**
+ * Platform folding: `isIOS`, `isAndroid`, `__IOS__`, `__ANDROID__` (bare, or
+ * through `global`/`globalThis`) become literals for the target, and the
+ * branches they decide are removed, so the other platform's code never
+ * reaches the type checker. Removed text is blanked rather than deleted:
+ * every position, and so every diagnostic's line and column, is unchanged.
+ */
+export function foldPlatform(text: string, fileName: string, platform: Platform, modulesDir?: string, defines: readonly (readonly [string, string])[] = []): string {
+	text = applyDefines(text, fileName, defines);
+	// A defined string compared with a literal (`'nativescript' === 'css-tree'`) folds as well.
+	if (!/\b(isIOS|isAndroid|__IOS__|__ANDROID__|__APPLE__|__VISIONOS__|__DEV__)\b|\bApplication\.(android|ios)\b|import\.meta\.hot|(['"])[^'"\n]*\2\)?\s*[!=]==?\s*\(?['"]/.test(text)) return text;
+	// Core's `Application.android` and `Application.ios`, the platform's object or undefined: where the file imports core's Application.
+	const application = /import\s*\{[^}]*\bApplication\b[^}]*\}\s*from\s*['"]@nativescript\/core['"]/.test(text);
+	// A release build: `__DEV__` is false, as the bundlers define it for one.
+	const flags: Record<string, boolean> = {
+		isIOS: platform === 'ios',
+		__IOS__: platform === 'ios',
+		__APPLE__: platform === 'ios',
+		isAndroid: platform === 'android',
+		__ANDROID__: platform === 'android',
+		__VISIONOS__: false,
+		__DEV__: false,
+	};
+	const kind = fileName.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+	let folded = false;
+	// One edit per pass, outermost first, until nothing folds.
+	for (let pass = 0; pass < 10_000; pass++) {
+		const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, kind);
+		const edit = findFold(sf, (n) => {
+			// A release build has no hot module replacement: `import.meta.hot` is undefined.
+			if (isHot(n)) return false;
+			if (ts.isIdentifier(n) && Object.hasOwn(flags, n.text) && isReference(n) && !declaredAround(n)) return flags[n.text];
+			if (ts.isPropertyAccessExpression(n) && ts.isIdentifier(n.expression) && ['global', 'globalThis'].includes(n.expression.text) && Object.hasOwn(flags, n.name.text)) return flags[n.name.text];
+			if (application && ts.isPropertyAccessExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'Application' && ['android', 'ios'].includes(n.name.text) && !declaredAround(n.expression) && isTested(n)) return n.name.text === platform;
+			return undefined;
+		});
+		if (!edit) return folded ? dropUnreferenced(text, fileName, kind, modulesDir) : text;
+		text = apply(text, edit);
+		folded = true;
+	}
+	throw new Error(`${fileName}: platform folding did not settle`);
+}
+
+/**
+ * Module-level helpers that only the removed branches used: unexported
+ * functions, and constants whose initializer runs nothing, that the rest of
+ * the file no longer names. They are the other platform's too. So is an import
+ * of a package declaring the module free of side effects (`"sideEffects"`), as
+ * the bundlers drop it; any other import runs its module and stays.
+ */
+function dropUnreferenced(text: string, fileName: string, kind: ts.ScriptKind, modulesDir?: string): string {
+	for (;;) {
+		const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, kind);
+		const uses = new Map<string, number[]>();
+		const collect = (n: ts.Node): void => {
+			if (ts.isIdentifier(n)) (uses.get(n.text) ?? uses.set(n.text, []).get(n.text)!).push(n.getStart(sf));
+			ts.forEachChild(n, collect);
+		};
+		collect(sf);
+		const unused = (name: ts.Identifier, decl: ts.Node) => (uses.get(name.text) ?? []).every((at) => at >= decl.getStart(sf) && at < decl.getEnd());
+		const dead = sf.statements.find((st) => {
+			if (ts.getCombinedModifierFlags(st as ts.Statement & ts.Declaration) & (ts.ModifierFlags.Export | ts.ModifierFlags.Ambient)) return false;
+			if (ts.isFunctionDeclaration(st)) return !!st.name && unused(st.name, st);
+			if (ts.isImportDeclaration(st)) {
+				const c = st.importClause;
+				if (!c || c.isTypeOnly || !ts.isStringLiteral(st.moduleSpecifier)) return false;
+				const names = [...(c.name ? [c.name] : []), ...(c.namedBindings ? (ts.isNamespaceImport(c.namedBindings) ? [c.namedBindings.name] : c.namedBindings.elements.map((e) => e.name)) : [])];
+				return names.length > 0 && names.every((n) => unused(n, st)) && sideEffectFree(st.moduleSpecifier.text, fileName, modulesDir);
+			}
+			if (!ts.isVariableStatement(st) || st.declarationList.declarations.length !== 1) return false;
+			const d = st.declarationList.declarations[0];
+			return ts.isIdentifier(d.name) && (!d.initializer || inert(d.initializer)) && unused(d.name, st);
+		});
+		if (!dead) return text;
+		text = apply(text, { span: [dead.getStart(sf), dead.getEnd()], keep: null });
+	}
+}
+
+/**
+ * Whether a package's `"sideEffects"` says the module a bare specifier names has none: `false`, or a list of
+ * globs (relative to the package; one without a `/` matches anywhere in it) no candidate entry file matches.
+ */
+function sideEffectFree(specifier: string, fromFile: string, modulesDir?: string): boolean {
+	if (/^[./]/.test(specifier) || specifier.includes(':')) return false;
+	const parts = specifier.split('/');
+	const name = specifier.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
+	const sub = specifier.slice(name.length + 1);
+	let dir: string | undefined;
+	for (let d = dirname(fromFile); ; d = dirname(d)) {
+		if (existsSync(join(d, 'node_modules', name, 'package.json'))) {
+			dir = join(d, 'node_modules', name);
+			break;
+		}
+		if (dirname(d) === d) break;
+	}
+	if (!dir && modulesDir && existsSync(join(modulesDir, name, 'package.json'))) dir = join(modulesDir, name);
+	if (!dir) return false;
+	let pkg: any;
+	try {
+		pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
+	} catch {
+		return false;
+	}
+	const declared = pkg?.sideEffects;
+	if (declared === false) return true;
+	if (!Array.isArray(declared) || !declared.every((g) => typeof g === 'string')) return false;
+	const conditions = (e: unknown): string[] => (typeof e === 'string' ? [e] : e && typeof e === 'object' && !Array.isArray(e) ? Object.values(e).flatMap(conditions) : []);
+	const exported = pkg.exports && typeof pkg.exports === 'object' && !Array.isArray(pkg.exports) && Object.keys(pkg.exports).some((k) => k.startsWith('.')) ? pkg.exports[sub ? `./${sub}` : '.'] : sub ? undefined : pkg.exports;
+	const entries = exported !== undefined ? conditions(exported) : sub ? [sub, `${sub}.js`, `${sub}/index.js`] : [pkg.module, pkg.main, 'index.js'].filter((f): f is string => typeof f === 'string');
+	if (!entries.length) return false;
+	const globs = declared
+		.map((g) => g.replace(/^\.\//, ''))
+		.flatMap((g) => (g.includes('/') ? [g] : [`**/${g}`]))
+		.flatMap((g) => [g, `${g}/**`]);
+	return entries.every((f) => {
+		const file = posix.normalize(f.replace(/^\.\//, ''));
+		return !globs.some((g) => matchesGlob(file, g));
+	});
+}
+
+/** An initializer whose evaluation has no effect: a literal, a function, or an empty collection. */
+function inert(e: ts.Expression): boolean {
+	while (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isSatisfiesExpression(e)) e = e.expression;
+	if (ts.isLiteralExpression(e) || ts.isNoSubstitutionTemplateLiteral(e) || ts.isArrowFunction(e) || ts.isFunctionExpression(e)) return true;
+	if ([ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword, ts.SyntaxKind.NullKeyword].includes(e.kind)) return true;
+	if (ts.isPrefixUnaryExpression(e)) return ts.isNumericLiteral(e.operand);
+	if (ts.isNewExpression(e)) return ts.isIdentifier(e.expression) && ['Map', 'Set', 'WeakMap', 'WeakSet', 'Array'].includes(e.expression.text) && !e.arguments?.length;
+	if (ts.isArrayLiteralExpression(e)) return e.elements.every(inert);
+	if (ts.isObjectLiteralExpression(e)) return e.properties.every((p) => ts.isPropertyAssignment(p) && !ts.isComputedPropertyName(p.name) && inert(p.initializer));
+	return false;
+}
+
+/**
+ * Each defined expression (the bundler's `define`, longest key first) replaced as the bundler replaces it, padded so
+ * positions after it keep their columns where it fits.
+ */
+function applyDefines(text: string, fileName: string, defines: readonly (readonly [string, string])[]): string {
+	if (!defines.length || /[\\/]node_modules[\\/]/.test(fileName)) return text;
+	for (const [key, value] of defines) {
+		if (!text.includes(key)) continue;
+		// A bundler replaces the expression, never a declaration of the name (`declare var __non_webpack_require__`).
+		const pattern = new RegExp(`(?<![\\w$.])(?<!\\b(?:var|let|const|function|class)\\s+)${key.replace(/[.$]/g, (c) => '\\' + c)}(?![\\w$])`, 'g');
+		text = text.replace(pattern, (m) => `(${value})`.padEnd(m.length, ' '));
+	}
+	return text;
+}
+
+type Edit = { keep: [number, number] | null; span: [number, number]; replacement?: string };
+
+function findFold(sf: ts.SourceFile, flag: (n: ts.Node) => boolean | undefined): Edit | null {
+	const constant = (e: ts.Expression): boolean | undefined => {
+		while (ts.isParenthesizedExpression(e)) e = e.expression;
+		if (e.kind === ts.SyntaxKind.TrueKeyword) return true;
+		if (e.kind === ts.SyntaxKind.FalseKeyword) return false;
+		const f = flag(e);
+		if (f !== undefined) return f;
+		if (ts.isPrefixUnaryExpression(e) && e.operator === ts.SyntaxKind.ExclamationToken) {
+			const v = constant(e.operand);
+			return v === undefined ? undefined : !v;
+		}
+		if (ts.isBinaryExpression(e)) {
+			const op = e.operatorToken.kind;
+			const text = (x: ts.Expression) => {
+				while (ts.isParenthesizedExpression(x)) x = x.expression;
+				return ts.isStringLiteral(x) ? x.text : undefined;
+			};
+			const ls = text(e.left),
+				rs = text(e.right);
+			if (ls !== undefined && rs !== undefined) {
+				if (op === ts.SyntaxKind.EqualsEqualsEqualsToken || op === ts.SyntaxKind.EqualsEqualsToken) return ls === rs;
+				if (op === ts.SyntaxKind.ExclamationEqualsEqualsToken || op === ts.SyntaxKind.ExclamationEqualsToken) return ls !== rs;
+			}
+			const l = constant(e.left),
+				r = constant(e.right);
+			if (op === ts.SyntaxKind.AmpersandAmpersandToken) {
+				if (l === false) return false;
+				if (l === true && r !== undefined) return r;
+				if (r === false && pure(e.left)) return false;
+			}
+			if (op === ts.SyntaxKind.BarBarToken) {
+				if (l === true) return true;
+				if (l === false && r !== undefined) return r;
+				if (r === true && pure(e.left)) return true;
+			}
+		}
+		return undefined;
+	};
+	const span = (n: ts.Node): [number, number] => [n.getStart(sf), n.getEnd()];
+	let found: Edit | null = null;
+	const visit = (n: ts.Node): void => {
+		if (found) return;
+		// `import.meta.hot?.accept()` does nothing; `import.meta.hot?.data.x ?? fallback` is the fallback.
+		if (ts.isExpressionStatement(n) && hotChain(n.expression)) {
+			found = { span: span(n), keep: null };
+			return;
+		}
+		if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken && hotChain(n.left)) {
+			found = { span: span(n), keep: span(n.right) };
+			return;
+		}
+		if (ts.isIfStatement(n)) {
+			const v = constant(n.expression);
+			if (v !== undefined) {
+				const kept = v ? n.thenStatement : n.elseStatement;
+				// `if (isIOS) { …; return; }`: what follows in the block is the other platform's, unreachable.
+				const block = n.parent;
+				const rest = ts.isBlock(block) || ts.isSourceFile(block) ? block.statements.slice(block.statements.indexOf(n as ts.Statement) + 1) : [];
+				if (kept && exits(kept) && rest.length && !rest.some(ts.isFunctionDeclaration)) {
+					found = { span: [span(n)[0], rest[rest.length - 1].getEnd()], keep: span(kept) };
+					return;
+				}
+				found = { span: span(n), keep: kept ? span(kept) : null };
+				return;
+			}
+		}
+		// `if (__APPLE__ && x) … else if (x) …` folded: the else's test is the one that just failed, so its branch never runs.
+		if (ts.isIfStatement(n) && n.elseStatement && ts.isIfStatement(n.elseStatement) && pure(n.expression) && same(n.expression, n.elseStatement.expression, sf)) {
+			const inner = n.elseStatement;
+			found = { span: span(inner), keep: inner.elseStatement ? span(inner.elseStatement) : null };
+			return;
+		}
+		if (ts.isConditionalExpression(n)) {
+			const v = constant(n.condition);
+			if (v !== undefined) {
+				found = { span: span(n), keep: span(v ? n.whenTrue : n.whenFalse) };
+				return;
+			}
+		}
+		if (ts.isBinaryExpression(n) && [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken].includes(n.operatorToken.kind)) {
+			const l = constant(n.left);
+			const and = n.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken;
+			// `true && x` is x; `false && x` is false (and `||` the other way round).
+			if (l !== undefined) {
+				found = l === and ? { span: span(n), keep: span(n.right) } : { span: span(n), keep: null, replacement: String(l) };
+				return;
+			}
+		}
+		if (ts.isPrefixUnaryExpression(n) && n.operator === ts.SyntaxKind.ExclamationToken) {
+			const v = constant(n);
+			if (v !== undefined) {
+				found = { span: span(n), keep: null, replacement: String(v) };
+				return;
+			}
+		}
+		const f = flag(n);
+		if (f !== undefined) {
+			found = { span: span(n), keep: null, replacement: String(f) };
+			return;
+		}
+		ts.forEachChild(n, visit);
+	};
+	visit(sf);
+	return found;
+}
+
+function apply(text: string, e: Edit): string {
+	const blank = (s: string) => s.replace(/[^\n\r]/g, ' ');
+	const [a, b] = e.span;
+	if (e.replacement !== undefined) {
+		const original = text.slice(a, b);
+		// Keep the length where it fits; a longer literal only shifts the rest of its line.
+		const r = e.replacement.length <= original.length ? e.replacement + blank(original.slice(e.replacement.length)) : e.replacement;
+		return text.slice(0, a) + r + text.slice(b);
+	}
+	if (!e.keep) return text.slice(0, a) + blank(text.slice(a, b)) + (needsStatement(text, a) ? ';' : '') + text.slice(b);
+	const [ka, kb] = e.keep;
+	return text.slice(0, a) + blank(text.slice(a, ka)) + text.slice(ka, kb) + blank(text.slice(kb, b)) + text.slice(b);
+}
+
+/** A removed `if` that was the body of `else`, a loop or a label still needs a statement there. */
+function needsStatement(text: string, at: number): boolean {
+	const before = text.slice(0, at).trimEnd();
+	return /(\belse|\)|:)$/.test(before);
+}
+
+function pure(e: ts.Expression): boolean {
+	while (ts.isParenthesizedExpression(e)) e = e.expression;
+	if (ts.isBinaryExpression(e) && [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken].includes(e.operatorToken.kind)) return pure(e.left) && pure(e.right);
+	if (ts.isPrefixUnaryExpression(e) && e.operator === ts.SyntaxKind.ExclamationToken) return pure(e.operand);
+	return ts.isIdentifier(e) || (ts.isPropertyAccessExpression(e) && pure(e.expression)) || e.kind === ts.SyntaxKind.ThisKeyword || ts.isLiteralExpression(e);
+}
+
+function same(a: ts.Expression, b: ts.Expression, sf: ts.SourceFile): boolean {
+	return a.getText(sf).replace(/\s+/g, '') === b.getText(sf).replace(/\s+/g, '');
+}
+
+function isReference(id: ts.Identifier): boolean {
+	const p = id.parent;
+	if (ts.isPropertyAccessExpression(p) && p.name === id) return false;
+	if ((ts.isPropertyAssignment(p) || ts.isPropertyDeclaration(p) || ts.isPropertySignature(p) || ts.isMethodDeclaration(p)) && p.name === id) return false;
+	if (ts.isImportSpecifier(p) || ts.isImportClause(p) || ts.isExportSpecifier(p) || ts.isNamespaceImport(p)) return false;
+	if ((ts.isVariableDeclaration(p) || ts.isParameter(p) || ts.isFunctionDeclaration(p) || ts.isBindingElement(p)) && p.name === id) return false;
+	if (ts.isTypeReferenceNode(p) || ts.isTypeQueryNode(p) || ts.isQualifiedName(p)) return false;
+	return true;
+}
+
+/** Whether a scope around `id` declares its name itself (anything but an import from @nativescript/core). */
+function declaredAround(id: ts.Identifier): boolean {
+	const name = id.text;
+	const binds = (b: ts.BindingName): boolean => (ts.isIdentifier(b) ? b.text === name : b.elements.some((e) => !ts.isOmittedExpression(e) && binds(e.name)));
+	for (let scope: ts.Node | undefined = id.parent; scope; scope = scope.parent) {
+		if (ts.isFunctionLike(scope) && scope.parameters.some((p) => binds(p.name))) return true;
+		if ((ts.isForStatement(scope) || ts.isForOfStatement(scope) || ts.isForInStatement(scope)) && scope.initializer && ts.isVariableDeclarationList(scope.initializer) && scope.initializer.declarations.some((d) => binds(d.name))) return true;
+		if (ts.isCatchClause(scope) && scope.variableDeclaration && binds(scope.variableDeclaration.name)) return true;
+		if (!(ts.isBlock(scope) || ts.isSourceFile(scope) || ts.isModuleBlock(scope))) continue;
+		for (const st of scope.statements) {
+			if (ts.isVariableStatement(st) && st.declarationList.declarations.some((d) => binds(d.name))) return true;
+			if ((ts.isFunctionDeclaration(st) || ts.isClassDeclaration(st)) && st.name?.text === name) return true;
+			if (ts.isImportDeclaration(st) && !(st.moduleSpecifier as ts.StringLiteral).text.startsWith('@nativescript/core')) {
+				const clause = st.importClause;
+				const named = clause?.namedBindings;
+				if (clause?.name?.text === name || (named && ts.isNamedImports(named) && named.elements.some((e) => e.name.text === name))) return true;
+			}
+		}
+	}
+	return false;
+}
+
+function isHot(n: ts.Node): boolean {
+	return ts.isPropertyAccessExpression(n) && n.name.text === 'hot' && ts.isMetaProperty(n.expression) && n.expression.name.text === 'meta';
+}
+
+/** An optional chain that starts at `import.meta.hot`, which short-circuits to undefined. */
+function hotChain(e: ts.Expression): boolean {
+	let n: ts.Node = e;
+	let optional = false;
+	while (ts.isPropertyAccessExpression(n) || ts.isElementAccessExpression(n) || ts.isCallExpression(n) || ts.isNonNullExpression(n) || ts.isParenthesizedExpression(n)) {
+		if (isHot(n)) return optional;
+		if ((ts.isPropertyAccessExpression(n) || ts.isElementAccessExpression(n) || ts.isCallExpression(n)) && n.questionDotToken && isHot(n.expression)) optional = true;
+		n = n.expression;
+	}
+	return false;
+}
+
+/** A statement after which control never continues: it ends in `return` or `throw`. */
+function exits(st: ts.Statement): boolean {
+	if (ts.isReturnStatement(st) || ts.isThrowStatement(st)) return true;
+	if (ts.isBlock(st)) return st.statements.length > 0 && exits(st.statements[st.statements.length - 1]);
+	if (ts.isIfStatement(st)) return !!st.elseStatement && exits(st.thenStatement) && exits(st.elseStatement);
+	return false;
+}
+
+/** An expression read for its truth (`if (Application.android)`, `!Application.ios`, `a && b`), not for its value. */
+function isTested(n: ts.Node): boolean {
+	let p = n.parent;
+	while (ts.isParenthesizedExpression(p) || (ts.isPrefixUnaryExpression(p) && p.operator === ts.SyntaxKind.ExclamationToken)) {
+		n = p;
+		p = p.parent;
+	}
+	if (ts.isBinaryExpression(p) && [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken].includes(p.operatorToken.kind)) return p.left === n || isTested(p);
+	return ((ts.isIfStatement(p) || ts.isWhileStatement(p)) && p.expression === n) || (ts.isConditionalExpression(p) && p.condition === n);
+}

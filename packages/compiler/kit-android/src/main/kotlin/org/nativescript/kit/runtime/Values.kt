@@ -1,0 +1,1237 @@
+package org.nativescript.kit
+
+import kotlin.contracts.ExperimentalContracts
+import kotlin.contracts.contract
+
+// Values as translated TypeScript holds them: `any`/`unknown` is `Any?`, Kotlin's
+// `null` is `undefined`, `jsNull` is `null`, numbers are `Double`, `void` is `Unit`,
+// objects are classes compared by identity, functions are Kotlin function values.
+// Plain JVM: the differential tests run this package on the host.
+
+/** JavaScript `null`. `undefined` is Kotlin's `null`. */
+object JSNull {
+    override fun toString(): String = "null"
+}
+
+val jsNull: JSNull get() = JSNull
+
+/**
+ * A typed slot that may hold undefined, null or a `T`, where the program tells null from undefined (a
+ * `T | null | undefined` whose code compares it with either). It holds its value as script does: Kotlin's null is
+ * undefined, `jsNull` null.
+ */
+class JSNullish<out T> private constructor(@JvmField val jsAny: Any?) {
+    /** Its value, with null and undefined both Kotlin's null. */
+    @Suppress("UNCHECKED_CAST")
+    val optional: T? get() = if (jsAny === JSNull) null else jsAny as T?
+
+    /** Its value where a typed use needs one: JavaScript's TypeError reading `key` when it is null or undefined. */
+    @Suppress("UNCHECKED_CAST")
+    fun present(key: String): T = if (jsAny == null) jsCannotRead(key) else if (jsAny === JSNull) jsCannotReadNull(key) else jsAny as T
+
+    /** Its value where a member of it is set: JavaScript's TypeError setting `key` when it is null or undefined. */
+    @Suppress("UNCHECKED_CAST")
+    fun presentToSet(key: String): T = if (jsAny == null) jsCannotSet(key) else if (jsAny === JSNull) throw JSException(JSTypeError("Cannot set properties of null (setting '$key')")) else jsAny as T
+
+    /** Strict equality, as `indexOf`, `includes` and a Set's or Map's keys compare: null is only null, undefined only undefined. */
+    override fun equals(other: Any?): Boolean = other is JSNullish<*> && jsStrictEquals(jsAny, other.jsAny)
+
+    override fun hashCode(): Int = jsAny?.hashCode() ?: 0
+
+    companion object {
+        @JvmField val Undefined: JSNullish<Nothing> = JSNullish(null)
+        @JvmField val Null: JSNullish<Nothing> = JSNullish(JSNull)
+
+        /** A typed value whose null is undefined. */
+        fun <T> of(value: T?): JSNullish<T> = if (value == null) Undefined else JSNullish(value)
+
+        /** A typed value whose null is JavaScript's null. */
+        fun <T> ofNull(value: T?): JSNullish<T> = if (value == null) Null else JSNullish(value)
+
+        /** An untyped value: `jsNull` is null and null undefined; a present one is `present`'s (which throws the TypeError for another type). */
+        fun <T> ofAny(value: Any?, present: (Any) -> T): JSNullish<T> {
+            val v = jsBox(value)
+            return if (v == null) Undefined else if (v === JSNull) Null else JSNullish(present(v))
+        }
+    }
+}
+
+/** A field read untyped: null where the object notes the key as set to null (`jsNulls`), else its value. */
+fun jsNullable(value: Any?, nulls: Set<String>?, key: String): Any? = if (value == null && nulls?.contains(key) == true) jsNull else value
+
+/** A value typed `T | null`, which Kotlin holds as a nullable, read untyped: null is JavaScript's null. */
+fun jsNulled(value: Any?): Any? = value ?: jsNull
+
+/** A map value of `T | null` values read untyped: a missing one is undefined, a held null null. */
+fun <K, V> jsNulledEntry(map: JSMap<K, V>, key: K): Any? = if (map.has(key)) jsNulled(map.get(key)) else null
+
+/** An array element of `T | null` values read untyped: past the end is undefined, a held null null. */
+fun <T> jsNulledElement(array: JSArray<T>, index: Double): Any? {
+    val k = index.toInt()
+    return if (k.toDouble() == index && k >= 0 && k < array.storage.size) jsNulled(array.storage[k]) else null
+}
+
+/** The keys of `obj` among `keys` that hold null, for a typed object read from it. */
+fun jsNullKeys(obj: Any?, keys: List<String>): MutableSet<String>? {
+    val dynamic = obj as? JSDynamic ?: return null
+    val nulls = keys.filter { dynamic.jsGet(it) is JSNull }
+    return if (nulls.isEmpty()) null else nulls.toMutableSet()
+}
+
+/** The keys of `obj` among `keys` that it holds as undefined, for a typed object read from it. */
+fun jsUnsetKeys(obj: Any?, keys: List<String>): MutableSet<String>? {
+    val dynamic = obj as? JSDynamic ?: return null
+    val own = dynamic.jsKeys
+    val unset = keys.filter { it in own && dynamic.jsGet(it) == null }
+    return if (unset.isEmpty()) null else unset.toMutableSet()
+}
+
+/** An object literal's keys that hold null: `known` ones, and those of `values` (untyped values it was given) that are null. */
+fun jsNullKeysOf(known: List<String>, vararg values: Pair<String, Any?>): MutableSet<String>? {
+    val nulls = known + values.filter { it.second is JSNull }.map { it.first }
+    return if (nulls.isEmpty()) null else nulls.toMutableSet()
+}
+
+/** A field written untyped: the keys noted as holding null once `value` is written at `key`. */
+fun jsNoteNull(nulls: MutableSet<String>?, key: String, value: Any?): MutableSet<String>? =
+    if (value is JSNull) (nulls ?: mutableSetOf()).also { it.add(key) } else nulls?.also { it.remove(key) }
+
+/** A string, number or boolean field written untyped, whose storage can only hold its zero: the keys noted as holding undefined (`jsUnset`) once `value` is written at `key`. */
+fun jsNoteUnset(unset: MutableSet<String>?, key: String, value: Any?): MutableSet<String>? =
+    if (value == null) (unset ?: mutableSetOf()).also { it.add(key) } else unset?.also { it.remove(key) }
+
+/** Such a field read untyped: the null or undefined it notes, else its value. */
+fun jsNotedNullish(value: Any?, nulls: Set<String>?, unset: Set<String>?, key: String): Any? =
+    if (nulls?.contains(key) == true) jsNull else if (unset?.contains(key) == true) null else value
+
+/** An object literal's optional fields given null or undefined, as its values run: the keys its shape notes (`jsNulls`, `jsUnset`). */
+class JSLiteralKeys(var nulls: MutableSet<String>? = null, var unset: MutableSet<String>? = null) {
+    /** An untyped value, before it is converted to the field's type, which holds null and undefined both as Kotlin's null. */
+    fun untyped(key: String, value: Any?): Any? {
+        if (value == null) unset = (unset ?: mutableSetOf()).also { it.add(key) } else if (value is JSNull) nulls = (nulls ?: mutableSetOf()).also { it.add(key) }
+        return value
+    }
+
+    /** A typed value, whose null is undefined. */
+    fun <T> typed(key: String, value: T): T {
+        if (value == null) unset = (unset ?: mutableSetOf()).also { it.add(key) }
+        return value
+    }
+
+    /** A typed value, whose null is null. */
+    fun <T> nulled(key: String, value: T): T {
+        if (value == null) nulls = (nulls ?: mutableSetOf()).also { it.add(key) }
+        return value
+    }
+}
+
+/**
+ * A class's instance whose keys a write can make out of its fields' declared order (assign mode's fields without an
+ * initializer, a field deleted and written again): `jsOrder` is null while the keys run in `jsFieldKeys`' order.
+ */
+interface JSKeyOrdered {
+    var jsOrder: List<String>?
+    val jsFieldKeys: List<String>
+    /** The keys script gave the object (its expando's), which `jsFieldKeys`' order puts after the fields. */
+    val jsAddedKeys: List<String> get() = listOf()
+}
+
+/** Whether a key made now needs noting: the fields' order alone no longer places it last. */
+val JSKeyOrdered.jsKeysNoted: Boolean get() = jsOrder != null || jsAddedKeys.isNotEmpty()
+
+/**
+ * `key` made just now: last among the keys. `early`: made before its class's level of the constructor started, so before
+ * keys its static place is after.
+ */
+fun JSKeyOrdered.jsKeyMade(key: String, early: Boolean = false) {
+    val keys = jsOrderedKeys(jsOrder, jsFieldKeys + jsAddedKeys)
+    if (jsOrder == null && !early && keys.lastOrNull() == key) return
+    jsOrder = keys.filter { it != key } + key
+}
+
+/**
+ * A library class's instance whose fields declared without a value are keys from their first write: a bit each tells which
+ * are, and `jsMade` is null until one is written, then lists every key made since, in the order made (such a field, a later
+ * constructor level's keys, a key script adds).
+ */
+interface JSKeysMade {
+    var jsMade: MutableList<String>?
+    /** Its declared fields' keys present, in the order its constructor makes them. */
+    val jsDeclaredKeys: List<String>
+}
+
+/** A key made now, last in the record (the class's `jsMadeNote<k>` tells a field's first write). */
+fun jsMadeNote(o: JSKeysMade, key: String) {
+    val made = o.jsMade
+    if (made == null) o.jsMade = ArrayList<String>(4).also { it.add(key) } else made.add(key)
+}
+
+/** A key made anew once the record began (a key script adds, maybe again after a delete): last. */
+fun jsMadeAgain(o: JSKeysMade, key: String) {
+    val made = o.jsMade ?: return
+    made.remove(key)
+    made.add(key)
+}
+
+/** A constructor level's keys, made as it starts: last, where a base level began the record; a key made already keeps its place. */
+fun jsMadeLevel(o: JSKeysMade, keys: List<String>) {
+    val made = o.jsMade ?: return
+    for (k in keys) if (k !in made) made.add(k)
+}
+
+/** An object's present keys `keys` (in their static order) with those its record `made` notes last, in the record's order. */
+fun jsMadeKeys(made: List<String>?, keys: List<String>): List<String> {
+    if (made == null) return keys
+    return keys.filter { it !in made } + made.filter { it in keys }
+}
+
+/** An object's present field keys `keys` in the order `order` notes, any it lacks after. */
+fun jsOrderedKeys(order: List<String>?, keys: List<String>): List<String> {
+    if (order == null) return keys
+    return order.filter { it in keys } + keys.filter { it !in order }
+}
+
+/**
+ * An object whose properties dynamic code reaches by name (`o[key]`, JSON, `console.log`):
+ * plain objects (`JSObject`) and the classes generated for TypeScript classes and interfaces.
+ * A null `jsClassName` prints as a plain object (`{ a: 1 }`), otherwise as `Name { a: 1 }`.
+ */
+interface JSDynamic {
+    fun jsGet(key: String): Any?
+    fun jsSet(key: String, value: Any?)
+    val jsKeys: List<String>
+    val jsClassName: String?
+    /** A member the class declares (an accessor, a method), which `in` finds though it is no own key. */
+    fun jsHasMember(key: String): Boolean = false
+}
+
+/** A class with its own `toString()`, which JavaScript's string conversion calls. */
+interface JSStringConvertible
+
+/** A class with its own `valueOf()`, which ToPrimitive calls before `toString()` (arithmetic, comparisons, `+`). */
+interface JSValueOf {
+    fun jsValueOf(): Any?
+}
+
+/** A value as JavaScript sees it: `Unit` (a void result) is undefined, a `JSNullish` the value it holds. */
+fun jsBox(value: Any?): Any? = if (value === Unit) null else if (value is JSNullish<*>) value.jsAny else value
+
+/** Whether `value` is a function value. */
+fun jsIsFunction(value: Any?): Boolean = value is Function<*> || value is JSFunction || value is JavaMethodRef
+
+/** The numeric value of a JVM number a native API returned. */
+fun jsNumeric(value: Any?): Double? = when (value) {
+    is Double -> value
+    is Int -> value.toDouble()
+    is Float -> value.toDouble()
+    is Long -> value.toDouble()
+    is Short -> value.toDouble()
+    is Byte -> value.toDouble()
+    else -> null
+}
+
+/** `a < b` for strings: UTF-16 code unit order, which Kotlin's `compareTo` is. */
+fun jsStringLess(a: String, b: String): Boolean = a < b
+
+/** The array index a property key names (`"0"`…`"4294967294"`), if it names one. */
+fun jsArrayIndex(key: String): Long? {
+    val n = key.length
+    if (n == 0 || n > 10) return null
+    val first = key[0]
+    if (first !in '0'..'9') return null
+    if (first == '0') return if (n == 1) 0L else null
+    var v = 0L
+    for (c in key) {
+        if (c !in '0'..'9') return null
+        v = v * 10 + (c - '0')
+    }
+    return if (v < 4_294_967_295L) v else null
+}
+
+// Plain objects
+
+/** An object literal `{ k: v, … }`: its keys defined in the order given. */
+fun jsObjectOf(vararg entries: Pair<String, Any?>): JSObject = JSObject(*entries)
+
+/**
+ * A plain JavaScript object. Own keys enumerate in JavaScript order: array-index keys
+ * ascending, then the other keys in insertion order.
+ */
+class JSObject() : JSDynamic, JSSymbolKeyed, JSAccessorKeyed, JSReactiveConvertible {
+    private val storage = HashMap<String, Any?>()
+    private val indexKeys = ArrayList<Long>()
+    private val namedKeys = ArrayList<String>()
+    /** Properties that are accessors or not plain writable, enumerable, configurable data. */
+    private val slots = HashMap<String, JSPropertySlot>()
+    var extensible = true
+        private set
+    var jsTracker: JSTracker? = null
+
+    /** Created without a prototype (`Object.create(null)`, a match's `groups`): inspect prints `[Object: null prototype]`. */
+    var jsNullPrototype = false
+
+    /** What weak collections hold for this object as their key. */
+    internal var weakSlots: JSWeakSlots? = null
+
+    constructor(entries: List<Pair<String, Any?>>) : this() {
+        for ((k, v) in entries) define(k, v)
+    }
+
+    constructor(vararg entries: Pair<String, Any?>) : this() {
+        for ((k, v) in entries) define(k, v)
+    }
+
+    /** The prototype `Object.create(proto)` gave: a key the object lacks is read from it. */
+    var jsPrototype: Any? = null
+
+    operator fun get(key: String): Any? {
+        if (slots.isNotEmpty()) slots[key]?.get?.let { return it(this) }
+        jsPrototype?.let { proto -> if (!storage.containsKey(key)) return jsBox(proto).let { p -> if (p is JSObject) p.get(key, this) else jsGet(p, key) } }
+        val tracker = jsTracker ?: return storage[key]
+        tracker.track()
+        return jsReactiveAny(storage[key])
+    }
+
+    /** `object[key]` read for `receiver`, which an accessor sees as `this` (an instance reading its prototype's). */
+    fun get(key: String, receiver: Any?): Any? {
+        if (slots.isNotEmpty()) slots[key]?.let { if (it.isAccessor) return it.get?.invoke(receiver) }
+        val proto = jsBox(jsPrototype)
+        if (proto is JSObject && !storage.containsKey(key)) return proto.get(key, receiver)
+        return this[key]
+    }
+
+    /** The object of the prototype chain that has `key`, the object itself excluded. */
+    private fun inheritedHolder(key: String): JSObject? {
+        var p = jsBox(jsPrototype)
+        while (p is JSObject) {
+            if (p.storage.containsKey(key)) return p
+            p = jsBox(p.jsPrototype)
+        }
+        return null
+    }
+
+    /** The setter of an accessor property; it takes the receiver as `this`. */
+    fun setter(key: String): ((Any?, Any?) -> Unit)? = slots[key]?.takeIf { it.isAccessor }?.set
+
+    operator fun set(key: String, value: Any?) = put(key, value)
+
+    /**
+     * `object[key] = value` in strict code: a read-only property, a getter without a setter
+     * or a new key on an object that is not extensible throws a TypeError.
+     */
+    fun put(key: String, value: Any?) {
+        val slot = slots[key]
+        if (slot != null) {
+            if (slot.isAccessor) {
+                val setter = slot.set ?: throw JSException(JSTypeError("Cannot set property $key of #<Object> which has only a getter"))
+                return setter(this, value)
+            }
+            if (!slot.writable) throw JSException(JSTypeError("Cannot assign to read only property '$key' of object '#<Object>'"))
+        } else if (!storage.containsKey(key)) {
+            // OrdinarySet: an inherited accessor runs with this object as `this`; an inherited read-only value refuses.
+            inheritedHolder(key)?.slots?.get(key)?.let { inherited ->
+                if (inherited.isAccessor) {
+                    val setter = inherited.set ?: throw JSException(JSTypeError("Cannot set property $key of #<Object> which has only a getter"))
+                    return setter(this, value)
+                }
+                if (!inherited.writable) throw JSException(JSTypeError("Cannot assign to read only property '$key' of object '#<Object>'"))
+            }
+            if (!extensible) throw JSException(JSTypeError("Cannot add property $key, object is not extensible"))
+        }
+        val tracker = jsTracker
+        if (tracker == null) { define(key, value); return }
+        val had = storage.containsKey(key)
+        val old = storage[key]
+        define(key, value)
+        if (had && jsSameValue(old, value)) return
+        tracker.trigger()
+    }
+
+    /** `Object.defineProperty(object, key, descriptor)`; attributes the descriptor leaves out are false for a new property. */
+    fun defineProperty(key: String, d: JSPropertyDescriptor) {
+        val exists = storage.containsKey(key)
+        val slot = slots[key] ?: JSPropertySlot(enumerable = exists, writable = exists, configurable = exists)
+        if (!exists && !extensible) throw JSException(JSTypeError("Cannot define property $key, object is not extensible"))
+        if (exists && !slot.configurable) {
+            val changes = d.get != null || d.set != null || d.configurable == true || (d.enumerable != null && d.enumerable != slot.enumerable) ||
+                (!slot.writable && (d.writable == true || (d.hasValue && !jsSameValue(d.value, storage[key]))))
+            if (changes) throw JSException(JSTypeError("Cannot redefine property: $key"))
+        }
+        if (d.get != null || d.set != null) {
+            slot.get = d.get; slot.set = d.set; slot.isAccessor = true; slot.writable = false
+        } else if (d.hasValue || d.writable != null) {
+            if (slot.isAccessor) { slot.get = null; slot.set = null; slot.isAccessor = false }
+        }
+        d.enumerable?.let { slot.enumerable = it }
+        d.writable?.let { slot.writable = it }
+        d.configurable?.let { slot.configurable = it }
+        define(key, if (slot.isAccessor) null else if (d.hasValue) d.value else storage[key])
+        if (slot.isPlain) slots.remove(key) else slots[key] = slot
+        jsTracker?.trigger()
+    }
+
+    /** `Object.getOwnPropertyDescriptor(object, key)`. */
+    fun descriptor(key: String): JSObject? {
+        if (!storage.containsKey(key)) return null
+        val slot = slots[key] ?: JSPropertySlot()
+        if (slot.isAccessor) {
+            val g = slot.get
+            val s = slot.set
+            return JSObject(listOf(
+                Pair("get", g?.let { { -> it(this) } }), Pair("set", s?.let { { v: Any? -> it(this, v) } }),
+                Pair("enumerable", slot.enumerable), Pair("configurable", slot.configurable)))
+        }
+        return JSObject(listOf(Pair("value", storage[key]), Pair("writable", slot.writable), Pair("enumerable", slot.enumerable), Pair("configurable", slot.configurable)))
+    }
+
+    /** `Object.freeze`, `Object.seal`, `Object.preventExtensions`. */
+    fun restrict(sealed: Boolean, frozen: Boolean) {
+        extensible = false
+        if (!sealed && !frozen) return
+        for (key in indexKeys.map { it.toString() } + namedKeys) {
+            val slot = slots[key] ?: JSPropertySlot()
+            slot.configurable = false
+            if (frozen && !slot.isAccessor) slot.writable = false
+            slots[key] = slot
+        }
+    }
+
+    val isSealed: Boolean get() = !extensible && storage.keys.all { !(slots[it] ?: JSPropertySlot()).configurable }
+    val isFrozen: Boolean get() = !extensible && storage.keys.all { val s = slots[it] ?: JSPropertySlot(); !s.configurable && (s.isAccessor || !s.writable) }
+
+    override fun jsAccessorKind(key: String): String? {
+        val slot = slots[key] ?: return null
+        if (!slot.isAccessor) return null
+        return if (slot.get != null && slot.set != null) "Getter/Setter" else if (slot.get != null) "Getter" else "Setter"
+    }
+
+    /** `Object.getOwnPropertyNames(object)`: string keys, enumerable or not. */
+    val ownPropertyNames: List<String> get() = indexKeys.map { it.toString() } + namedKeys.filter { !jsIsSymbolKey(it) }
+
+    private fun define(key: String, value: Any?) {
+        if (storage.containsKey(key)) { storage[key] = value; return }
+        storage[key] = value
+        val index = jsArrayIndex(key)
+        if (index != null) {
+            var low = 0
+            var high = indexKeys.size
+            while (low < high) {
+                val mid = (low + high) / 2
+                if (indexKeys[mid] < index) low = mid + 1 else high = mid
+            }
+            indexKeys.add(low, index)
+        } else namedKeys.add(key)
+    }
+
+    /** `key in object` for own keys. */
+    fun has(key: String): Boolean {
+        jsTracker?.track()
+        return storage.containsKey(key)
+    }
+
+    /** `delete object[key]`. */
+    fun delete(key: String): Boolean {
+        slots[key]?.let { if (!it.configurable) return false }
+        slots.remove(key)
+        if (!storage.containsKey(key)) return true
+        storage.remove(key)
+        val index = jsArrayIndex(key)
+        if (index != null) indexKeys.remove(index) else namedKeys.remove(key)
+        jsTracker?.trigger()
+        return true
+    }
+
+    val keys: List<String>
+        get() {
+            jsTracker?.track()
+            val all = indexKeys.map { it.toString() } + namedKeys.filter { !jsIsSymbolKey(it) }
+            return if (slots.isEmpty()) all else all.filter { slots[it]?.enumerable ?: true }
+        }
+
+    override val jsSymbolKeys: List<String>
+        get() {
+            jsTracker?.track()
+            return namedKeys.filter { jsIsSymbolKey(it) }
+        }
+
+    override fun jsGet(key: String): Any? = this[key]
+    override fun jsSet(key: String, value: Any?) { this[key] = value }
+    override val jsKeys: List<String> get() = keys
+    override val jsClassName: String? get() = null
+
+    override fun jsMakeReactive() {
+        if (jsTracker == null) jsTracker = JSTracker()
+    }
+
+    override fun toString(): String = jsInspect(this)
+}
+
+// Property access
+
+/** `object?.key`: undefined when the object is undefined or null. */
+fun jsGetOptional(target: Any?, key: String): Any? = if (target == null || target === JSNull) null else jsGet(target, key)
+
+/** `object[key]` / `object.key` on a dynamic value. Reading from undefined or null throws a TypeError. */
+/** `Object.create(proto)`. */
+fun jsObjectCreate(proto: Any?): JSObject = JSObject().also { if (jsBox(proto) === JSNull) it.jsNullPrototype = true else it.jsPrototype = proto }
+
+fun jsGet(target: Any?, key: String): Any? = if (key == "constructor" && target != null && target !== JSNull && target !is JSObject && target !is Class<*>) jsConstructorOf(target) else when (target) {
+    null -> throw JSException(JSTypeError("Cannot read properties of undefined (reading '$key')"))
+    JSNull -> throw JSException(JSTypeError("Cannot read properties of null (reading '$key')"))
+    // What every object inherits (`{}.toString`), where the object has nothing of that name.
+    is JSObject -> target.jsGet(key) ?: if (!target.has(key) && !target.jsNullPrototype && JSPrototypes.objectPrototype.has(key)) JSPrototypes.objectPrototype[key] else null
+    is JSDynamic -> target.jsGet(key)
+    is JSArray<*> -> when {
+        key == "length" -> target.size.toDouble()
+        // A named property set on the array (`arr.label = …`, Object.defineProperty) before the method of that name.
+        else -> {
+            val idx = jsArrayIndex(key)
+            if (idx != null) { if (idx < target.size) target.storage[idx.toInt()] else null }
+            else {
+                val props = target.jsProperties
+                if (props != null && props.has(key)) props.get(key, target) else jsArrayMethod(target, key) ?: jsArrayGenericMethod(key)
+            }
+        }
+    }
+    is String -> when {
+        key == "length" -> target.length.toDouble()
+        else -> jsArrayIndex(key)?.let { if (it < target.length) target[it.toInt()].toString() else null } ?: jsStringMethod(target, key)
+    }
+    is Pair<*, *> -> when (key) { "0" -> target.first; "1" -> target.second; "length" -> 2.0; else -> null }
+    is Triple<*, *, *> -> when (key) { "0" -> target.first; "1" -> target.second; "2" -> target.third; "length" -> 3.0; else -> null }
+    is JSMap<*, *> -> if (key == "size") target.size else jsMapMethod(target, key)
+    is JSSet<*> -> if (key == "size") target.size else jsSetMethod(target, key)
+    is JSFunction, is Function<*> -> jsFunctionGet(target, key)
+    is Double -> jsNumberMethod(target, key)
+    is Boolean -> jsBooleanMethod(target, key)
+    is JSBigInt -> jsBigIntMethod(target, key)
+    is JSSymbol, Unit -> null
+    is Class<*> -> jsClassGet(target, key)
+    else -> jsJavaGet(target, key)
+}
+
+/** `object[key] = value` on a dynamic value. Writing to undefined or null throws a TypeError. */
+fun jsSet(target: Any?, key: String, value: Any?) {
+    when (target) {
+        null -> throw JSException(JSTypeError("Cannot set properties of undefined (setting '$key')"))
+        JSNull -> throw JSException(JSTypeError("Cannot set properties of null (setting '$key')"))
+        is JSObject -> target.put(key, value)
+        is JSDynamic -> {
+            val level = jsRestriction(target)
+            if (level > 0) {
+                if (key !in target.jsKeys) throw JSException(JSTypeError("Cannot add property $key, object is not extensible"))
+                if (level == 3) throw JSException(JSTypeError("Cannot assign to read only property '$key' of object '#<Object>'"))
+            }
+            target.jsSet(key, value)
+        }
+        is JSArray<*> -> {
+            @Suppress("UNCHECKED_CAST") val array = target as JSArray<Any?>
+            if (key == "length") {
+                val length = jsToNumber(value)
+                if (length < 0 || length > 4_294_967_295.0 || length != Math.floor(length)) throw JSException(JSRangeError("Invalid array length"))
+                array.setLength(length.toInt())
+            } else jsArrayIndex(key)?.let { array.setAt(it.toInt(), value) }
+                ?: run { (array.jsProperties ?: JSObject().also { array.jsProperties = it }).put(key, value) }
+        }
+        // A function's own `length` and `name` are read-only.
+        is Function<*>, is JSFunction -> if ((key == "length" || key == "name") && jsFunctionProperties(target, false)?.has(key) != true)
+            throw JSException(JSTypeError("Cannot assign to read only property '$key' of function '${jsToString(target)}'"))
+        else jsFunctionProperties(target, true)!!.put(key, value)
+        is String, is Double, is Boolean, is JSSymbol, is JSBigInt, Unit -> {}
+        else -> jsJavaSet(target, key, value)
+    }
+}
+
+/** Calls a function stored in a dynamic value with JavaScript's argument rules. Anything else throws a TypeError. */
+@Suppress("UNCHECKED_CAST")
+fun jsCall(function: Any?, vararg args: Any?): Any? {
+    val a = { i: Int -> if (i < args.size) args[i] else null }
+    val result = when (function) {
+        is Function0<*> -> (function as () -> Any?)()
+        is Function1<*, *> -> (function as (Any?) -> Any?)(a(0))
+        is Function2<*, *, *> -> (function as (Any?, Any?) -> Any?)(a(0), a(1))
+        is Function3<*, *, *, *> -> (function as (Any?, Any?, Any?) -> Any?)(a(0), a(1), a(2))
+        is Function4<*, *, *, *, *> -> (function as (Any?, Any?, Any?, Any?) -> Any?)(a(0), a(1), a(2), a(3))
+        is Function5<*, *, *, *, *, *> -> (function as (Any?, Any?, Any?, Any?, Any?) -> Any?)(a(0), a(1), a(2), a(3), a(4))
+        is Function6<*, *, *, *, *, *, *> -> (function as (Any?, Any?, Any?, Any?, Any?, Any?) -> Any?)(a(0), a(1), a(2), a(3), a(4), a(5))
+        is Function7<*, *, *, *, *, *, *, *> -> (function as (Any?, Any?, Any?, Any?, Any?, Any?, Any?) -> Any?)(a(0), a(1), a(2), a(3), a(4), a(5), a(6))
+        is JSFunction -> function.body(args.toList())
+        is JSMethod -> function.call(null, args)
+        is JavaMethodRef -> function.call(args.toList())
+        else -> throw JSException(JSTypeError("${jsInspect(function)} is not a function"))
+    }
+    return jsBox(result)
+}
+
+/** `f?.(args)` on an untyped value: undefined when `f` is undefined or null. */
+fun jsCallOptional(function: Any?, vararg args: Any?): Any? = if (jsIsNullish(function)) null else jsCall(function, *args)
+
+/** `Object.keys` for what translated code holds: a typed object, an untyped one, an array. */
+fun jsKeysOf(value: Any?): List<String> = when (value) {
+    is String -> value.indices.map { it.toString() }
+    is JSDynamic -> value.jsKeys
+    is Function<*>, is JSFunction -> jsFunctionProperties(value, false)?.jsKeys ?: emptyList()
+    is JSArray<*> -> (0 until value.size).filter { value.jsHoles?.get(it) != true }.map { it.toString() } + (value.jsProperties?.jsKeys ?: emptyList())
+    else -> emptyList()
+}
+
+fun jsObjectKeys(value: Any?): JSArray<String> = JSArray(jsKeysOf(value))
+
+fun jsObjectValues(value: Any?): JSArray<Any?> = when (value) {
+    is JSDynamic -> JSArray(value.jsKeys.map { value.jsGet(it) })
+    is JSArray<*> -> JSArray(jsKeysOf(value).map { jsField(value, it) })
+    else -> JSArray()
+}
+
+fun jsObjectEntries(value: Any?): JSArray<Pair<String, Any?>> = when (value) {
+    is JSDynamic -> JSArray(value.jsKeys.map { Pair(it, value.jsGet(it)) })
+    is JSArray<*> -> JSArray(jsKeysOf(value).map { Pair(it, jsField(value, it)) })
+    else -> JSArray()
+}
+
+/** `Object.assign(target, ...sources)`. */
+fun <T : JSDynamic> jsObjectAssign(target: T, vararg sources: Any?): T {
+    for (source in sources) {
+        when (source) {
+            is JSDynamic -> for (key in source.jsKeys) target.jsSet(key, source.jsGet(key))
+            is JSArray<*>, is String -> for (key in jsKeysOf(source)) target.jsSet(key, jsField(source, key))
+            else -> {}
+        }
+    }
+    return target
+}
+
+/** `key in object`. A field given a descriptor is the object's own even where hidden from `jsKeys`. */
+fun jsHasKey(target: Any?, key: String): Boolean = jsHasKeyOf(jsIdentity(target), key)
+private fun jsHasKeyOf(target: Any?, key: String): Boolean = if (target is JSError && (key == "message" || key == "name" || jsErrorOwns(target, key))) true else if (target is JSDefinable && !jsIsSymbolKey(key) && target.jsDefined?.has(key) == true) true else when (target) {
+    is JSObject -> target.has(key) || when (val p = jsBox(target.jsPrototype) ?: JSPrototypes.prototypeOf(target)) {
+        JSNull -> false
+        else -> jsHasKeyOf(jsIdentity(p), key)
+    }
+    // A symbol is no key a class declares: only its own symbol-keyed members (methods its `jsGet` gives) and what was set on it have one (reading `jsKeys` runs accessors).
+    is JSExpando -> if (jsIsSymbolKey(key)) jsExpandoHas(target, key) || target.jsSymbolKeys.contains(key) || target.jsGet(key) != null else jsExpandoHas(target, key) || key in target.jsKeys || target.jsHasMember(key) || JSPrototypes.objectPrototype.has(key)
+    is JSDynamic -> if (jsIsSymbolKey(key)) ((target as? JSSymbolKeyed)?.jsSymbolKeys?.contains(key) ?: false) || target.jsGet(key) != null else key in target.jsKeys || target.jsHasMember(key) || JSPrototypes.objectPrototype.has(key)
+    is JSArray<*> -> key == "length" || (jsArrayIndex(key)?.let { it < target.size && target.jsHoles?.get(it.toInt()) != true } ?: (target.jsProperties?.has(key) == true))
+    null, JSNull, is String, is Number, is Boolean, is Function<*>, is JSFunction -> false
+    // A Java object (a native view): its methods and fields, as NativeScript's runtime exposes them.
+    else -> !jsIsSymbolKey(key) && ((target is Class<*> && JSPrototypes.staticMember(target, key) != null) || (!target.javaClass.name.startsWith("org.nativescript.kit.") && jsJavaHas(target, key)))
+}
+
+/** A member of an untyped object, or undefined; reading a typed object from JSON never throws. */
+fun jsField(target: Any?, key: String): Any? = if (target == null || target === JSNull) null else jsGet(target, key)
+
+// Operators
+
+/** `typeof value`. */
+fun jsTypeof(value: Any?): String = when (value) {
+    null, Unit -> "undefined"
+    // A Java char is a one-character string, as NativeScript marshals it.
+    is String, is Char -> "string"
+    is Boolean -> "boolean"
+    JSNull -> "object"
+    is Function<*>, is JSFunction, is JavaMethodRef, is Class<*> -> "function"
+    is JSSymbol -> "symbol"
+    is JSBigInt -> "bigint"
+    else -> if (jsNumeric(value) != null) "number" else "object"
+}
+
+/**
+ * `value === undefined || value === null`. Undefined has two forms: `null`, and `Unit`, which a `void` function's
+ * result is when read untyped. A test for undefined accepts both, as `jsBox` folds them into one.
+ */
+fun jsIsNullish(value: Any?): Boolean = value == null || value === JSNull || value === Unit
+
+/** `value || otherwise`: the value where it is truthy, else what `otherwise` gives, run only then. */
+inline fun <T> jsOr(value: T, otherwise: () -> T): T = if (jsTruthy(value)) value else otherwise()
+
+/** `value && then`: what `then` gives where the value is truthy, run only then, else the value. */
+inline fun <T> jsAnd(value: T, then: () -> T): T = if (jsTruthy(value)) then() else value
+
+/** JavaScript truthiness: false for undefined, null, false, 0, -0, NaN and "". Where it holds, the value is not null, so Kotlin smart-casts a tested local. */
+@OptIn(ExperimentalContracts::class)
+fun jsTruthy(value: Any?): Boolean {
+    contract { returns(true) implies (value != null) }
+    return when (value) {
+        null, Unit, JSNull -> false
+        is Boolean -> value
+        is Double -> value != 0.0 && !value.isNaN()
+        is String -> value.isNotEmpty()
+        is JSBigInt -> !value.isZero
+        else -> jsNumeric(value)?.let { it != 0.0 && !it.isNaN() } ?: true
+    }
+}
+
+/** `a === b`: numbers by value (NaN unequal to itself, -0 equal to +0), strings by code units, objects by identity. */
+fun jsStrictEquals(a: Any?, b: Any?): Boolean {
+    val p = jsBox(a)
+    val q = jsBox(b)
+    if (p == null || q == null) return p == null && q == null
+    if (p is String && q is String) return p == q
+    if (p is Boolean && q is Boolean) return p == q
+    if (p is JSBigInt || q is JSBigInt) return p == q
+    val m = jsNumeric(p)
+    val n = jsNumeric(q)
+    if (m != null || n != null) return m != null && n != null && m == n
+    val x = jsIdentity(p)!!
+    val y = jsIdentity(q)!!
+    if (x is JSAdapted || y is JSAdapted) return jsSameFunction(jsUnadapted(x), jsUnadapted(y))
+    if (x is JSFunction || y is JSFunction || x is kotlin.reflect.KCallable<*>) return jsSameFunction(x, y)
+    return x === y
+}
+
+/** Whether two function values are one function: a wrapper is its original's, and references to one function are equal. */
+internal fun jsSameFunction(a: Any, b: Any): Boolean {
+    val f = (a as? JSFunction)?.original ?: a
+    val g = (b as? JSFunction)?.original ?: b
+    return f === g || (f is kotlin.reflect.KCallable<*> && f == g)
+}
+
+/** SameValueZero (`includes`, `Map` and `Set` keys): `===` except NaN equals NaN. */
+fun jsSameValueZero(a: Any?, b: Any?): Boolean {
+    val m = jsNumeric(a)
+    val n = jsNumeric(b)
+    if (m != null && n != null && m.isNaN() && n.isNaN()) return true
+    return jsStrictEquals(a, b)
+}
+
+/** SameValue (`Object.is`): `===` except NaN equals NaN and -0 differs from +0. */
+fun jsSameValue(a: Any?, b: Any?): Boolean {
+    val m = jsNumeric(a)
+    val n = jsNumeric(b)
+    if (m != null && n != null) {
+        if (m.isNaN() && n.isNaN()) return true
+        return m == n && (1.0 / m).sign == (1.0 / n).sign
+    }
+    return jsStrictEquals(a, b)
+}
+
+private val Double.sign: Double get() = Math.signum(this)
+
+/** `a == b`: null equals undefined; primitives compare after conversion; an object against a primitive through its string form. */
+fun jsLooseEquals(a: Any?, b: Any?): Boolean {
+    val x = jsBox(a)
+    val y = jsBox(b)
+    val xNullish = x == null || x === JSNull
+    val yNullish = y == null || y === JSNull
+    if (xNullish || yNullish) return xNullish && yNullish
+    x!!; y!!
+    // ToPrimitive leaves a primitive as it is, and a symbol equals no primitive but itself.
+    if (x is JSSymbol || y is JSSymbol) return jsStrictEquals(jsToPrimitive(x), jsToPrimitive(y))
+    if (x is JSBigInt) return jsBigIntLooseEquals(x, y)
+    if (y is JSBigInt) return jsBigIntLooseEquals(y, x)
+    val m = jsNumeric(x)
+    val n = jsNumeric(y)
+    if (m != null && n != null) return m == n
+    if (x is String && y is String) return x == y
+    if (x is Boolean && y is Boolean) return x == y
+    if (x is Boolean) return jsLooseEquals(jsToNumber(x), y)
+    if (y is Boolean) return jsLooseEquals(x, jsToNumber(y))
+    if (m != null && y is String) return m == jsNumberFromString(y)
+    if (x is String && n != null) return jsNumberFromString(x) == n
+    val xPrimitive = x is String || m != null
+    val yPrimitive = y is String || n != null
+    if (!xPrimitive && yPrimitive) return jsLooseEquals(jsToPrimitive(x), y)
+    if (xPrimitive && !yPrimitive) return jsLooseEquals(x, jsToPrimitive(y))
+    return jsStrictEquals(x, y)
+}
+
+/** ToPrimitive: `hint` is "default", "number" or "string"; a date is its time only for "number". */
+fun jsToPrimitive(value: Any?, hint: String = "default"): Any? {
+    val v = jsBox(value)
+    if (v is JSObject) jsExoticPrimitive(v, hint).let { if (it !== jsNotPrimitive) return it }
+    return when (v) {
+        null, is String, is Boolean, JSNull, is JSSymbol, is JSBigInt -> v
+        is JSToPrimitive -> jsUserPrimitive(v, hint)
+        is JSDate -> if (hint == "number") v.valueOf() else jsToString(v)
+        is JSObject -> jsOrdinaryToPrimitive(hint, jsMethodOf(v, "valueOf"), jsMethodOf(v, "toString") ?: { jsObjectToString(v) })
+        else -> jsNumeric(v) ?: (if (hint == "string") jsNotPrimitive else jsOwnValueOf(v)).let { if (it === jsNotPrimitive) jsToString(v) else it }
+    }
+}
+
+private val jsNotPrimitive = Any()
+
+/** An untyped object's `[Symbol.toPrimitive]` method called with the hint; `jsNotPrimitive` when it has none. */
+private fun jsExoticPrimitive(v: JSObject, hint: String): Any? {
+    val exotic = jsBox(v.jsGet(JSSymbol.toPrimitive.key))
+    if (exotic == null || exotic === JSNull) return jsNotPrimitive
+    if (!jsIsFunction(exotic)) throw JSException(JSTypeError("${jsInspect(exotic)} is not a function"))
+    val result = jsCallValue(exotic, v, false, hint)
+    if (result == null || result is String || result is Boolean || result === JSNull || result is JSSymbol || result is JSBigInt || jsNumeric(result) != null) return result
+    throw JSException(JSTypeError("Cannot convert object to primitive value"))
+}
+
+/**
+ * OrdinaryToPrimitive over an object literal's own `valueOf` and `toString`, in the order the hint asks; null stands for
+ * Object.prototype's (a `valueOf` giving the object itself, a `toString` giving "[object Object]").
+ */
+fun jsOrdinaryToPrimitive(hint: String, valueOf: (() -> Any?)?, toString: (() -> Any?)?): Any? {
+    val inherited: () -> Any? = { "[object Object]" }
+    for (method in if (hint == "string") listOf(toString ?: inherited, valueOf) else listOf(valueOf, toString ?: inherited)) {
+        val result = jsBox((method ?: continue)())
+        if (result == null || result is String || result is Boolean || result === JSNull || result is JSSymbol || result is JSBigInt || jsNumeric(result) != null) return result
+    }
+    throw JSException(JSTypeError("Cannot convert object to primitive value"))
+}
+
+/** A plain object's method `name` (own or inherited), called with it as `this`; null where it has none. */
+private fun jsMethodOf(v: JSObject, name: String): (() -> Any?)? = jsBox(v[name]).takeIf { jsIsFunction(it) }?.let { f -> { jsCallValue(f, v, false) } }
+
+/** What a class's own `valueOf()` gives, when that is a primitive; else `jsNotPrimitive`. */
+private fun jsOwnValueOf(v: Any): Any? {
+    val result = when (v) {
+        is JSValueOf -> jsBox(v.jsValueOf())
+        else -> return jsNotPrimitive
+    }
+    return if (result == null || result is String || result is Boolean || result === JSNull || result is JSSymbol || result is JSBigInt || jsNumeric(result) != null) result else jsNotPrimitive
+}
+
+/** `a < b` (the Abstract Relational Comparison): two strings by UTF-16 code units, anything else as numbers, false where either is NaN. */
+fun jsLess(a: Any?, b: Any?): Boolean {
+    val x = jsToPrimitive(a, "number")
+    val y = jsToPrimitive(b, "number")
+    return if (x is String && y is String) x < y else jsToNumber(x) < jsToNumber(y)
+}
+
+fun jsLessOrEqual(a: Any?, b: Any?): Boolean {
+    val x = jsToPrimitive(a, "number")
+    val y = jsToPrimitive(b, "number")
+    return if (x is String && y is String) x <= y else jsToNumber(x) <= jsToNumber(y)
+}
+
+fun jsGreater(a: Any?, b: Any?): Boolean {
+    val x = jsToPrimitive(a, "number")
+    val y = jsToPrimitive(b, "number")
+    return if (x is String && y is String) x > y else jsToNumber(x) > jsToNumber(y)
+}
+
+fun jsGreaterOrEqual(a: Any?, b: Any?): Boolean {
+    val x = jsToPrimitive(a, "number")
+    val y = jsToPrimitive(b, "number")
+    return if (x is String && y is String) x >= y else jsToNumber(x) >= jsToNumber(y)
+}
+
+/** A `+` operand beside a string: ToString(ToPrimitive(value, default)). */
+fun jsToStringDefault(value: Any?): String = jsToString(jsToPrimitive(value))
+
+/** `Number(value)` / unary `+`. */
+fun jsToNumber(value: Any?): Double = when (val v = jsBox(value)) {
+    null -> Double.NaN
+    is Double -> v
+    is String -> jsNumberFromString(v)
+    is Boolean -> if (v) 1.0 else 0.0
+    JSNull -> 0.0
+    is JSDate -> v.valueOf()
+    is JSBigInt -> v.toDouble()
+    is Function<*> -> Double.NaN
+    is JSSymbol -> throw JSException(JSTypeError("Cannot convert a Symbol value to a number"))
+    is JSToPrimitive -> jsToNumber(jsUserPrimitive(v, "number"))
+    is JSValueOf, is JSObject -> jsToNumber(jsToPrimitive(v, "number"))
+    else -> jsNumeric(v) ?: jsNumberFromString(jsToString(v))
+}
+
+/** An untyped value where code declares a number: a string as `==` and arithmetic read it; anything else not a number, 0. */
+fun jsNumberOrZero(value: Any?): Double = when (value) {
+    is Double -> value
+    is String -> jsNumberFromString(value)
+    // A boxed Java number (a callback's `java.lang.Integer` context) is a number to script.
+    is Number -> value.toDouble()
+    else -> 0.0
+}
+
+/** An untyped value where code declares a string: a number or boolean as its string; undefined, null or anything else not a string, "". */
+fun jsStringOrEmpty(value: Any?): String = when (value) {
+    is String -> value
+    is Double, is Boolean -> jsToString(value)
+    else -> ""
+}
+
+/** As `jsStringOrEmpty`, with undefined and null kept apart from "" for code that tests for them. */
+fun jsStringOrNull(value: Any?): String? = when (value) {
+    is String -> value
+    is Double, is Boolean -> jsToString(value)
+    else -> null
+}
+
+/** A string, number or boolean where code declares a number, converted as `Number(value)`; null for anything else. */
+fun jsNumberOrNull(value: Any?): Double? = when (value) {
+    is Double -> value
+    is String -> jsNumberFromString(value)
+    is Boolean -> if (value) 1.0 else 0.0
+    else -> jsNumeric(value)
+}
+
+/** A string, number or boolean where code declares a boolean, converted as `Boolean(value)`; null for anything else. */
+fun jsBooleanOrNull(value: Any?): Boolean? = when (value) {
+    is Boolean -> value
+    is String, is Double -> jsTruthy(value)
+    else -> null
+}
+
+/** As `jsBooleanOrNull`, false for anything else. */
+fun jsBooleanOrFalse(value: Any?): Boolean = jsBooleanOrNull(value) ?: false
+
+// A value asserted to a string, number or boolean (`x as boolean`), an assertion script erases: converted as JavaScript
+// converts it where the type is needed (undefined and null are "" as a string), never refused.
+fun jsAssertedString(value: Any?): String = value as? String ?: if (jsIsNullish(value)) "" else jsToString(value)
+
+fun jsAssertedNumber(value: Any?): Double = value as? Double ?: jsToNumber(value)
+
+fun jsAssertedBoolean(value: Any?): Boolean = value as? Boolean ?: jsTruthy(value)
+
+// As the three above, where the place takes undefined: undefined and null stay null.
+fun jsAssertedStringOrNull(value: Any?): String? = if (jsIsNullish(value)) null else jsAssertedString(value)
+
+fun jsAssertedNumberOrNull(value: Any?): Double? = if (jsIsNullish(value)) null else jsAssertedNumber(value)
+
+fun jsAssertedBooleanOrNull(value: Any?): Boolean? = if (jsIsNullish(value)) null else jsAssertedBoolean(value)
+
+/**
+ * An untyped value asserted to a string, number or boolean: a value `jsTypeof` calls that type passes, in
+ * whatever representation it has (an `Int`, a `Char`), an empty state reads as `jsAssertedString`/`jsAssertedNumber`/
+ * `jsAssertedBoolean` read it, and any other value is JavaScript's TypeError there rather than a converted one.
+ */
+fun jsCheckedString(value: Any?): String = when (val v = jsBox(value)) {
+    is String -> v
+    is Char -> v.toString()
+    else -> if (jsIsNullish(v)) "" else jsCheckedFailure(v, "string")
+}
+
+fun jsCheckedNumber(value: Any?): Double {
+    val v = jsBox(value)
+    return jsNumeric(v) ?: if (jsIsNullish(v)) jsToNumber(v) else jsCheckedFailure(v, "number")
+}
+
+fun jsCheckedBoolean(value: Any?): Boolean {
+    val v = jsBox(value)
+    return v as? Boolean ?: if (jsIsNullish(v)) false else jsCheckedFailure(v, "boolean")
+}
+
+fun jsCheckedStringOrNull(value: Any?): String? = if (jsIsNullish(value)) null else jsCheckedString(value)
+
+fun jsCheckedNumberOrNull(value: Any?): Double? = if (jsIsNullish(value)) null else jsCheckedNumber(value)
+
+fun jsCheckedBooleanOrNull(value: Any?): Boolean? = if (jsIsNullish(value)) null else jsCheckedBoolean(value)
+
+/** As `jsCheckedNumberOrNull` and `jsAssertedNumberOrNull` for a built-in's optional number parameter: null only where the value is undefined, since JavaScript's null converts (to 0). */
+fun jsCheckedNumberOrUndefined(value: Any?): Double? = if (value == null || value === Unit) null else jsCheckedNumber(value)
+
+fun jsAssertedNumberOrUndefined(value: Any?): Double? = if (value == null || value === Unit) null else jsAssertedNumber(value)
+
+/**
+ * An untyped value asserted to an array of strings, numbers or booleans: an array's elements each checked by
+ * `element`, an empty state read as `jsArrayFrom` reads it, and any other value JavaScript's TypeError there.
+ */
+fun <T> jsCheckedArray(value: Any?, element: (Any?) -> T): JSArray<T> {
+    if (jsIsNullish(value) || value is JSArray<*> || value!!.javaClass.isArray) return jsArrayFrom(value, element)
+    throw JSException(JSTypeError("${jsTypeof(value)} is not an array"))
+}
+
+private fun jsCheckedFailure(value: Any?, type: String): Nothing = throw JSException(JSTypeError("${jsTypeof(value)} is not a $type"))
+
+private val joinGuards = object : ThreadLocal<ArrayList<Any>>() {
+    override fun initialValue() = ArrayList<Any>()
+}
+
+/** The arrays the calling thread is turning into strings: one met again inside itself is "". */
+internal val jsJoinGuard: ArrayList<Any> get() = joinGuards.get()!!
+
+/** `String(value)`: arrays join with ",", plain objects are "[object Object]", errors "Name: message". */
+fun jsToString(value: Any?): String = when (val v = jsBox(value)) {
+    null -> "undefined"
+    is String -> v
+    is Double -> jsNumberToString(v)
+    is Boolean -> if (v) "true" else "false"
+    JSNull -> "null"
+    is JSToPrimitive -> jsToString(jsUserPrimitive(v, "string"))
+    is JSStringConvertible -> v.toString()
+    is JSSymbol -> v.toString()
+    is JSBigInt -> v.toString()
+    is JSToStringTag -> "[object ${v.jsToStringTag}]"
+    is JSError -> v.jsErrorString
+    is JSArray<*> -> jsJoin(v.storage, ",", v)
+    is Pair<*, *> -> jsJoin(listOf(v.first, v.second), ",", v)
+    is Triple<*, *, *> -> jsJoin(listOf(v.first, v.second, v.third), ",", v)
+    is JSMap<*, *> -> "[object Map]"
+    is JSSet<*> -> "[object Set]"
+    is JSThenable -> "[object Promise]"
+    is Function<*> -> "function () { [native code] }"
+    is JSObject -> jsToString(jsToPrimitive(v, "string"))
+    else -> jsNumeric(v)?.let { jsNumberToString(it) } ?: if (v is JSDynamic) jsObjectToString(v) else v.toString()
+}
+
+internal fun jsJoin(elements: List<Any?>, separator: String, owner: Any): String {
+    val guard = jsJoinGuard
+    if (guard.any { it === owner }) return ""
+    guard.add(owner)
+    try {
+        val out = StringBuilder()
+        elements.forEachIndexed { i, element ->
+            if (i > 0) out.append(separator)
+            val e = jsBox(element)
+            if (e != null && e !== JSNull) out.append(jsToString(e))
+        }
+        return out.toString()
+    } finally {
+        guard.removeAt(guard.size - 1)
+    }
+}
+
+/** `a + b` for untyped operands: concatenation when either side is (or converts to) a string, else addition. */
+fun jsAdd(a: Any?, b: Any?): Any? {
+    val x = jsToPrimitive(a)
+    val y = jsToPrimitive(b)
+    if (x is String || y is String) return jsToString(x) + jsToString(y)
+    return jsToNumber(x) + jsToNumber(y)
+}
+
+// What an operator converts where the compiler holds an operand untyped (the Swift kit's throwing conversions, one name
+// each on both kits): JavaScript's TypeErrors for a BigInt beside a number and a Symbol as a number or string.
+
+/** ToNumeric: a BigInt as it is, anything else its number. */
+private fun jsNumericOf(value: Any?): Any = when (val p = jsToPrimitive(value, "number")) {
+    is JSBigInt -> p
+    else -> jsToNumber(p)
+}
+
+private fun jsMixedBigInt() = JSException(JSTypeError("Cannot mix BigInt and other types, use explicit conversions"))
+
+/** `a + b`: as `jsAdd`; two BigInts add as BigInts, and a BigInt beside a number is a TypeError. */
+fun jsAddThrowing(a: Any?, b: Any?): Any? {
+    val x = jsToPrimitive(a)
+    val y = jsToPrimitive(b)
+    if (x is String || y is String) return jsToStringThrowing(x) + jsToStringThrowing(y)
+    val m = jsNumericOf(x)
+    val n = jsNumericOf(y)
+    if (m is JSBigInt && n is JSBigInt) return m + n
+    if (m is JSBigInt || n is JSBigInt) throw jsMixedBigInt()
+    return jsToNumber(m) + jsToNumber(n)
+}
+
+/** `op` on two operands' numbers: two BigInts give `op` of their numbers, and a BigInt beside a number is a TypeError. */
+private inline fun jsNumericThrowing(a: Any?, b: Any?, op: (Double, Double) -> Double): Double {
+    val m = jsNumericOf(a)
+    val n = jsNumericOf(b)
+    if (m is JSBigInt && n is JSBigInt) return op(m.toDouble(), n.toDouble())
+    if (m is JSBigInt || n is JSBigInt) throw jsMixedBigInt()
+    return op(jsToNumber(m), jsToNumber(n))
+}
+
+/** The numeric and bitwise operators where an operand is held untyped. */
+fun jsSubtractThrowing(a: Any?, b: Any?): Double = jsNumericThrowing(a, b) { x, y -> x - y }
+fun jsMultiplyThrowing(a: Any?, b: Any?): Double = jsNumericThrowing(a, b) { x, y -> x * y }
+fun jsDivideThrowing(a: Any?, b: Any?): Double = jsNumericThrowing(a, b) { x, y -> x / y }
+fun jsRemainderThrowing(a: Any?, b: Any?): Double = jsNumericThrowing(a, b) { x, y -> x % y }
+fun jsExponentThrowing(a: Any?, b: Any?): Double = jsNumericThrowing(a, b, ::jsPow)
+fun jsBitAndThrowing(a: Any?, b: Any?): Double = jsNumericThrowing(a, b, ::jsBitAnd)
+fun jsBitOrThrowing(a: Any?, b: Any?): Double = jsNumericThrowing(a, b, ::jsBitOr)
+fun jsBitXorThrowing(a: Any?, b: Any?): Double = jsNumericThrowing(a, b, ::jsBitXor)
+fun jsShiftLeftThrowing(a: Any?, b: Any?): Double = jsNumericThrowing(a, b, ::jsShiftLeft)
+fun jsShiftRightThrowing(a: Any?, b: Any?): Double = jsNumericThrowing(a, b, ::jsShiftRight)
+fun jsShiftRightUnsignedThrowing(a: Any?, b: Any?): Double = jsNumericThrowing(a, b, ::jsShiftRightUnsigned)
+
+/** `op` where its value is held untyped: two BigInts give `big` of them, and a BigInt beside a number is a TypeError. */
+private inline fun jsNumericUntypedThrowing(a: Any?, b: Any?, op: (Double, Double) -> Double, big: (JSBigInt, JSBigInt) -> JSBigInt): Any? {
+    val m = jsNumericOf(a)
+    val n = jsNumericOf(b)
+    if (m is JSBigInt && n is JSBigInt) return big(m, n)
+    if (m is JSBigInt || n is JSBigInt) throw jsMixedBigInt()
+    return op(jsToNumber(m), jsToNumber(n))
+}
+
+/** The numeric and bitwise operators where both operands are held untyped or BigInts and the value is held untyped. */
+fun jsSubtractUntypedThrowing(a: Any?, b: Any?): Any? = jsNumericUntypedThrowing(a, b, { x, y -> x - y }) { x, y -> x - y }
+fun jsMultiplyUntypedThrowing(a: Any?, b: Any?): Any? = jsNumericUntypedThrowing(a, b, { x, y -> x * y }) { x, y -> x * y }
+fun jsDivideUntypedThrowing(a: Any?, b: Any?): Any? = jsNumericUntypedThrowing(a, b, { x, y -> x / y }, { x, y -> JSBigInt.divide(x, y) })
+fun jsRemainderUntypedThrowing(a: Any?, b: Any?): Any? = jsNumericUntypedThrowing(a, b, { x, y -> x % y }, { x, y -> JSBigInt.remainder(x, y) })
+fun jsExponentUntypedThrowing(a: Any?, b: Any?): Any? = jsNumericUntypedThrowing(a, b, ::jsPow, { x, y -> JSBigInt.power(x, y) })
+fun jsBitAndUntypedThrowing(a: Any?, b: Any?): Any? = jsNumericUntypedThrowing(a, b, ::jsBitAnd) { x, y -> x and y }
+fun jsBitOrUntypedThrowing(a: Any?, b: Any?): Any? = jsNumericUntypedThrowing(a, b, ::jsBitOr) { x, y -> x or y }
+fun jsBitXorUntypedThrowing(a: Any?, b: Any?): Any? = jsNumericUntypedThrowing(a, b, ::jsBitXor) { x, y -> x xor y }
+fun jsShiftLeftUntypedThrowing(a: Any?, b: Any?): Any? = jsNumericUntypedThrowing(a, b, ::jsShiftLeft, { x, y -> JSBigInt.shiftLeft(x, y) })
+fun jsShiftRightUntypedThrowing(a: Any?, b: Any?): Any? = jsNumericUntypedThrowing(a, b, ::jsShiftRight, { x, y -> JSBigInt.shiftRight(x, y) })
+fun jsShiftRightUnsignedUntypedThrowing(a: Any?, b: Any?): Any? =
+    jsNumericUntypedThrowing(a, b, ::jsShiftRightUnsigned) { _, _ -> throw JSException(JSTypeError("BigInts have no unsigned right shift, use >> instead")) }
+
+/** Unary `+`: ToNumber, a TypeError for a BigInt. */
+fun jsToNumberThrowing(value: Any?): Double {
+    val n = jsNumericOf(value)
+    if (n is JSBigInt) throw JSException(JSTypeError("Cannot convert a BigInt value to a number"))
+    return jsToNumber(n)
+}
+
+/** `n += value` for a number `n`: ToNumeric of value, a BigInt beside the number a TypeError. */
+fun jsNumberAddendThrowing(value: Any?): Double = jsNumericOf(value).let { if (it is JSBigInt) throw jsMixedBigInt() else jsToNumber(it) }
+
+/** Unary `-` and `~`: ToNumeric, a BigInt as its number. */
+fun jsToNumericThrowing(value: Any?): Double = jsNumericOf(value).let { if (it is JSBigInt) it.toDouble() else jsToNumber(it) }
+
+/** A `+` operand beside a string: ToString(ToPrimitive(value, default)). */
+fun jsToStringDefaultThrowing(value: Any?): String = jsToStringThrowing(jsToPrimitive(value))
+
+/** A template literal's substitution: ToString, a TypeError for a Symbol. */
+fun jsToStringThrowing(value: Any?): String {
+    val v = jsBox(value)
+    if (v is JSSymbol) throw JSException(JSTypeError("Cannot convert a Symbol value to a string"))
+    return jsToString(v)
+}
+
+/** `String(value)`: a Symbol its description, anything else ToString (`jsToStringThrowing`). */
+fun jsStringThrowing(value: Any?): String = jsBox(value).let { if (it is JSSymbol) jsToString(it) else jsToStringThrowing(it) }
+
+/**
+ * IsLessThan(a, b): ToPrimitive (number) of `a` then `b` where `leftFirst`, else `b` then `a`; two strings by UTF-16 code
+ * units, anything else as numbers (a Symbol a TypeError). Null where either is NaN.
+ */
+private fun jsLessThanThrowing(a: Any?, b: Any?, leftFirst: Boolean): Boolean? {
+    val x: Any?
+    val y: Any?
+    if (leftFirst) {
+        x = jsToPrimitive(a, "number")
+        y = jsToPrimitive(b, "number")
+    } else {
+        y = jsToPrimitive(b, "number")
+        x = jsToPrimitive(a, "number")
+    }
+    if (x is String && y is String) return x < y
+    if (x is JSSymbol || y is JSSymbol) throw JSException(JSTypeError("Cannot convert a Symbol value to a number"))
+    val m = jsToNumber(x)
+    val n = jsToNumber(y)
+    return if (m.isNaN() || n.isNaN()) null else m < n
+}
+
+/** The relational operators where an operand's conversion may throw. */
+fun jsLessThrowing(a: Any?, b: Any?): Boolean = jsLessThanThrowing(a, b, true) == true
+fun jsGreaterThrowing(a: Any?, b: Any?): Boolean = jsLessThanThrowing(b, a, false) == true
+fun jsLessOrEqualThrowing(a: Any?, b: Any?): Boolean = jsLessThanThrowing(b, a, false) == false
+fun jsGreaterOrEqualThrowing(a: Any?, b: Any?): Boolean = jsLessThanThrowing(a, b, true) == false
+
+/** `a ?? b` for an untyped value: null and undefined both give way. */
+inline fun jsNullishCoalesce(a: Any?, b: () -> Any?): Any? = if (jsIsNullish(a)) b() else a
+
+/** A number as JavaScript prints it: `4`, not `4.0`. */
+fun js(value: Double): String = jsNumberToString(value)
+fun js(value: Int): String = value.toString()
+fun js(value: Boolean): String = if (value) "true" else "false"
+fun js(value: String): String = value
+
+/** `Object.is` for a signal's writes: objects by identity. */
+fun jsSame(a: Any?, b: Any?): Boolean = jsSameValue(a, b)
+
+/**
+ * The key order of an object literal with spreads (`{ ...a, b: 1 }`): each spread source's keys as it holds
+ * them, then the literal's own, a key keeping its first position; integer keys first; only the `fields` it has.
+ */
+fun jsLiteralKeyOrder(parts: List<List<String>>, fields: List<String>): List<String> {
+    val keys = LinkedHashSet<String>()
+    for (part in parts) for (key in part) if (key in fields) keys.add(key)
+    val index = { k: String -> k.length <= 10 && (k == "0" || (k[0] != '0' && k.all(Char::isDigit))) && k.toLong() < 4294967295L }
+    return keys.filter(index).sortedBy { it.toLong() } + keys.filter { !index(it) }
+}
+
+/** `globalThis` of the running realm: a worker thread's own, else the app's. */
+val jsGlobalThis: JSObject get() = JSRealm.current().global
+
+/** `Promise` held as a value (a `PromiseConstructorLike` passed around): `new` through it makes a JSPromise, as the
+ * global Promise is the only promise constructor a compiled program has. */
+object JSPromiseConstructor
+
+val jsDateBuiltin: JSObject = JSObject().also { it["now"] = jsFunction(0) { JSDate.now() } }
+
+/** `value.constructor` of a typed object: its own member of that name, else its class. */
+private fun jsConstructorOf(target: Any): Any? = (if (target is JSDynamic) target.jsGet("constructor") else null) ?: when (target) {
+    is String, is Double, is Boolean, is JSArray<*>, is Function<*> -> null
+    else -> target.javaClass
+}
+
+/** A Map's method read by name (`changeMap.forEach(…)` on an untyped map). */
+@Suppress("UNCHECKED_CAST")
+private fun jsMapMethod(target: JSMap<*, *>, key: String): Any? {
+    val map = target as JSMap<Any?, Any?>
+    return when (key) {
+        "get" -> JSMethod { _, a -> map.get(a.getOrNull(0)) }
+        "set" -> JSMethod { _, a -> map.set(a.getOrNull(0), a.getOrNull(1)) }
+        "has" -> JSMethod { _, a -> map.has(a.getOrNull(0)) }
+        "delete" -> JSMethod { _, a -> map.delete(a.getOrNull(0)) }
+        "clear" -> JSMethod { _, _ -> map.clear(); null }
+        "keys" -> JSMethod { _, _ -> map.keys() }
+        "values" -> JSMethod { _, _ -> map.values() }
+        "entries" -> JSMethod { _, _ -> map.entries() }
+        "forEach" -> JSMethod { _, a -> val f = a.getOrNull(0); map.forEach { v: Any?, k: Any? -> jsCall(f, v, k, map) }; null }
+        else -> null
+    }
+}
+
+/** A Set's method read by name. */
+@Suppress("UNCHECKED_CAST")
+private fun jsSetMethod(target: JSSet<*>, key: String): Any? {
+    val set = target as JSSet<Any?>
+    return when (key) {
+        "add" -> JSMethod { _, a -> set.add(a.getOrNull(0)) }
+        "has" -> JSMethod { _, a -> set.has(a.getOrNull(0)) }
+        "delete" -> JSMethod { _, a -> set.delete(a.getOrNull(0)) }
+        "clear" -> JSMethod { _, _ -> set.clear(); null }
+        "keys", "values" -> JSMethod { _, _ -> set.values() }
+        "entries" -> JSMethod { _, _ -> set.entries() }
+        "forEach" -> JSMethod { _, a -> val f = a.getOrNull(0); set.forEach { v: Any?, k: Any? -> jsCall(f, v, k, set) }; null }
+        else -> null
+    }
+}
+
+/** A Kotlin function's parameter count (script's `fn.length`), where its class says. */
+/**
+ * The properties script gives a function value (`fn.tag = …`, `Object.defineProperty(fn, …)`), which Kotlin's function
+ * objects cannot hold. A function reference (`::fn`) is made anew where it is read, equal to every other of the same
+ * function: those are keyed by equality and held strongly, one per declaration. Any other function is keyed by identity
+ * and held weakly.
+ */
+private val referenceProperties = java.util.concurrent.ConcurrentHashMap<Any, JSObject>()
+private val functionProperties = JSWeakIdentityTable<JSObject>()
+
+internal fun jsFunctionProperties(function: Any, create: Boolean): JSObject? {
+    val f = (function as? JSFunction)?.original ?: function
+    if (f is kotlin.reflect.KCallable<*>) return if (create) referenceProperties.getOrPut(f) { JSObject() } else referenceProperties[f]
+    if (!create) return if (functionProperties.isEmpty) null else functionProperties.get(f)
+    synchronized(functionProperties) { return functionProperties.get(f) ?: JSObject().also { functionProperties.set(f, it) } }
+}
+
+// After the function-property table they write into: a file's top-level values initialize in order.
+/** `Array` held as a value: callable without `new` (`Array(3)`), as script's is. */
+val jsArrayBuiltin: JSFunction = jsFunction(1) { a -> jsArrayConstruct(a) }.also {
+    jsFunctionProperties(it, true)!!.put("isArray", jsFunction(1) { a -> JSArray.isArray(jsArg(a, 0)) })
+}
+
+/** `Object` held as a value (`const { keys } = Object`): its functions over objects, called as script calls them. */
+val jsObjectBuiltin: JSFunction = jsFunction(1) { a -> jsArg(a, 0).let { v -> if (jsIsNullish(v)) JSObject() else v } }.also {
+    jsFunctionProperties(it, true)!!.apply {
+        put("keys", jsFunction(1) { a -> jsObjectKeys(jsArg(a, 0)) })
+        put("values", jsFunction(1) { a -> jsObjectValues(jsArg(a, 0)) })
+        put("entries", jsFunction(1) { a -> JSArray.from<Any?>(jsObjectEntries(jsArg(a, 0)).map { (k, v) -> JSArray.of<Any?>(k, v) }) })
+        put("assign", jsFunction(2) { a -> jsAssign(jsArg(a, 0), *a.drop(1).toTypedArray()) })
+        put("getPrototypeOf", jsFunction(1) { a -> jsGetPrototypeOf(jsArg(a, 0)) })
+        put("prototype", JSPrototypes.objectPrototype)
+    }
+}
+
+/** `fn.key` of a function value: what script set on it, else its `length`. */
+internal fun jsFunctionGet(f: Any, key: String): Any? {
+    jsFunctionProperties(f, false)?.let { if (it.has(key)) return it.get(key, f) }
+    // A declared function's reference (`::f`) carries its name; a lambda carries none.
+    if (key == "name") return ((f as? JSFunction)?.original ?: f).let { (it as? kotlin.reflect.KCallable<*>)?.name }
+    if (key != "length") return null
+    return when (f) {
+        is JSFunction -> f.length.toDouble()
+        is JSMethod -> f.length.toDouble()
+        is Function<*> -> jsFunctionArity(f)?.toDouble()
+        else -> null
+    }
+}
+
+fun jsFunctionArity(f: Function<*>): Int? = when (f) {
+    is Function0<*> -> 0
+    is Function1<*, *> -> 1
+    is Function2<*, *, *> -> 2
+    is Function3<*, *, *, *> -> 3
+    is Function4<*, *, *, *, *> -> 4
+    is Function5<*, *, *, *, *, *> -> 5
+    else -> null
+}

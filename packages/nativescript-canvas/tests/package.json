@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "type": "module",
+  "description": "The binding's checks type nothing against an app's packages: none are installed."
+}

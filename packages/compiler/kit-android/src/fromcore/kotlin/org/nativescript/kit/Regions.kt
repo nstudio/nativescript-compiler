@@ -1,0 +1,289 @@
+package org.nativescript.kit
+
+// Regions over core's ViewBase, which views that are no View (SegmentedBarItem, TabViewItem) extend.
+
+/**
+ * A run of a container's children that a template's `if` or `for` owns.
+ * The container keeps static children and regions in template order and
+ * rebuilds its child list when a region changes (`RegionHost`). A row or
+ * branch with an `if` or `for` of its own holds regions nested in this one.
+ */
+class Region(internal var host: RegionHost?) : RegionHost {
+    private var parts: List<RegionPart> = emptyList()
+
+    val views: List<ViewBase> get() = parts.flatMap { it.views }
+
+    /** Set by `Choose` while it renders a branch: the branch's first `attach` replaces the old views. */
+    internal var replacing = false
+
+    fun set(views: List<ViewBase>) = setParts(views.map { RegionPart.Child(it) })
+
+    internal fun setParts(parts: List<RegionPart>) {
+        replacing = false
+        this.parts = parts
+        host?.regionChanged(this)
+    }
+
+    /**
+     * Puts a view of the content being rendered in place now, for frameworks
+     * that insert views top-down; the render's result settles their order.
+     */
+    fun attach(view: ViewBase) {
+        if (replacing) parts = emptyList()
+        replacing = false
+        parts = parts + RegionPart.Child(view)
+        host?.regionChanged(this)
+    }
+
+    /** A region nested in a row or branch of this one changed: so did this one. */
+    override fun regionChanged(region: Region) {
+        host?.regionChanged(this)
+    }
+}
+
+internal sealed class RegionPart {
+    abstract val views: List<ViewBase>
+
+    class Child(val view: ViewBase) : RegionPart() {
+        override val views: List<ViewBase> get() = listOf(view)
+    }
+
+    class Nested(val region: Region) : RegionPart() {
+        override val views: List<ViewBase> get() = region.views
+    }
+}
+
+/** The views of a row or branch that has an `if` or `for` of its own: its static views and nested regions, in template order. */
+class RegionFragment(private val owner: Region) {
+    internal val parts = mutableListOf<RegionPart>()
+
+    fun addChild(view: ViewBase) {
+        parts.add(RegionPart.Child(view))
+    }
+
+    fun addTemplateChild(view: ViewBase) = addChild(view)
+
+    fun addRegion(): Region {
+        val region = Region(owner)
+        parts.add(RegionPart.Nested(region))
+        return region
+    }
+
+    fun kitAddChild(view: ViewBase) = addChild(view)
+    fun kitAddTemplateChild(view: ViewBase) = addTemplateChild(view)
+    fun kitAddRegion(): Region = addRegion()
+
+    /** Makes these views the owner region's content: a component whose template has no single root. */
+    fun fill() = owner.setParts(parts.toList())
+}
+
+/** A container whose children include regions. */
+interface RegionHost {
+    fun regionChanged(region: Region)
+}
+
+/**
+ * A template site whose content failed to render: the error is reported as uncaught, as the frameworks' error
+ * handlers report it, and the site shows nothing while the rest of the page renders. A failure that repeats (an
+ * effect re-running, every row of a list) is reported once, until the site renders again.
+ */
+class RenderReports(private val site: String) {
+    private var last: String? = null
+
+    fun succeeded() {
+        last = null
+    }
+
+    fun failed(error: Throwable) {
+        val value = jsCaught(error)
+        val key = "${value?.javaClass?.name} ${jsToString(value)}"
+        if (key == last) return
+        last = key
+        report(value)
+    }
+
+    /** A read the site makes (a condition, the items, a key) threw: reported each time it does. */
+    internal fun threw(error: Throwable) = report(jsCaught(error))
+
+    private fun report(value: Any?) {
+        if (site.isNotEmpty() && value is JSError) {
+            val frame = "    at $site"
+            val stack = value.stack
+            if (!stack.contains(frame)) {
+                val at = stack.indexOf('\n')
+                value.stack = if (at < 0) "$stack\n$frame" else stack.substring(0, at) + "\n" + frame + stack.substring(at)
+            }
+        }
+        jsReportUncaught(value)
+    }
+
+    /** The content `render` makes in `owner`, or none when it throws; what it made before throwing goes with `owner`. */
+    internal fun parts(owner: Owner, render: () -> List<RegionPart>): List<RegionPart>? =
+        try {
+            owner.run(render)
+        } catch (e: Throwable) {
+            owner.dispose()
+            failed(e)
+            null
+        }
+}
+
+/**
+ * `v-if`/`v-else-if`/`v-else`, `@if`/`@else`, `{#if}`, `<Show>`, `cond && <X/>`:
+ * the views of the branch `which` selects, rebuilt only when the selection changes. A selection that throws is
+ * reported, and the region keeps the branch it shows (none before a selection is read).
+ */
+fun Choose(region: Region, which: () -> Int, site: String = "", render: (Int) -> List<ViewBase>) =
+    chooseParts(region, which, site) { branch -> render(branch).map { RegionPart.Child(it) } }
+
+fun ChooseFragment(region: Region, which: () -> Int, site: String = "", render: (Int) -> RegionFragment) =
+    chooseParts(region, which, site) { branch -> render(branch).parts.toList() }
+
+private fun chooseParts(region: Region, which: () -> Int, site: String, render: (Int) -> List<RegionPart>) {
+    var current: Int? = null
+    var branch: Owner? = null
+    val reports = RenderReports(site)
+    Owner.current?.onCleanup { branch?.dispose() }
+    Effect {
+        val value = try { which() } catch (e: Throwable) { reports.threw(e); return@Effect }
+        if (value == current) return@Effect
+        current = value
+        untrack {
+            branch?.dispose()
+            val owner = Owner(null)
+            branch = owner
+            region.replacing = true
+            // A branch that throws stays empty until the selection changes: the effect is not run again for it.
+            val parts = reports.parts(owner) { render(value) }
+            if (parts != null) reports.succeeded()
+            region.setParts(parts ?: emptyList())
+        }
+    }
+}
+
+fun If(region: Region, condition: () -> Boolean, then: () -> List<ViewBase>, otherwise: (() -> List<ViewBase>)? = null) {
+    Choose(region, { if (condition()) 0 else 1 }) { if (it == 0) then() else otherwise?.invoke() ?: emptyList() }
+}
+
+/**
+ * `v-for`, `@for`, `{#each}`, `<For>`, `.map()`: one set of views per item,
+ * kept by key across changes, so a row that stays keeps its views and state. Items or a key that throw are
+ * reported, and the rows stay as they are (none before the items are read).
+ */
+fun <Item> For(region: Region, items: () -> List<Item>, key: (Item, Double) -> String, site: String = "", render: (Item, Double) -> List<ViewBase>) =
+    forParts(region, items, key, site) { item, index -> render(item, index).map { RegionPart.Child(it) } }
+
+/** `For` whose rows have an `if` or `for` of their own. */
+fun <Item> ForFragment(region: Region, items: () -> List<Item>, key: (Item, Double) -> String, site: String = "", render: (Item, Double) -> RegionFragment) =
+    forParts(region, items, key, site) { item, index -> render(item, index).parts.toList() }
+
+private fun <Item> forParts(region: Region, items: () -> List<Item>, key: (Item, Double) -> String, site: String, render: (Item, Double) -> List<RegionPart>) {
+    var rows = HashMap<String, Pair<List<RegionPart>, Owner>>()
+    var order: List<String>? = null
+    val reports = RenderReports(site)
+    Owner.current?.onCleanup { for (row in rows.values) row.second.dispose() }
+    Effect {
+        val list = try { items() } catch (e: Throwable) { reports.threw(e); return@Effect }
+        untrack {
+            val keys = rowKeys(list, key, reports) ?: return@untrack
+            val next = HashMap<String, Pair<List<RegionPart>, Owner>>()
+            val parts = mutableListOf<RegionPart>()
+            var failed = false
+            for ((index, item) in list.withIndex()) {
+                val k = keys[index]
+                // A row that throws is kept empty under its key, so later updates do not render it again.
+                val row = rows.remove(k) ?: Owner(null).let { owner ->
+                    val made = reports.parts(owner) { render(item, index.toDouble()) }
+                    if (made == null) failed = true
+                    Pair(made ?: emptyList(), owner)
+                }
+                next[k] = row
+                parts.addAll(row.first)
+            }
+            if (!failed) reports.succeeded()
+            for (removed in rows.values) removed.second.dispose()
+            rows = next
+            // A re-run that finds the same rows changes nothing.
+            if (Reactivity.rerunsUnchanged && keys == order) return@untrack
+            order = keys
+            region.setParts(parts)
+        }
+    }
+}
+
+/**
+ * The rows' keys, every one read before any row is touched: none, the error reported, where a key throws.
+ * Duplicate keys still render, as the frameworks do in development.
+ */
+private fun <Item> rowKeys(list: List<Item>, key: (Item, Double) -> String, reports: RenderReports): List<String>? {
+    val seen = HashSet<String>()
+    val keys = ArrayList<String>(list.size)
+    try {
+        for ((index, item) in list.withIndex()) {
+            var k = key(item, index.toDouble())
+            while (k in seen) k += "\u0000"
+            seen.add(k)
+            keys.add(k)
+        }
+    } catch (e: Throwable) {
+        reports.threw(e)
+        return null
+    }
+    return keys
+}
+
+/**
+ * A keyed row whose item and index follow the list: a row kept by its key
+ * renders the item now at that key, as a component re-rendered with new props does.
+ */
+class ForRow<Item> internal constructor(item: Item, index: Double) {
+    val item = Signal(item) { a, b -> jsSameValue(a, b) }
+    val index = Signal(index)
+}
+
+fun <Item> ForEach(region: Region, items: () -> List<Item>, key: (Item, Double) -> String, site: String = "", render: (ForRow<Item>) -> List<ViewBase>) =
+    forEachParts(region, items, key, site) { row -> render(row).map { RegionPart.Child(it) } }
+
+fun <Item> ForEachFragment(region: Region, items: () -> List<Item>, key: (Item, Double) -> String, site: String = "", render: (ForRow<Item>) -> RegionFragment) =
+    forEachParts(region, items, key, site) { row -> render(row).parts.toList() }
+
+private class ForEachEntry<Item>(val row: ForRow<Item>, val parts: List<RegionPart>, val owner: Owner)
+
+private fun <Item> forEachParts(region: Region, items: () -> List<Item>, key: (Item, Double) -> String, site: String, render: (ForRow<Item>) -> List<RegionPart>) {
+    var rows = HashMap<String, ForEachEntry<Item>>()
+    var order: List<String>? = null
+    val reports = RenderReports(site)
+    Owner.current?.onCleanup { for (row in rows.values) row.owner.dispose() }
+    Effect {
+        val list = try { items() } catch (e: Throwable) { reports.threw(e); return@Effect }
+        untrack {
+            val keys = rowKeys(list, key, reports) ?: return@untrack
+            val next = HashMap<String, ForEachEntry<Item>>()
+            val parts = mutableListOf<RegionPart>()
+            var failed = false
+            for ((index, item) in list.withIndex()) {
+                val k = keys[index]
+                val kept = rows.remove(k)
+                val entry = if (kept != null) {
+                    kept.row.item.value = item
+                    kept.row.index.value = index.toDouble()
+                    kept
+                } else {
+                    val owner = Owner(null)
+                    val row = ForRow(item, index.toDouble())
+                    val made = reports.parts(owner) { render(row) }
+                    if (made == null) failed = true
+                    ForEachEntry(row, made ?: emptyList(), owner)
+                }
+                next[k] = entry
+                parts.addAll(entry.parts)
+            }
+            if (!failed) reports.succeeded()
+            for (removed in rows.values) removed.owner.dispose()
+            rows = next
+            if (Reactivity.rerunsUnchanged && keys == order) return@untrack
+            order = keys
+            region.setParts(parts)
+        }
+    }
+}

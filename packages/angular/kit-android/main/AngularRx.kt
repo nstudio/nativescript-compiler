@@ -1,0 +1,224 @@
+package org.nativescript.kit
+
+// The RxJS subset Angular services use, with RxJS 7's semantics: subscribers
+// are called synchronously in subscription order, a BehaviorSubject replays
+// its value to each new subscriber, and an operator subscribes to its source
+// once per subscriber.
+
+// Covariant: compiled code holds a source of any element type (`RxSubject<NavigationEnd>`) as `RxObservable<Any?>`.
+open class RxObservable<out T> private constructor(
+    private val producer: ((T) -> Unit) -> TeardownHandle,
+    private val ending: (((T) -> Unit, (Any?) -> Unit, () -> Unit) -> TeardownHandle)?,
+) {
+    constructor(producer: ((T) -> Unit) -> TeardownHandle) : this(producer, null)
+
+    /** A source that settles once (an HTTP request): its value or its error, for `firstValueFrom`. */
+    var first: (() -> JSPromise<@UnsafeVariance T>)? = null
+
+    open fun subscribe(next: (T) -> Unit): TeardownHandle = producer(next)
+
+    /** A source made with [ending] reports its error and completion; any other only its values. */
+    open fun subscribe(next: (T) -> Unit, error: (Any?) -> Unit, complete: () -> Unit): TeardownHandle = ending?.invoke(next, error, complete) ?: subscribe(next)
+
+    companion object {
+        /** A source that also ends, with an error or by completing (kit-apple's `RxObservable(full:)`). */
+        fun <T> ending(producer: ((T) -> Unit, (Any?) -> Unit, () -> Unit) -> TeardownHandle): RxObservable<T> =
+            RxObservable({ next -> producer(next, {}, {}) }, producer)
+    }
+
+    /** Each value converted: how a typed `get<T>()` reads the parsed body. */
+    fun <R> mapValues(transform: (T) -> R): RxObservable<R> {
+        val mapped = RxObservable<R> { next -> subscribe { next(transform(it)) } }
+        first?.let { settle -> mapped.first = { settle().then { transform(it) } } }
+        return mapped
+    }
+
+    fun <A> pipe(a: RxOperatorFunction<T, A>): RxObservable<A> = a.apply(this)
+
+    fun <A, B> pipe(a: RxOperatorFunction<T, A>, b: RxOperatorFunction<A, B>): RxObservable<B> = b.apply(a.apply(this))
+
+    fun <A, B, C> pipe(a: RxOperatorFunction<T, A>, b: RxOperatorFunction<A, B>, c: RxOperatorFunction<B, C>): RxObservable<C> = c.apply(b.apply(a.apply(this)))
+}
+
+class RxOperatorFunction<in T, out R> internal constructor(internal val apply: (RxObservable<T>) -> RxObservable<R>)
+
+/** `map(project)`: each value projected, with its index among the values this subscription saw. */
+fun <T, R> map(project: (T, Double) -> R): RxOperatorFunction<T, R> = RxOperatorFunction { source ->
+    RxObservable { next ->
+        var index = 0.0
+        source.subscribe { value ->
+            val i = index
+            index += 1
+            next(project(value, i))
+        }
+    }
+}
+
+@JvmName("mapValue")
+fun <T, R> map(project: (T) -> R): RxOperatorFunction<T, R> = map { value: T, _: Double -> project(value) }
+
+/** `filter(predicate)`: the values the predicate holds for, with each value's index among those this subscription saw. */
+fun <T> filter(predicate: (T, Double) -> Boolean): RxOperatorFunction<T, T> = RxOperatorFunction { source ->
+    RxObservable { next ->
+        var index = 0.0
+        source.subscribe { value ->
+            val i = index
+            index += 1
+            try {
+                if (predicate(value, i)) next(value)
+            } catch (e: Throwable) {
+                jsReportUncaught(jsCaught(e))
+            }
+        }
+    }
+}
+
+@JvmName("filterValue")
+fun <T> filter(predicate: (T) -> Boolean): RxOperatorFunction<T, T> = filter { value: T, _: Double -> predicate(value) }
+
+/** `take(count)`: the first `count` values of each subscription, then none. */
+fun <T> take(count: Double): RxOperatorFunction<T, T> = RxOperatorFunction { source ->
+    RxObservable { next ->
+        var taken = 0.0
+        var subscription: TeardownHandle? = null
+        var done = false
+        subscription = source.subscribe { value ->
+            if (taken >= count) return@subscribe
+            taken += 1
+            next(value)
+            if (taken >= count) { done = true; subscription?.unsubscribe() }
+        }
+        if (done) subscription?.unsubscribe()
+        TeardownHandle { subscription?.unsubscribe() }
+    }
+}
+
+/** `firstValueFrom(source)`: settles with the source's first value. */
+fun <T> rxFirstValueFrom(source: RxObservable<T>): JSPromise<T> {
+    source.first?.let { return it() }
+    val (promise, resolvers) = JSPromise.pending<T>()
+    var subscription: TeardownHandle? = null
+    var settled = false
+    subscription = source.subscribe { value ->
+        if (settled) return@subscribe
+        settled = true
+        resolvers.resolve(value)
+        subscription?.unsubscribe()
+    }
+    if (settled) subscription?.unsubscribe()
+    return promise
+}
+
+/**
+ * `toSignal(source, { initialValue })`: a signal holding the source's latest value, subscribed for as
+ * long as the scope it was made in lives, its writes compared with `Object.is` as Angular's signals compare them.
+ */
+fun <T> toSignal(source: RxObservable<T>, initialValue: T): Signal<T> {
+    val signal = Signal(initialValue) { a, b -> jsSameValue(a, b) }
+    val subscription = source.subscribe { value -> signal.value = value }
+    Owner.current?.onCleanup { subscription.unsubscribe() }
+    return signal
+}
+
+open class RxSubject<T> : RxObservable<T>({ TeardownHandle() }) {
+    private class Observer<T>(val next: (T) -> Unit)
+
+    private val observers = mutableListOf<Observer<T>>()
+
+    override fun subscribe(next: (T) -> Unit): TeardownHandle = add(next)
+
+    internal open fun add(next: (T) -> Unit): TeardownHandle {
+        val observer = Observer(next)
+        observers.add(observer)
+        return TeardownHandle { observers.remove(observer) }
+    }
+
+    /** Calls the observers subscribed when `next` is called, as RxJS copies its observer list. */
+    open fun next(value: T) {
+        for (observer in observers.toList()) observer.next(value)
+    }
+
+    fun asObservable(): RxObservable<T> = RxObservable { next -> subscribe(next) }
+}
+
+class RxBehaviorSubject<T>(private var current: T) : RxSubject<T>() {
+    val value: T get() = current
+
+    @JvmName("currentValue")
+    fun getValue(): T = current
+
+    override fun add(next: (T) -> Unit): TeardownHandle {
+        val subscription = super.add(next)
+        if (!subscription.closed) next(current)
+        return subscription
+    }
+
+    override fun next(value: T) {
+        current = value
+        super.next(value)
+    }
+}
+
+/** `new ReplaySubject(bufferSize)`: replays the last `bufferSize` values to each new subscriber. */
+class RxReplaySubject<T>(bufferSize: Double = Double.POSITIVE_INFINITY) : RxSubject<T>() {
+    private val buffer = ArrayDeque<T>()
+    private val size = if (bufferSize.isFinite()) maxOf(1, bufferSize.toInt()) else Int.MAX_VALUE
+
+    override fun add(next: (T) -> Unit): TeardownHandle {
+        val subscription = super.add(next)
+        for (value in buffer.toList()) if (!subscription.closed) next(value)
+        return subscription
+    }
+
+    override fun next(value: T) {
+        buffer.addLast(value)
+        while (buffer.size > size) buffer.removeFirst()
+        super.next(value)
+    }
+}
+
+/**
+ * Angular's `async` pipe at one binding site: subscribes to the observable
+ * it is given (again when given another), and returns its latest value.
+ */
+class AsyncPipe {
+    private var source: Any? = null
+    private var subscription: TeardownHandle? = null
+    private var latest: Any? = null
+
+    init {
+        Owner.current?.onCleanup { dispose() }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    fun <T> transform(observable: RxObservable<T>?): T? {
+        if (observable !== source) {
+            dispose()
+            source = observable
+            subscription = observable?.subscribe { value -> latest = value }
+        }
+        return latest as T?
+    }
+
+    private fun dispose() {
+        subscription?.unsubscribe()
+        subscription = null
+        source = null
+        latest = null
+    }
+}
+
+/** `takeUntilDestroyed(destroyRef?)`: the source's values until the scope it was called in (or `destroyRef`'s) ends. */
+fun <T> takeUntilDestroyed(destroyRef: DestroyRef? = null): RxOperatorFunction<T, T> {
+    val ref = destroyRef ?: DestroyRef.current()
+    return RxOperatorFunction { source ->
+        RxObservable { next ->
+            val subscription = source.subscribe(next)
+            val stop = ref.onDestroy { subscription.unsubscribe() }
+            TeardownHandle {
+                stop()
+                subscription.unsubscribe()
+            }
+        }
+    }
+}

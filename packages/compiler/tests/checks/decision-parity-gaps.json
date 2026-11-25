@@ -1,0 +1,11 @@
+{
+	"$comment": "Differences tests/checks/decision-parity.ts finds that a ledger gap (src/semantics/ledger.ts) names: `<case>|<file:line node kind>|<question>` -> the gap. A difference not listed fails; an entry no case shows any more fails the full set. Each goes when its gap is reconciled.",
+	"gaps": {
+		"1188-namespace-function-reading-this|tests/diff/cases/1188-namespace-function-reading-this.ts:25 CallExpression|types.heldType": "undefinedResultsWidened",
+		"1188-namespace-function-reading-this|tests/diff/cases/1188-namespace-function-reading-this.ts:25 CallExpression|states.heldType": "undefinedResultsWidened",
+		"444-lenient-nullish-fallback|tests/diff/cases/444-lenient-nullish-fallback.ts:5 Identifier|types.typeOf": "nullabilityBeforeEmission",
+		"1388-recursive-tuple-alias|tests/diff/cases/1388-recursive-tuple-alias.ts:20 ArrayLiteralExpression|types.heldType": "recursiveTupleLiteralLevels",
+		"1388-recursive-tuple-alias|tests/diff/cases/1388-recursive-tuple-alias.ts:20 ArrayLiteralExpression|states.heldType": "recursiveTupleLiteralLevels",
+		"1713-rollup-object-overloaded-call|tests/diff/cases/helpers/dialog-rollup.ts:21 VariableDeclaration|states.foreignStore": "lenientByTranslatedFile"
+	}
+}

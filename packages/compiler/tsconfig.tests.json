@@ -1,0 +1,4 @@
+{
+	"extends": "./tsconfig.json",
+	"include": ["tests/*.ts", "tests/adapters/*.ts", "tests/bindings/*.ts", "tests/checks/*.ts", "tests/color-mix/*.ts", "tests/diff/*.ts", "tests/fuzz/*.ts", "tests/perf/*.ts", "tests/release-checks/*.ts", "tests/semantics/*.ts", "tests/shadow/*.ts", "tests/test262/*.ts", "tests/worker/*.ts", "tests/worker-state/*.ts", "tools/*.ts", "tools/kit/*.mts"]
+}

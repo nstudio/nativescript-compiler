@@ -1,0 +1,5 @@
+{
+	"$comment": "Cases that do not match Node yet, by target, each with its cause. The diff run (the compiler's tests/diff/run.ts on this suite) reports them without failing, and fails when one matches Node so it is removed here.",
+	"swift": {},
+	"kotlin": {}
+}

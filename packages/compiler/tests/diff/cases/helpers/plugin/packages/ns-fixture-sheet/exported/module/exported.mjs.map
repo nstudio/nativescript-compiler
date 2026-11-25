@@ -1,0 +1,6 @@
+{
+  "version": 3,
+  "sources": ["../../src/exported-module.ts"],
+  "mappings": "AAAO,MAAM,QAAQ;AACd,MAAM,OAAO,CAAC,UAAoB,MAAM,KAAK,GAAG;",
+  "names": []
+}

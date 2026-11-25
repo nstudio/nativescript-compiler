@@ -1,0 +1,255 @@
+name: Publish to npm (OIDC)
+
+# Publishes @nstudio/nativescript-compiler and its framework adapters using npm Trusted Publishing (OIDC).
+#
+# One-time setup on npmjs.com for each published package:
+#   Package Settings -> Trusted Publisher -> GitHub Actions:
+#     Organization or user: nstudio
+#     Repository:           nativescript-compiler
+#     Workflow filename:    publish.yml
+#     Environment name:     npm-publish
+#
+# Packages published (in order):
+#   1. @nstudio/nativescript-compiler
+#   2. @nstudio/nativescript-compiler-angular
+#   3. @nstudio/nativescript-compiler-vue
+#   4. @nstudio/nativescript-compiler-svelte
+#   5. @nstudio/nativescript-compiler-react
+#   6. @nstudio/nativescript-compiler-solid
+#   7. @nstudio/nativescript-compiler-octane
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish across compiler + adapters (e.g. 9.2.0-alpha.10)'
+        required: true
+        type: string
+      core_ref:
+        description: 'NativeScript/NativeScript git ref to generate kits from (branch, tag, or SHA)'
+        required: true
+        default: 'feat/core-stronger-types-and-hooks'
+        type: string
+      dist_tag:
+        description: 'npm dist-tag'
+        required: true
+        default: 'alpha'
+        type: choice
+        options:
+          - alpha
+          - next
+          - latest
+      scope:
+        description: 'Which packages to publish'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - compiler-only
+          - adapters-only
+      dry_run:
+        description: 'Build, verify, and pack without publishing to npm'
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: npm-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-kits:
+    name: Build core, generate Swift & Kotlin kits, verify
+    runs-on: ubuntu-latest
+    outputs:
+      core_version: ${{ steps.core_meta.outputs.version }}
+    steps:
+      - name: Checkout nativescript-compiler
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Checkout NativeScript/NativeScript (${{ inputs.core_ref }})
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: NativeScript/NativeScript
+          ref: ${{ inputs.core_ref }}
+          path: core
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: Build @nativescript/core declarations
+        working-directory: core
+        run: |
+          npm ci --no-audit --no-fund
+          npx nx run core:build
+
+      - name: Read @nativescript/core version
+        id: core_meta
+        shell: bash
+        run: |
+          CORE_VER=$(node -p "JSON.parse(require('fs').readFileSync('core/packages/core/package.json', 'utf8')).version")
+          echo "version=$CORE_VER" >> "$GITHUB_OUTPUT"
+          echo "Core version: $CORE_VER"
+
+      - name: Install workspace dependencies
+        run: |
+          npm install --no-audit --no-fund
+          npm ci --prefix packages/compiler/tests --no-audit --no-fund
+
+      - name: Sync versions across compiler & adapters
+        run: node scripts/set-version.mjs "${{ inputs.version }}" --core-version "${{ steps.core_meta.outputs.version }}"
+
+      - name: Generate Swift & Kotlin kits (and Angular kit-index fragment)
+        env:
+          NS_CORE_REPO: ${{ github.workspace }}/core
+          NS_COMPILER_ADAPTERS: ${{ github.workspace }}/packages
+        run: |
+          npm run kit
+          npm run kit:android
+
+      - name: Verify compiler & adapter typechecks, layers, CLI extension & kit manifest
+        env:
+          NS_CORE_REPO: ${{ github.workspace }}/core
+        run: |
+          npm run typecheck
+          npm run test:compiler
+          node packages/compiler/tests/kit-index-check.ts
+          node packages/compiler/tests/kit-class-names-check.ts
+          npm run build
+
+      - name: Upload generated Swift kit
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: kit-apple-core
+          path: packages/compiler/kit-apple/Sources/NativeScriptKit/Core
+          if-no-files-found: error
+
+      - name: Upload generated Swift XML-free overlay
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: kit-apple-overlay
+          path: packages/compiler/kit-apple/Overlays/xml-free
+          if-no-files-found: error
+
+      - name: Upload generated Kotlin kit
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: kit-android-generated
+          path: packages/compiler/kit-android/generated
+          if-no-files-found: error
+
+      - name: Upload generated Kotlin XML-free overlay
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: kit-android-overlay
+          path: packages/compiler/kit-android/overlays/xml-free
+          if-no-files-found: error
+
+      - name: Upload Angular kit-index fragment
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: angular-kit-index
+          path: packages/angular/kit-apple/kit-index.json
+          if-no-files-found: error
+
+  publish:
+    name: ${{ inputs.dry_run && 'Pack (dry run)' || 'Publish to npm (OIDC)' }}
+    needs: [build-kits]
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.dry_run && 'npm-publish-dry-run' || 'npm-publish' }}
+    permissions:
+      contents: read
+      id-token: write # Required for npm Trusted Publishing (OIDC) & provenance
+    steps:
+      - name: Checkout nativescript-compiler
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Update npm (required for OIDC trusted publishing)
+        run: npm install -g npm@^11.5.1
+
+      - name: Download generated kits & Angular kit-index fragment
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: kit-apple-core
+          path: packages/compiler/kit-apple/Sources/NativeScriptKit/Core
+
+      - name: Download Swift XML-free overlay
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: kit-apple-overlay
+          path: packages/compiler/kit-apple/Overlays/xml-free
+
+      - name: Download Kotlin kit
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: kit-android-generated
+          path: packages/compiler/kit-android/generated
+
+      - name: Download Kotlin XML-free overlay
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: kit-android-overlay
+          path: packages/compiler/kit-android/overlays/xml-free
+
+      - name: Download Angular kit-index fragment
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: angular-kit-index
+          path: packages/angular/kit-apple
+
+      - name: Install workspace dependencies & sync versions
+        run: |
+          npm install --no-audit --no-fund
+          node scripts/set-version.mjs "${{ inputs.version }}" --core-version "${{ needs.build-kits.outputs.core_version }}"
+
+      - name: Pack tarballs
+        id: pack
+        run: |
+          FLAG=""
+          if [[ "${{ inputs.scope }}" == "compiler-only" ]]; then FLAG="--compiler-only"; fi
+          if [[ "${{ inputs.scope }}" == "adapters-only" ]]; then FLAG="--adapters-only"; fi
+          npm run pack -- packed $FLAG
+          ls -lh packed/
+
+      - name: Publish via npm OIDC Trusted Publishing
+        if: ${{ !inputs.dry_run }}
+        env:
+          NPM_CONFIG_PROVENANCE: true
+          NODE_AUTH_TOKEN: ''
+        run: |
+          set -euo pipefail
+          unset NODE_AUTH_TOKEN
+          rm -f ~/.npmrc || true
+          TAG="${{ inputs.dist_tag }}"
+
+          if [[ "${{ inputs.scope }}" != "adapters-only" ]]; then
+            echo "Publishing @nstudio/nativescript-compiler (${TAG})..."
+            npm publish packed/nstudio-nativescript-compiler-${{ inputs.version }}.tgz --access public --tag "$TAG"
+          fi
+
+          if [[ "${{ inputs.scope }}" != "compiler-only" ]]; then
+            for fw in angular vue svelte react solid octane; do
+              echo "Publishing @nstudio/nativescript-compiler-${fw} (${TAG})..."
+              npm publish "packed/nstudio-nativescript-compiler-${fw}-${{ inputs.version }}.tgz" --access public --tag "$TAG"
+            done
+          fi
+
+      - name: Dry-run summary
+        if: ${{ inputs.dry_run }}
+        run: |
+          echo "Dry run complete — tarballs packed and verified (nothing published):"
+          ls -lh packed/

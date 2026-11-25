@@ -1,0 +1,22 @@
+// A typed array held where `any[]` is declared is the same array: what either alias writes, the other reads.
+const nums: number[] = [3, 1, 2];
+const loose: any[] = nums;
+console.log('same', loose === nums, nums === loose, loose.length);
+loose.push(4);
+loose[0] = 30;
+console.log('typed sees', nums.join(','), nums.length);
+nums.push(5);
+nums[1] = 10;
+console.log('untyped sees', loose.join(','), loose.length, loose[1]);
+loose.sort((a, b) => a - b);
+console.log('sorted', nums.join(','));
+loose.splice(1, 2, 7);
+console.log('spliced', nums.join(','), loose.length);
+loose.length = 2;
+console.log('truncated', nums.join(','), nums.length);
+nums.reverse();
+console.log('reversed', loose.join(','));
+console.log('pop', loose.pop(), nums.length, 'shift', loose.shift(), nums.length);
+loose.unshift(1, 2);
+loose.fill(9, 1);
+console.log('fill', nums.join(','));

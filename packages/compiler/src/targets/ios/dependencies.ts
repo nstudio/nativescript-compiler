@@ -1,0 +1,482 @@
+// The iOS project's dependencies beyond plugins' platforms/ios code, as the
+// NativeScript CLI adds them to platforms/ios: Swift packages
+// (`ios.SPMPackages` in the app's and plugins' nativescript.config;
+// spm-service, spm-pbxproj-service) and CocoaPods (plugins' and the app's
+// Podfiles; cocoapods-service, cocoapods-platform-manager). Their modules get
+// symbol tables as the SDK's do, so TypeScript calls into them resolve.
+import { xcodegen } from './xcodegen.ts';
+import { restoreUnchanged } from '../../driver/mirror.ts';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join, relative, resolve } from 'node:path';
+import { appResourcesDir, productionPlugins, readConfig } from '../resources.ts';
+import { moduleCache, nativeTable, setEmptyTable } from '../../swift/native/sdk.ts';
+import { byName } from '../../program/order.ts';
+
+export interface SwiftPackage {
+	name: string;
+	libs: string[];
+	/** Targets besides the app's that link the libraries (app extensions). */
+	targets: string[];
+	/** A local package (absolute), or a repository and its version requirement. */
+	path?: string;
+	url?: string;
+	version?: string;
+	/** The plugin that declares it, and its directory; null for the app. */
+	plugin: string | null;
+	pluginDir?: string;
+}
+
+/**
+ * The app's packages, then each production plugin's whose name the app and an
+ * earlier plugin do not take. A local path is the app's; a plugin's path that
+ * is not there is the plugin's own.
+ */
+export function swiftPackages(app: string, stubbed: ReadonlySet<string> = new Set()): SwiftPackage[] {
+	const declared = (dir: string) => (readConfig(dir).ios as { SPMPackages?: Record<string, unknown>[] } | undefined)?.SPMPackages ?? [];
+	const out: SwiftPackage[] = [];
+	const read = (dir: string, plugin: string | null) => {
+		for (const p of declared(dir)) {
+			const name = p.name as string;
+			if (!name || out.some((o) => o.name === name)) continue;
+			const pkg: SwiftPackage = { name, libs: (p.libs as string[]) ?? [], targets: (p.targets as string[]) ?? [], plugin, ...(plugin ? { pluginDir: dir } : {}) };
+			if (typeof p.path === 'string') {
+				pkg.path = resolve(app, p.path);
+				if (plugin && !existsSync(pkg.path) && existsSync(resolve(dir, p.path))) pkg.path = resolve(dir, p.path);
+				if (!existsSync(pkg.path)) throw new Error(`${relative(app, join(dir, 'nativescript.config.ts')) || 'nativescript.config.ts'}: the Swift package ${name} is not at ${pkg.path}`);
+				// The JavaScript engine's headers, which a plugin binding the engine ships: no engine runs a compiled app.
+				if (boundToEngine(pkg.path)) continue;
+			} else {
+				pkg.url = p.repositoryURL as string;
+				pkg.version = String(p.version);
+			}
+			out.push(pkg);
+		}
+	};
+	read(app, null);
+	for (const p of productionPlugins(app, 'ios', stubbed)) read(p.dir, p.name);
+	return out;
+}
+
+/** xcodegen's `packages:` entries. */
+export function packageLines(packages: SwiftPackage[], projectDir: string): string {
+	return packages.map((p) => `  ${p.name}:\n` + (p.path ? `    path: ${JSON.stringify(relative(projectDir, p.path))}\n` : `    url: ${JSON.stringify(p.url)}\n${requirement(p.version!)}`)).join('');
+}
+
+/** A target's `dependencies:` entries on the libraries of `packages`; a static library builds against them and the app links them, once. */
+export function productLines(packages: SwiftPackage[], link = true): string {
+	return packages.flatMap((p) => p.libs.map((lib) => `      - package: ${p.name}\n        product: ${lib}\n${link ? '' : '        link: false\n'}`)).join('');
+}
+
+/** The identity a package's products are named by in a manifest depending on it: its directory's or repository's name. */
+export const packageIdentity = (p: SwiftPackage) => basename(p.path ?? p.url!).replace(/\.git$/, '');
+
+/** A manifest's requirement on a package's version, as `requirement` gives xcodegen's. */
+export function packageRequirement(version: string): string {
+	const [k, v] = Object.entries(requirementOf(version))[0];
+	const q = JSON.stringify;
+	return k === 'revision' ? `revision: ${q(v)}` : k === 'exactVersion' ? `exact: ${q(v)}` : k === 'majorVersion' ? `from: ${q(v)}` : k === 'minorVersion' ? `.upToNextMinor(from: ${q(v)})` : k === 'minVersion' ? `${q(v)}..<${q(requirementOf(version).maxVersion)}` : `branch: ${q(v)}`;
+}
+
+function requirement(version: string): string {
+	return Object.entries(requirementOf(version))
+		.map(([k, v]) => `    ${k}: ${JSON.stringify(v)}\n`)
+		.join('');
+}
+
+/** `classifyVersion`: an exact version, `^`/`~` ranges, `>=a <b`, `#<revision>`, else a branch. */
+function requirementOf(version: string): Record<string, string> {
+	const v = version.trim();
+	const full = (s: string) => [...s.split('.'), '0', '0'].slice(0, 3).join('.');
+	if (v.startsWith('#')) return { revision: v.slice(1) };
+	if (/^v?\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(v)) return { exactVersion: v.replace(/^v/, '') };
+	const caret = /^([\^~])\s*v?(\d+(?:\.\d+){0,2})/.exec(v);
+	if (caret) return { [caret[1] === '^' ? 'majorVersion' : 'minorVersion']: full(caret[2]) };
+	const range = /^>=?\s*v?(\d+(?:\.\d+){0,2})\s+<=?\s*v?(\d+(?:\.\d+){0,2})$/.exec(v);
+	if (range) return { minVersion: full(range[1]), maxVersion: full(range[2]) };
+	const min = /^>=?\s*v?(\d+(?:\.\d+){0,2})$/.exec(v);
+	if (min) return { majorVersion: full(min[1]) };
+	return { branch: v };
+}
+
+// ---------------------------------------------------------------- CocoaPods
+
+const NS_BASE_PODFILE = 'NSPodfileBase';
+
+/**
+ * One Podfile from each production plugin's `platforms/ios/Podfile` and the
+ * app's `App_Resources/iOS/Podfile`, as `applyPodfileToProject` builds it:
+ * each inside `# Begin Podfile`/`# End Podfile`, its `post_install` block a
+ * function the one hook calls, its `platform :ios` row commented out and the
+ * platform section taken from the Podfile the CLI would choose (else the
+ * deployment target); then each extension's Podfile as its own target.
+ * `nested` targets (the project's static libraries) inherit every pod, so
+ * plugin Swift that imports a pod compiles after it. Null when no Podfile.
+ */
+export function podfile(o: { app: string; name: string; deploymentTarget: string; nested?: string[]; extensions?: string[]; stubbed?: ReadonlySet<string> }): string | null {
+	const res = join(appResourcesDir(o.app), 'iOS');
+	const appPodfile = join(res, 'Podfile');
+	const files = [...productionPlugins(o.app, 'ios', o.stubbed).map((p) => ({ module: p.name, file: join(p.dir, 'platforms', 'ios', 'Podfile') })), { module: NS_BASE_PODFILE, file: appPodfile }].filter((f) => existsSync(f.file));
+	if (!files.length) return null;
+	const overridden = readConfig(o.app).overridePods && existsSync(appPodfile) ? podsOf(readFileSync(appPodfile, 'utf8')) : [];
+	const hooks: string[] = [];
+	let platform: { content: string; version?: string; file: string } | null = null;
+	const blocks: string[] = [];
+	for (const { module, file } of files) {
+		let text = readFileSync(file, 'utf8');
+		const fn = `post_install${module.replace(/_/g, '___').replace(/[^A-Za-z0-9_]/g, '_')}`;
+		let count = 0;
+		text = text.replace(/post_install do *(\|(\w+)\|)?/g, (_m, _block, param?: string) => {
+			const name = `${fn}_${count++}`;
+			hooks.push(param ? `  ${name} installer` : `  ${name}`);
+			return param ? `def ${name} (${param})` : `def ${name}`;
+		});
+		text = text.replace(/^\s*?(platform\b\s*?:\s*?ios\b(?:,\s*?['"](.+)['"])?)/gm, (row, content: string, version?: string) => {
+			const found = { content, version, file };
+			if (!platform || replacesPlatform(platform, found, appPodfile)) platform = found;
+			return `# ${row.trim()}`;
+		});
+		if (file !== appPodfile) for (const pod of overridden) text = text.replace(new RegExp(`^[ ]*pod\\s*["']${pod.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"].*$`, 'gm'), '#$&');
+		blocks.push(`# Begin Podfile - ${file}\n${text.trim()}\n# End Podfile`);
+	}
+	const chosen = platform as { content: string; version?: string; file: string } | null;
+	const section = chosen ? `# NativeScriptPlatformSection ${chosen.file} with${chosen.version ? ` ${chosen.version}` : ''}\n${chosen.content}\n# End NativeScriptPlatformSection` : `platform :ios, '${o.deploymentTarget}'`;
+	// The CLI builds every target, pods included, with the app's deployment target on xcodebuild's command line.
+	hooks.push(`  installer.pods_project.targets.each do |target|\n    target.build_configurations.each { |config| config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '${o.deploymentTarget}' }\n  end`);
+	const nested = (o.nested ?? []).map((t) => `\n  target "${t}" do\n  end\n`).join('');
+	const extensions = (o.extensions ?? []).flatMap((ext) => {
+		const file = join(res, 'extensions', ext, 'Podfile');
+		return existsSync(file) ? [`# Begin Podfile - ${file}\ntarget "${ext}" do\n${readFileSync(file, 'utf8').trim()}\nend\n# End Podfile\n`] : [];
+	});
+	// Named, as the folder may still hold the project of an earlier name, which CocoaPods would otherwise refuse to choose between.
+	return `use_frameworks!\nproject "${o.name}.xcodeproj"\n\ntarget "${o.name}" do\n${section}\n\n${blocks.join('\n\n')}\n\npost_install do |installer|\n${hooks.join('\n')}\nend\n${nested}end\n${extensions.length ? `\n${extensions.join('\n')}` : ''}`;
+}
+
+/** `shouldReplacePlatformSection`: the app's Podfile over a plugin's, a platform without a version, or a higher version. */
+function replacesPlatform(old: { version?: string; file: string }, cur: { version?: string; file: string }, appPodfile: string): boolean {
+	const higher = (a?: string, b?: string) => compareVersions(a ?? '0', b ?? '0') > 0;
+	if (old.file !== appPodfile && cur.file === appPodfile) return true;
+	if (old.file === appPodfile && cur.file === appPodfile && higher(cur.version, old.version)) return true;
+	return !cur.version || (!!old.version && higher(cur.version, old.version));
+}
+
+function compareVersions(a: string, b: string): number {
+	const pa = a.split('.').map((n) => parseInt(n, 10) || 0),
+		pb = b.split('.').map((n) => parseInt(n, 10) || 0);
+	for (let i = 0; i < 3; i++) if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) - (pb[i] ?? 0);
+	return 0;
+}
+
+function podsOf(text: string): string[] {
+	return [...text.matchAll(/^\s*pod\s*["'](.*?)['"].*$/gm)].map((m) => m[1]).filter(Boolean);
+}
+
+// ---------------------------------------------------------------- the project
+
+/**
+ * Written beside the project the compiler has generated (and integrated with CocoaPods): the project or workspace a
+ * build names. The NativeScript CLI reads it by this name (lib/services/compiled-release-service.ts).
+ */
+export const PROJECT_MARKER = 'ns-compiled-project.json';
+
+/**
+ * xcodegen, then, with a Podfile, `pod install` and the app target's
+ * configuration files merged with the pods' (`mergePodXcconfigFile`).
+ * Returns the arguments that name the project to xcodebuild.
+ */
+export function generateProject(o: { out: string; name: string; pods: string | null; mergeXcconfig: () => void; say: (m: string) => void }): string[] {
+	// Generated beside the previous project, whose unchanged files are then kept, as Xcode replans a build on a rewritten project file.
+	const project = join(o.out, `${o.name}.xcodeproj`);
+	const previous = `${project}.previous`;
+	rmSync(previous, { recursive: true, force: true });
+	if (existsSync(project)) renameSync(project, previous);
+	try {
+		execFileSync(xcodegen(o.say), ['generate', '--quiet'], { cwd: o.out, stdio: 'inherit' });
+		if (o.pods) {
+			o.say('pod install');
+			podInstall(o.out);
+			o.mergeXcconfig();
+		}
+		if (existsSync(previous)) restoreUnchanged(previous, project, ['xcuserdata']);
+	} catch (e) {
+		if (!existsSync(project) && existsSync(previous)) renameSync(previous, project);
+		throw e;
+	} finally {
+		rmSync(previous, { recursive: true, force: true });
+	}
+	return o.pods ? ['-workspace', `${o.name}.xcworkspace`] : ['-project', `${o.name}.xcodeproj`];
+}
+
+/** What a generated project without a Podfile leaves behind from one that had it. */
+export function removePods(out: string, name: string) {
+	for (const f of ['Podfile', 'Podfile.lock', 'Pods', `${name}.xcworkspace`, PROJECT_MARKER]) rmSync(join(out, f), { recursive: true, force: true });
+}
+
+function podInstall(dir: string) {
+	try {
+		execFileSync('pod', ['install'], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 1 << 26 });
+	} catch (e: any) {
+		if (e.code === 'ENOENT') throw new Error('the app has CocoaPods dependencies: install CocoaPods (`brew install cocoapods`)');
+		throw new Error(`pod install failed in ${dir}:\n${String(e.stdout ?? '')}${String(e.stderr ?? e.message)}`);
+	}
+}
+
+// ---------------------------------------------------------------- symbol tables
+
+export interface Dependencies {
+	/** The Swift and Clang modules the packages and pods build, each with a table. */
+	modules: string[];
+	/** Arguments that let the Swift compiler and the extractor see those modules; the first call builds them. */
+	searchArgs: () => string[];
+	/** The Objective-C classes each module's built binary defines, by module; a module missing here is not known. */
+	classes: Record<string, string[]>;
+	/** The packages' Clang modules, which Xcode makes visible only to a target linking their product. */
+	clangModules: string[];
+	/** Removes what the build left. */
+	dispose: () => void;
+}
+
+const SCRATCH_TARGET = 'NSDependencies';
+
+/**
+ * A table for every module the packages and pods build. The tables are cached
+ * under a hash of what the dependencies are; the first compile with them
+ * builds them for the simulator in a project of their own (the packages as
+ * the app target's dependencies, the pods by the same Podfile) and extracts
+ * each module's symbol graph from what that build leaves.
+ */
+export function iosDependencies(o: { app: string; packages: SwiftPackage[]; deploymentTarget: string; say: (m: string) => void; stubbed?: ReadonlySet<string> }): Dependencies {
+	const pods = podfile({ app: o.app, name: SCRATCH_TARGET, deploymentTarget: o.deploymentTarget, stubbed: o.stubbed });
+	if (!o.packages.length && !pods) return { modules: [], searchArgs: () => [], classes: {}, clangModules: [], dispose: () => {} };
+	const key = dependencyKey(o.packages, pods);
+	let built: Built | null = null;
+	const build = () => (built ??= buildDependencies(o.packages, pods, o.deploymentTarget, o.say));
+	const manifest = join(moduleCache(), `dependencies-${key}.json`);
+	const cached: { modules: string[]; classes?: Record<string, string[]>; clangModules?: string[] } | null = existsSync(manifest) ? JSON.parse(readFileSync(manifest, 'utf8')) : null;
+	const { modules, classes, clangModules } = cached?.classes && cached.clangModules ? { modules: cached.modules, classes: cached.classes, clangModules: cached.clangModules } : build();
+	for (const m of modules) {
+		try {
+			nativeTable(m, { key, extraArgs: () => build().args });
+		} catch (e) {
+			o.say(`${m}: no symbol table (${(e as Error).message.split('\n').slice(0, 2).join(' ')}); calls into it from TypeScript will not resolve`);
+			setEmptyTable(m, key);
+		}
+	}
+	mkdirSync(moduleCache(), { recursive: true });
+	writeFileSync(manifest, JSON.stringify({ modules, classes, clangModules }));
+	return {
+		modules,
+		searchArgs: () => build().args,
+		classes,
+		clangModules,
+		dispose: () => {
+			if (built) rmSync(built.dir, { recursive: true, force: true });
+		},
+	};
+}
+
+function dependencyKey(packages: SwiftPackage[], pods: string | null): string {
+	const h = createHash('sha256')
+		.update('dependencies-3\0')
+		.update(pods ?? '')
+		.update('\0');
+	for (const p of packages) {
+		h.update(JSON.stringify({ ...p, path: undefined, plugin: undefined, pluginDir: undefined })).update('\0');
+		if (p.path) for (const f of filesUnder(p.path)) h.update(relative(p.path, f)).update('\0').update(readFileSync(f)).update('\0');
+	}
+	return h.digest('hex').slice(0, 16);
+}
+
+interface Built {
+	dir: string;
+	args: string[];
+	modules: string[];
+	classes: Record<string, string[]>;
+	clangModules: string[];
+}
+
+function buildDependencies(packages: SwiftPackage[], pods: string | null, deploymentTarget: string, say: (m: string) => void): Built {
+	const dir = mkdtempSync(join(tmpdir(), 'ns-dependencies-'));
+	try {
+		return buildIn(dir, packages, pods, deploymentTarget, say);
+	} catch (e) {
+		rmSync(dir, { recursive: true, force: true });
+		throw e;
+	}
+}
+
+function buildIn(dir: string, packages: SwiftPackage[], pods: string | null, deploymentTarget: string, say: (m: string) => void): Built {
+	say(`building the Swift packages and pods once for their symbol tables (${[...packages.map((p) => p.name), ...(pods ? ['CocoaPods'] : [])].join(', ')})`);
+	mkdirSync(join(dir, 'Empty'));
+	writeFileSync(join(dir, 'Empty', 'Empty.swift'), '');
+	writeFileSync(
+		join(dir, 'project.yml'),
+		`name: ${SCRATCH_TARGET}
+options:
+  deploymentTarget:
+    iOS: "${deploymentTarget}"
+${packages.length ? `packages:\n${packageLines(packages, dir)}` : ''}targets:
+  ${SCRATCH_TARGET}:
+    type: framework
+    platform: iOS
+    sources: [Empty]
+${packages.length ? `    dependencies:\n${productLines(packages)}` : ''}    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGNING_ALLOWED: NO
+        PRODUCT_BUNDLE_IDENTIFIER: org.nativescript.dependencies
+`,
+	);
+	execFileSync('xcodegen', ['generate', '--quiet'], { cwd: dir, stdio: 'inherit' });
+	if (pods) {
+		writeFileSync(join(dir, 'Podfile'), pods);
+		podInstall(dir);
+	}
+	const derived = join(dir, 'DerivedData');
+	try {
+		execFileSync('xcodebuild', [...(pods ? ['-workspace', `${SCRATCH_TARGET}.xcworkspace`] : ['-project', `${SCRATCH_TARGET}.xcodeproj`]), '-scheme', SCRATCH_TARGET, '-configuration', 'Debug', '-destination', 'generic/platform=iOS Simulator', '-derivedDataPath', derived, 'build', '-quiet'], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 1 << 28 });
+	} catch (e: any) {
+		const lines = `${e.stdout ?? ''}${e.stderr ?? ''}`.split('\n').filter((l) => /\berror\b/.test(l));
+		throw new Error(`the Swift packages and pods do not build for the simulator:\n${lines.slice(0, 20).join('\n') || e.message}`);
+	}
+	return { dir, ...builtModules(derived) };
+}
+
+/**
+ * The modules a build for the simulator left in `derived` (its DerivedData), the arguments that let the Swift compiler
+ * and the extractor see them as Xcode lets the build's targets see them, and the Objective-C classes each one's binary defines.
+ */
+export function builtModules(derived: string): { args: string[]; modules: string[]; classes: Record<string, string[]>; clangModules: string[] } {
+	const products = join(derived, 'Build', 'Products', 'Debug-iphonesimulator');
+	const maps = join(derived, 'Build', 'Intermediates.noindex', 'GeneratedModuleMaps-iphonesimulator');
+	const modules = new Set<string>();
+	const clangModules: string[] = [];
+	const args = ['-I', products];
+	if (existsSync(maps)) {
+		args.push('-I', maps);
+		for (const f of readdirSync(maps).sort()) {
+			if (!f.endsWith('.modulemap')) continue;
+			const module = basename(f, '.modulemap');
+			modules.add(module);
+			// A C target's public headers directory is on its dependents' header search path (`#include <CLib/x.h>`).
+			const umbrella = /^\s*umbrella\s+(header\s+)?"([^"]+)"/m.exec(readFileSync(join(maps, f), 'utf8'));
+			const headers = umbrella && (!umbrella[1] ? umbrella[2] : basename(dirname(umbrella[2])) === module ? dirname(dirname(umbrella[2])) : dirname(umbrella[2]));
+			if (headers && existsSync(headers)) args.push('-Xcc', `-I${headers}`);
+			// Clang finds only `module.modulemap` on a search path: a C target's map (`ZipArchive.modulemap`) is loaded by name, as Xcode loads it.
+			if (!existsSync(join(products, `${module}.swiftmodule`))) {
+				args.push('-Xcc', `-fmodule-map-file=${join(maps, f)}`);
+				clangModules.push(module);
+			}
+		}
+	}
+	// A C target with a module map of its own has none generated: Xcode loads its map where the package keeps it.
+	const checkouts = join(derived, 'SourcePackages', 'checkouts');
+	const built = existsSync(products)
+		? new Set(
+				readdirSync(products)
+					.sort()
+					.filter((f) => f.endsWith('.o'))
+					.map((f) => basename(f, '.o')),
+			)
+		: new Set<string>();
+	if (existsSync(checkouts))
+		for (const map of ownModuleMaps(checkouts)) {
+			for (const m of readFileSync(map, 'utf8').matchAll(/^\s*module\s+(\w+)/gm)) {
+				if (!built.has(m[1]) || modules.has(m[1])) continue;
+				modules.add(m[1]);
+				clangModules.push(m[1]);
+				args.push('-Xcc', `-I${dirname(map)}`, '-Xcc', `-fmodule-map-file=${map}`);
+			}
+		}
+	// A binary target of a static library: its headers and module map are copied to `include`.
+	const include = join(products, 'include');
+	if (existsSync(include)) {
+		args.push('-I', include);
+		for (const f of readdirSync(include, { recursive: true }).sort() as string[]) {
+			if (basename(f) !== 'module.modulemap') continue;
+			for (const m of readFileSync(join(include, f), 'utf8').matchAll(/^\s*(?:framework\s+)?module\s+(\w+)/gm)) modules.add(m[1]);
+		}
+	}
+	// A binary target's framework is copied to the products, or below them (`XCFrameworkIntermediates/<package>/<name>.framework`).
+	const frameworkDirs = new Set<string>();
+	const scan = (dir: string) => {
+		for (const f of readdirSync(dir).sort()) {
+			const p = join(dir, f);
+			if (dir === products && f.endsWith('.swiftmodule')) modules.add(basename(f, '.swiftmodule'));
+			else if (f.endsWith('.framework')) {
+				if (f !== `${SCRATCH_TARGET}.framework` && existsSync(join(p, 'Modules'))) modules.add(basename(f, '.framework'));
+				frameworkDirs.add(dir);
+			} else if (statSync(p).isDirectory() && !/\.(bundle|swiftmodule|dSYM)$/.test(f) && dir !== include) scan(p);
+		}
+	};
+	if (existsSync(products)) scan(products);
+	for (const d of frameworkDirs) args.push('-F', d);
+	// What each module's binary (`libX.a`, `X.o`, `X.framework/X`) defines.
+	const classes: Record<string, string[]> = {};
+	for (const f of existsSync(products) ? (readdirSync(products, { recursive: true }).sort() as string[]) : []) {
+		const name = /(?:^|\/)(?:lib(\w+)\.a|(\w+)\.o|(\w+)\.framework\/\3)$/.exec(f);
+		const module = name && (name[1] ?? name[2] ?? name[3]);
+		if (module && modules.has(module) && statSync(join(products, f)).isFile()) classes[module] = definedObjCClasses([join(products, f)]);
+	}
+	return { args, modules: [...modules].sort(), classes, clangModules: clangModules.sort() };
+}
+
+/** The module maps packages keep in their checkouts, outside their tests and examples. */
+function ownModuleMaps(dir: string, out: string[] = []): string[] {
+	for (const e of readdirSync(dir, { withFileTypes: true }).sort(byName)) {
+		if (e.isSymbolicLink()) continue;
+		if (e.isDirectory() && !/^(\.\w+|Tests?|Examples?)$/.test(e.name)) ownModuleMaps(join(dir, e.name), out);
+		else if (e.isFile() && e.name === 'module.modulemap') out.push(join(dir, e.name));
+	}
+	return out;
+}
+
+/**
+ * The Objective-C classes a binary defines, by their runtime names: a class a header declares
+ * may have no implementation, and NativeScript's runtime then has no class of that name.
+ */
+export function definedObjCClasses(binaries: string[]): string[] {
+	const out = new Set<string>();
+	for (const f of binaries) {
+		let names: string;
+		try {
+			names = execFileSync('nm', ['-gUj', '-arch', 'arm64', f], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1 << 28 });
+		} catch {
+			continue;
+		}
+		for (const m of names.matchAll(/^_OBJC_CLASS_\$_(\S+)$/gm)) out.add(swiftClassName(m[1]) ?? m[1]);
+	}
+	return [...out].sort();
+}
+
+/** A Swift class without an Objective-C name, `_TtC<module><name>` each length-prefixed: its name. */
+function swiftClassName(symbol: string): string | null {
+	if (!symbol.startsWith('_TtC')) return null;
+	let at = 4;
+	const part = () => {
+		const digits = /^\d+/.exec(symbol.slice(at))?.[0];
+		if (!digits) return null;
+		at += digits.length;
+		const text = symbol.slice(at, at + Number(digits));
+		at += Number(digits);
+		return text;
+	};
+	return part() !== null ? part() : null;
+}
+
+/** A directory of the V8 engine's headers, or of sources written against them. */
+export function boundToEngine(dir: string): boolean {
+	if (basename(dir) === 'NativeScriptV8' || existsSync(join(dir, 'include', 'v8.h'))) return true;
+	const sources = (readdirSync(dir, { recursive: true }).sort() as string[]).filter((f) => /\.(cpp|cc|mm)$/.test(f));
+	return sources.length > 0 && sources.some((f) => /\bv8::|#include\s*[<"]v8\.h[>"]/.test(readFileSync(join(dir, f), 'utf8')));
+}
+
+function filesUnder(dir: string): string[] {
+	return readdirSync(dir, { recursive: true, withFileTypes: true })
+		.sort(byName)
+		.filter((e) => e.isFile() && !/(^|\/)(\.build|\.swiftpm|\.git|\.DS_Store)(\/|$)/.test(relative(dir, join(e.parentPath, e.name))))
+		.map((e) => join(e.parentPath, e.name))
+		.sort();
+}

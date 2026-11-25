@@ -1,0 +1,15 @@
+{
+  "version": 3,
+  "sources": [
+    "../../src/angular/index.ts",
+    "../../src/angular/options.ts",
+    "../../src/angular/ns-fixture-sheet-angular.ts"
+  ],
+  "sourcesContent": [
+    "import { Sheet, describe } from 'ns-fixture-sheet';\nimport { merged, type Options } from './options';\n\nexport class SheetService {\n  private readonly sheet = new Sheet('service');\n  open(options: Partial<Options> = {}): string {\n    const o = merged(options);\n    return this.sheet.show(o.title, o.pinned);\n  }\n  summary(): string {\n    return describe(this.sheet);\n  }\n}\n",
+    "export interface Options {\n  title: string;\n  pinned: boolean;\n}\n\nexport const DEFAULTS: Options = { title: 'untitled', pinned: false };\n\nexport function merged(options: Partial<Options>): Options {\n  return { ...DEFAULTS, ...options };\n}\n",
+    "/**\n * Generated bundle index. Do not edit.\n */\n\nexport * from './index';\n"
+  ],
+  "mappings": ";AAAA,SAAS,OAAO,gBAAgB;;;ACKzB,IAAM,WAAoB,EAAE,OAAO,YAAY,QAAQ,MAAM;AAE7D,SAAS,OAAO,SAAoC;AACzD,SAAO,EAAE,GAAG,UAAU,GAAG,QAAQ;AACnC;;;ADNO,IAAM,eAAN,MAAmB;AAAA,EACP,QAAQ,IAAI,MAAM,SAAS;AAAA,EAC5C,KAAK,UAA4B,CAAC,GAAW;AAC3C,UAAM,IAAI,OAAO,OAAO;AACxB,WAAO,KAAK,MAAM,KAAK,EAAE,OAAO,EAAE,MAAM;AAAA,EAC1C;AAAA,EACA,UAAkB;AAChB,WAAO,SAAS,KAAK,KAAK;AAAA,EAC5B;AACF;",
+  "names": []
+}

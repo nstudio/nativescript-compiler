@@ -1,0 +1,101 @@
+{
+	"name": "compiler",
+	"$schema": "../../node_modules/nx/schemas/project-schema.json",
+	"sourceRoot": "packages/compiler/src",
+	"projectType": "library",
+	"implicitDependencies": ["core"],
+	"targets": {
+		"deps": {
+			"executor": "nx:run-commands",
+			"options": {
+				"commands": ["npm ci --no-audit --no-fund", "npm install --prefix tests --no-audit --no-fund"],
+				"parallel": false,
+				"cwd": "{projectRoot}"
+			}
+		},
+		"kit": {
+			"executor": "nx:run-commands",
+			"dependsOn": ["deps", { "projects": ["core"], "target": "build" }],
+			"inputs": ["{projectRoot}/src/**/*", "{workspaceRoot}/packages/core/**/*", "{projectRoot}/tools/kit/**/*"],
+			"outputs": ["{projectRoot}/kit-apple/Sources/NativeScriptKit/Core", "{projectRoot}/kit-apple/Overlays/xml-free"],
+			"options": {
+				"command": "node --stack-size=8000 tools/kit/generate.mts --partial",
+				"cwd": "{projectRoot}"
+			}
+		},
+		"kit-android": {
+			"executor": "nx:run-commands",
+			"dependsOn": ["deps", { "projects": ["core"], "target": "build" }],
+			"inputs": ["{projectRoot}/src/**/*", "{workspaceRoot}/packages/core/**/*", "{projectRoot}/tools/kit/**/*"],
+			"outputs": ["{projectRoot}/kit-android/generated", "{projectRoot}/kit-android/overlays/xml-free"],
+			"options": {
+				"command": "node --stack-size=8000 tools/kit/generate-android.mts --partial",
+				"cwd": "{projectRoot}",
+				"forwardAllArgs": true
+			}
+		},
+		"test": {
+			"executor": "nx:run-commands",
+			"dependsOn": ["deps"],
+			"options": {
+				"command": "node tests/checks/layers.ts && node tests/checks/twins.ts && node tests/checks/runtime-ops.ts && node --test tests/semantics/ && node tests/checks/both-backends.ts && node tests/checks/docs.ts && node tests/checks/decision-parity.ts && node tests/diff/run.ts",
+				"cwd": "{projectRoot}",
+				"forwardAllArgs": true
+			}
+		},
+		"build": {
+			"executor": "nx:run-commands",
+			"dependsOn": ["deps"],
+			"inputs": ["{projectRoot}/src/**/*", "{projectRoot}/bin/build-dist.mjs"],
+			"outputs": ["{projectRoot}/dist"],
+			"options": {
+				"command": "node bin/build-dist.mjs",
+				"cwd": "{projectRoot}"
+			}
+		},
+		"typecheck": {
+			"executor": "nx:run-commands",
+			"dependsOn": ["deps"],
+			"options": {
+				"commands": ["node_modules/.bin/tsc -p .", "node_modules/.bin/tsc -p tsconfig.tests.json", "node tests/checks/api-consumer.ts"],
+				"parallel": false,
+				"cwd": "{projectRoot}"
+			}
+		},
+		"test-fuzz": {
+			"executor": "nx:run-commands",
+			"dependsOn": ["deps"],
+			"options": {
+				"command": "node tests/fuzz/run.ts",
+				"cwd": "{projectRoot}",
+				"forwardAllArgs": true
+			}
+		},
+		"test-release": {
+			"executor": "nx:run-commands",
+			"dependsOn": ["deps"],
+			"options": {
+				"command": "node tests/release-checks/run.ts",
+				"cwd": "{projectRoot}"
+			}
+		},
+		"test-adapters": {
+			"executor": "nx:run-commands",
+			"dependsOn": ["deps"],
+			"options": {
+				"commands": ["node tests/adapters/run.ts", "node tests/bindings/run.ts", "node tests/cli/extension.ts"],
+				"parallel": false,
+				"cwd": "{projectRoot}"
+			}
+		},
+		"pack": {
+			"executor": "nx:run-commands",
+			"dependsOn": ["kit", "kit-android"],
+			"outputs": ["{workspaceRoot}/dist/packages"],
+			"options": {
+				"command": "mkdir -p ../../dist/packages && npm pack --pack-destination ../../dist/packages",
+				"cwd": "{projectRoot}"
+			}
+		}
+	}
+}

@@ -1,0 +1,14 @@
+<Page xmlns="http://schemas.nativescript.org/tns.xsd" navigatingTo="navigatingTo">
+  <ActionBar title="XML app" />
+  <StackLayout class="page">
+    <Label text="{{ message }}" class="title" />
+    <Label text="{{ 'Taps: ' + counter }}" class="line" />
+    <Label text="{{ counter > 3 ? 'Many taps' : 'Few taps' }}" class="{{ counter > 3 ? 'line many' : 'line' }}" />
+    <Label text="{{ items.length + ' items' }}" class="line" />
+    <Label text="Inline style" style="color: #d32f2f; font-size: 26" />
+    <Label text="Attribute color" color="#1565c0" class="line" />
+    <Button text="Tap" tap="{{ onTap }}" class="tap" />
+    <Button text="Code-behind tap" tap="onCodeBehindTap" class="tap" />
+    <Button text="Open list" tap="onOpenList" class="tap" />
+  </StackLayout>
+</Page>

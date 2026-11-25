@@ -1,0 +1,54 @@
+{
+  "name": "@nstudio/nativescript-compiler-react",
+  "version": "9.2.0-alpha.9",
+  "description": "The React adapter of @nstudio/nativescript-compiler: compiles a NativeScript app written with React into a native iOS or Android app with no JavaScript runtime.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "source": "./index.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/"
+  ],
+  "scripts": {
+    "build": "ns-compiled-adapter build .",
+    "prepack": "npm run build"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nstudio/nativescript-compiler.git",
+    "directory": "packages/react"
+  },
+  "peerDependencies": {
+    "@nstudio/nativescript-compiler": "9.2.0-alpha.9"
+  },
+  "nativescript": {
+    "compilerAdapter": {
+      "apiVersion": 1,
+      "detect": {
+        "priority": 30,
+        "dependencies": [
+          "react-nativescript",
+          "react"
+        ],
+        "entryMentions": [
+          "react-nativescript"
+        ],
+        "entryImports": [
+          "react"
+        ]
+      },
+      "testedVersions": {
+        "react-nativescript": ">=5.0.0 <6.0.0",
+        "react": ">=18.2.0 <19.0.0"
+      }
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "name": "nstudio-nativescript-compiler-monorepo",
+  "private": true,
+  "description": "Official nStudio NativeScript native compiler CLI plugin (@nstudio/nativescript-compiler) and framework adapters compiling NativeScript apps to native Swift (iOS) and Kotlin (Android) with no JavaScript runtime.",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20.17.0"
+  },
+  "scripts": {
+    "typecheck:compiler": "tsc -p packages/compiler/tsconfig.json --noEmit && tsc -p packages/compiler/tsconfig.tests.json --noEmit",
+    "typecheck:adapters": "node packages/compiler/bin/build-dist.mjs --types && tsc -p tsconfig.adapters.json",
+    "typecheck": "npm run typecheck:compiler && npm run typecheck:adapters",
+    "kit": "node packages/compiler/tools/kit/generate.mts",
+    "kit:android": "node packages/compiler/tools/kit/generate-android.mts",
+    "build:compiler": "node packages/compiler/bin/build-dist.mjs",
+    "build:adapters": "npm run build --workspaces --if-present",
+    "build": "npm run build:compiler && npm run build:adapters",
+    "pack": "node scripts/pack.mjs",
+    "test:compiler": "node packages/compiler/tests/checks/layers.ts && node packages/compiler/tests/cli/extension.ts && node packages/compiler/tests/expression-parser-check.ts",
+    "test": "node scripts/test.mjs",
+    "test:diff": "node scripts/test.mjs diff",
+    "test:fuzz": "node scripts/test.mjs fuzz",
+    "test:release-checks": "node scripts/test.mjs release-checks",
+    "test:native-build": "node scripts/test.mjs native-build",
+    "test:template": "node scripts/test.mjs template",
+    "version:sync": "node scripts/set-version.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "~5.9.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nstudio/nativescript-compiler.git"
+  },
+  "license": "MIT"
+}

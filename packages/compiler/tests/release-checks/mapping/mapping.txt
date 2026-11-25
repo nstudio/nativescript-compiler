@@ -1,0 +1,88 @@
+# compiler: R8
+# compiler_version: 8.12.14
+# min_api: 24
+# common_typos_disable
+# {"id":"com.android.tools.r8.mapping","version":"2.2"}
+# pg_map_id: 18504acd417621c5ac2be187eb28ef3472032d9c66ac14800650884bf0cd03e5
+# pg_map_hash: SHA-256 18504acd417621c5ac2be187eb28ef3472032d9c66ac14800650884bf0cd03e5
+J.DocumentsContractApi19$$ExternalSyntheticAutoCloseableDispatcher0 -> J.b:
+# {"id":"sourceFile","fileName":"R8$$SyntheticClass"}
+# {"id":"com.android.tools.r8.synthesized"}
+    1:3:U.StartupException J.DocumentsContractApi19$$ExternalSyntheticAutoCloseableDispatcher0.m(java.lang.String):0:0 -> d
+      # {"id":"com.android.tools.r8.synthesized"}
+      # {"id":"com.android.tools.r8.residualsignature","signature":"(Ljava/lang/String;)LU/c;"}
+      # {"id":"com.android.tools.r8.outline"}
+    4:5:U.StartupException J.DocumentsContractApi19$$ExternalSyntheticAutoCloseableDispatcher0.m(java.lang.String):1:1 -> d
+    6:9:U.StartupException J.DocumentsContractApi19$$ExternalSyntheticAutoCloseableDispatcher0.m(java.lang.String):2:2 -> d
+org.nativescript.crashng.AppComponent -> org.nativescript.crashng.AppComponent:
+# {"id":"sourceFile","fileName":"AppComponent.kt"}
+    1:3:void <init>():7:7 -> <init>
+    4:14:void <init>():9:9 -> <init>
+    15:18:void <init>():10:10 -> <init>
+    1:3:kotlin.Unit _init_$lambda$0():12:12 -> _init_$lambda$0
+      # {"id":"com.android.tools.r8.residualsignature","signature":"()LZ/j;"}
+    4:6:kotlin.Unit _init_$lambda$0():13:13 -> _init_$lambda$0
+    1:5:Z.Unit $r8$lambda$pbefiMi_p4fMl-YmCOJyYBn43vY():0:0 -> b
+      # {"id":"com.android.tools.r8.synthesized"}
+      # {"id":"com.android.tools.r8.residualsignature","signature":"()LZ/j;"}
+    1:19:org.nativescript.kit.View render():19:19 -> render
+org.nativescript.crashng.AppComponent$$ExternalSyntheticLambda0 -> org.nativescript.crashng.h:
+# {"id":"sourceFile","fileName":"R8$$SyntheticClass"}
+# {"id":"com.android.tools.r8.synthesized"}
+    int $r8$classId -> a
+      # {"id":"com.android.tools.r8.synthesized"}
+    1:40:java.lang.Object invoke():0:0 -> invoke
+      # {"id":"com.android.tools.r8.synthesized"}
+org.nativescript.crashng.Crash_demoKt -> org.nativescript.crashng.Crash_demoKt:
+# {"id":"sourceFile","fileName":"crash_demo.kt"}
+    1:5:java.lang.String $r8$lambda$QLz4tuRlt-_PGW6eze_K8VL_vAE(java.lang.String):0:0 -> a
+      # {"id":"com.android.tools.r8.synthesized"}
+    6:29:java.lang.String hostInitials(org.nativescript.crashng.DemoMeeting):81:81 -> hostInitials
+    30:33:java.lang.String hostInitials(org.nativescript.crashng.DemoMeeting):82:82 -> hostInitials
+    34:40:java.lang.String hostInitials(org.nativescript.crashng.DemoMeeting):87:87 -> hostInitials
+    41:42:java.lang.String hostInitials(org.nativescript.crashng.DemoMeeting):81:81 -> hostInitials
+    43:46:java.lang.String hostInitials(org.nativescript.crashng.DemoMeeting):0:0 -> hostInitials
+      # {"id":"com.android.tools.r8.outlineCallsite","positions":{"1":48,"4":50,"6":53},"outline":"LJ/b;d(Ljava/lang/String;)LU/c;"}
+    47:47:java.lang.String hostInitials(org.nativescript.crashng.DemoMeeting):81:81 -> hostInitials
+    48:48:java.lang.String hostInitials(org.nativescript.crashng.DemoMeeting):81:81 -> hostInitials
+    50:50:java.lang.String hostInitials(org.nativescript.crashng.DemoMeeting):81:81 -> hostInitials
+    53:53:void kotlin.KotlinNothingValueException.<init>():127:127 -> hostInitials
+    53:53:java.lang.String hostInitials(org.nativescript.crashng.DemoMeeting):81 -> hostInitials
+    3:11:java.lang.String hostInitials$lambda$0(java.lang.String):84:84 -> hostInitials$lambda$0
+    1:19:void logMeetingHosts():93:93 -> logMeetingHosts
+    20:33:void logMeetingHosts():94:94 -> logMeetingHosts
+    34:37:void logMeetingHosts():92:92 -> logMeetingHosts
+    38:57:void logMeetingHosts():96:96 -> logMeetingHosts
+    58:59:java.lang.String org.nativescript.crashng.Crash_demoKt.hostInitials(org.nativescript.crashng.DemoMeeting):90:91 -> logMeetingHosts
+    58:59:void logMeetingHosts():96 -> logMeetingHosts
+org.nativescript.crashng.Crash_demoKt$logMeetingHosts$1 -> org.nativescript.crashng.Crash_demoKt$logMeetingHosts$1:
+# {"id":"sourceFile","fileName":"crash_demo.kt"}
+    1:8:void <clinit>():0:0 -> <clinit>
+    1:13:void <init>():0:0 -> <init>
+    1:1:java.lang.Object invoke(java.lang.Object):96:96 -> invoke
+    2:2:java.lang.String invoke(org.nativescript.crashng.DemoMeeting):96:96 -> invoke
+org.nativescript.crashng.Home -> org.nativescript.crashng.Home:
+    1:4:void render():3:6 -> render
+org.nativescript.crashng.PersonDetailComponent -> org.nativescript.crashng.PersonDetailComponent:
+# {"id":"sourceFile","fileName":"PersonDetailComponent.kt"}
+    1:3:void <init>():17:17 -> <init>
+    4:6:void <init>():64:64 -> <init>
+    1:3:boolean _b0$crashng_release():41:41 -> _b0$crashng_release
+    1:4:java.lang.String formatAchievements(org.nativescript.kit.JSArray):18:21 -> formatAchievements
+org.nativescript.kit.Core_types_validatorsKt -> org.nativescript.kit.a:
+# {"id":"sourceFile","fileName":"core_types_validators.kt"}
+    1:4:boolean isValid(java.lang.Object):10:10 -> a
+org.nativescript.kit.ErrorsKt -> org.nativescript.kit.ErrorsKt:
+# {"id":"sourceFile","fileName":"Errors.kt"}
+    kotlin.jvm.functions.Function1 jsUncaughtHandler -> jsUncaughtHandler
+      # {"id":"com.android.tools.r8.residualsignature","signature":"Lk0/l;"}
+    6:13:java.lang.Void jsCannotRead(java.lang.String):175:175 -> jsCannotRead
+    20:26:java.lang.Void jsCannotRead(java.lang.String):175:175 -> jsCannotRead
+org.nativescript.kit.JSArray -> org.nativescript.kit.JSArray:
+# {"id":"sourceFile","fileName":"Array.kt"}
+    1:2:org.nativescript.kit.JSArray map(kotlin.jvm.functions.Function1):442:443 -> map
+    3:4:org.nativescript.kit.JSArray map(kotlin.jvm.functions.Function1):445:446 -> map
+org.nativescript.kit.JSEventLoopState -> org.nativescript.kit.JSEventLoopState:
+# {"id":"sourceFile","fileName":"Timers.kt"}
+    1:12:void listOnTimeout(org.nativescript.kit.JSTimerList,double):108:108 -> listOnTimeout
+    13:42:void listOnTimeout(org.nativescript.kit.JSTimerList,double):131:131 -> listOnTimeout

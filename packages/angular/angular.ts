@@ -1,0 +1,2683 @@
+import * as ng from '@angular/compiler';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { dirname, extname, isAbsolute, join, relative } from 'node:path';
+import type { Attr, ComponentIR, ComponentStyle, DirectiveUse, Event, QueryHook, Scope, TNode } from '@nstudio/nativescript-compiler/adapter-api';
+import { core, ts } from './core-api.ts';
+import { flattenComponent, openStatics } from './component-bases.ts';
+import { decorator } from './ng-modules.ts';
+
+/** The elements of the binary-only plugins `release.stubPlugins` can stub, by lowercase tag, and their packages. */
+const STUB_ELEMENTS: Record<string, string> = {
+  radradialgauge: 'nativescript-ui-gauge',
+  radlistview: 'nativescript-ui-listview',
+  radsidedrawer: 'nativescript-ui-sidedrawer',
+  radcalendar: 'nativescript-ui-calendar',
+  raddataform: 'nativescript-ui-dataform',
+  radautocompletetextview: 'nativescript-ui-autocomplete',
+  radcartesianchart: 'nativescript-ui-chart',
+  radpiechart: 'nativescript-ui-chart',
+};
+
+/** What a stubbed element keeps: its place in the layout and its box, which its stand-in, an empty ContentView, takes. */
+const STUB_LAYOUT_ATTRS = new Set([
+  'row', 'col', 'rowSpan', 'colSpan', 'width', 'height', 'minWidth', 'minHeight',
+  'class', 'scaleX', 'scaleY', 'translateX', 'translateY', 'rotate', 'opacity', 'visibility',
+  'horizontalAlignment', 'verticalAlignment',
+  'margin', 'marginTop', 'marginRight', 'marginBottom', 'marginLeft',
+  'padding', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+  'left', 'top', 'dock', 'order', 'flexGrow', 'flexShrink', 'alignSelf',
+  'backgroundColor', 'borderRadius', 'borderWidth', 'borderColor',
+]);
+
+const stubbedElement = (tag: string): boolean => {
+  const pkg = STUB_ELEMENTS[tag.replace(/-/g, '').toLowerCase()];
+  return !!pkg && core.stubbedPlugins.has(pkg);
+};
+
+/** Angular's standalone component as the release build sees it. */
+export interface AngularComponent extends ComponentIR {
+  selector: string;
+  /** Whether its virtual class uses the build's Angular runtime module (a pipe of @angular/common's, a QueryList). */
+  usesRuntime?: boolean;
+}
+
+/** A pipe class a template can name: where it is, whether it is pure, and what making and destroying one takes. */
+export interface PipeDecl {
+  className: string;
+  /** The module that exports it: a file, a package (`@angular#rx`) or `RUNTIME`, the build's Angular runtime module. */
+  file: string;
+  pure: boolean;
+  /** Its constructor takes parameters, which the `$create` the build adds to it injects. */
+  create?: boolean;
+  destroy?: boolean;
+}
+
+/** The build's own module of the Angular runtime its templates use (`runtime/angular.ts`): @angular/common's pipes, QueryList. */
+export const RUNTIME = '@angular#runtime';
+
+const COMMON_PIPES: Record<string, PipeDecl> = {
+  async: { className: 'AsyncPipe', file: '@angular#rx', pure: false },
+  date: { className: 'DatePipe', file: RUNTIME, pure: true },
+  number: { className: 'DecimalPipe', file: RUNTIME, pure: true },
+  percent: { className: 'PercentPipe', file: RUNTIME, pure: true },
+  uppercase: { className: 'UpperCasePipe', file: RUNTIME, pure: true },
+  lowercase: { className: 'LowerCasePipe', file: RUNTIME, pure: true },
+  titlecase: { className: 'TitleCasePipe', file: RUNTIME, pure: true },
+  json: { className: 'JsonPipe', file: RUNTIME, pure: false },
+  slice: { className: 'SlicePipe', file: RUNTIME, pure: false },
+  keyvalue: { className: 'KeyValuePipe', file: RUNTIME, pure: false },
+};
+const UNSUPPORTED_COMMON_PIPES = new Set(['currency', 'i18nPlural', 'i18nSelect']);
+
+/**
+ * A NativeScript Angular standalone component (`@Component` with a template
+ * of @nativescript/core elements, signals, `input()`/`output()`, `inject()`)
+ * as a virtual class: the component's own source with one method appended
+ * per template expression. The class keeps Angular's API; the translator
+ * knows what `signal()`, `computed()`, `input()`, `output()` and `inject()` mean.
+ */
+export function angularComponent(path: string, text: string, selectors: Map<string, string>, options: { elements?: Map<string, string>; platform?: 'ios' | 'android'; pipes?: Map<string, PipeDecl>; runtimeModule?: string; directives?: DirectiveDecl[]; ngModules?: Map<string, string[]>; hosts?: HostedComponent[]; elementMeta?: Map<string, string[] | null> } = {}): AngularComponent | null {
+  const written = text;
+  let sf = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  let cls = sf.statements.find((s): s is ts.ClassDeclaration => ts.isClassDeclaration(s) && !!decorator(s, 'Component'));
+  if (!cls || !cls.name) return null;
+  const others = sf.statements.filter((s) => s !== cls && ts.isClassDeclaration(s) && !!decorator(s, 'Component'));
+  if (others.length) throw new Error(`${path}: ${others.length + 1} components in one file; a compiled release takes one @Component per file`);
+  const asWritten = cls;
+  const flat = flattenComponent(path, text, cls.name.text);
+  const opened = openStatics(flat ?? text, flat === null ? cls : ts.createSourceFile(path, flat, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS).statements.find((s): s is ts.ClassDeclaration => ts.isClassDeclaration(s) && !!decorator(s, 'Component'))!);
+  if (opened !== text) {
+    text = opened;
+    sf = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    cls = sf.statements.find((s): s is ts.ClassDeclaration => ts.isClassDeclaration(s) && !!decorator(s, 'Component'))!;
+  }
+  // A class with decorated inputs and outputs, or constructor injection, as the signal-style class the translator reads.
+  const classic = classicClass(path, text, cls);
+  if (classic) {
+    text = classic.text;
+    sf = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    cls = sf.statements.find((s): s is ts.ClassDeclaration => ts.isClassDeclaration(s) && !!decorator(s, 'Component'))!;
+  }
+  const meta = decorator(cls, 'Component')!.arguments[0] as ts.ObjectLiteralExpression;
+  const prop = (name: string) => meta.properties.find((p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && (p.name as ts.Identifier).text === name)?.initializer;
+  for (const p of meta.properties) {
+    const key = ts.isPropertyAssignment(p) && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) ? p.name.text : null;
+    if (key === null) throw new Error(`${path}: @Component's ${p.getText().split('\n')[0]} is read as \`name: value\` in a release build`);
+    if (key === 'preserveWhitespaces' && (p as ts.PropertyAssignment).initializer.kind !== ts.SyntaxKind.FalseKeyword) throw new Error(`${path}: @Component's preserveWhitespaces is not supported in a release build yet`);
+    if (!COMPONENT_META.has(key)) throw new Error(`${path}: @Component's ${key} is not supported in a release build yet`);
+  }
+  const providers = prop('providers');
+  if (providers) {
+    if (flat !== null) throw new Error(`${path}: @Component's providers on a class that extends another are not supported in a release build yet`);
+    refuseScopedInjection(path, asWritten);
+    text = withInjector(path, text, cls, providers);
+    sf = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    cls = sf.statements.find((s): s is ts.ClassDeclaration => ts.isClassDeclaration(s) && !!decorator(s, 'Component'))!;
+  }
+  const selector = (prop('selector') as ts.StringLiteral | undefined)?.text ?? cls.name.text;
+  const inline = prop('template');
+  const templateUrl = (prop('templateUrl') as ts.StringLiteral | undefined)?.text;
+  const template = inline && (ts.isNoSubstitutionTemplateLiteral(inline) || ts.isStringLiteral(inline)) ? inline.text : templateUrl && existsSync(join(dirname(path), templateUrl)) ? readFileSync(join(dirname(path), templateUrl), 'utf8') : '';
+  // Angular 22's default strategy is OnPush.
+  const strategy = prop('changeDetection')?.getText();
+  const onPush = strategy !== 'ChangeDetectionStrategy.Default' && strategy !== 'ChangeDetectionStrategy.Eager';
+
+  /** A tag as @nativescript/angular's registry knows it: by its name, lowercased, or kebab-cased (`grid-layout`). */
+  const registered = new Map<string, string>();
+  for (const [tag, cls] of options.elements ?? []) for (const k of [tag, tag.toLowerCase(), tag.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase()]) registered.set(k, cls);
+  const elementOf = (name: string): string | undefined => core.canonical(name) ?? core.canonical(name.replace(/-/g, '')) ?? registered.get(name) ?? registered.get(name.toLowerCase()) ?? undefined;
+  const metas = new Map<string, string[] | null>();
+  for (const [tag, keys] of options.elementMeta ?? []) for (const k of [tag, tag.toLowerCase(), tag.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase()]) metas.set(k, keys);
+  /**
+   * A plugin tag registered with a `ViewClassMeta` (`registerElement('Drawer', () => Drawer, meta)`): its renderer hooks
+   * decide where the element and its children go, and the release build runs none of them yet.
+   */
+  const checkMeta = (n: ng.TmplAstElement) => {
+    if (core.canonical(n.name) || core.canonical(n.name.replace(/-/g, ''))) return;
+    const keys = metas.has(n.name) ? metas.get(n.name) : metas.get(n.name.toLowerCase());
+    if (keys === undefined) return;
+    if (keys === null) throw new Error(`${path}: <${n.name}> is registered with a ViewClassMeta the build cannot read (not an object literal in the registering file)`);
+    if (keys.includes('skipAddToDom')) throw new Error(`${path}: <${n.name}> is registered with skipAddToDom, which a release build does not support yet`);
+    const hooks = keys.filter((k) => ['insertChild', 'removeChild', 'insertInvisibleNode', 'removeInvisibleNode'].includes(k));
+    if (hooks.length && n.children.some((c) => !(c instanceof ng.TmplAstText) || c.value.trim())) {
+      throw new Error(`${path}: the children of <${n.name}> join it through its registerElement meta (${hooks.join(', ')}), which a release build does not run yet`);
+    }
+  };
+  const { members, props, optional, outputs, inputAliases } = publicMembers(path, cls, classic);
+  const scope: Scope = { names: new Map([...members].map((m) => [m, classic?.inputs.has(m) ? `this.${m}()` : `this.${m}`])) };
+  const init = cls.members.find((m) => ts.isMethodDeclaration(m) && m.name.getText() === 'ngOnInit');
+  /** A lifecycle hook the class implements: a method of that name, taking nothing. */
+  const hook = (name: string) => {
+    const m = cls!.members.find((x): x is ts.MethodDeclaration => ts.isMethodDeclaration(x) && x.name.getText() === name);
+    if (m?.parameters.length) throw new Error(`${path}: ${name} takes no parameters`);
+    return !!m;
+  };
+  if (init && (init as ts.MethodDeclaration).parameters.length) throw new Error(`${path}: ngOnInit takes no parameters`);
+
+  const methods: string[] = [];
+  let next = 0;
+  let lets = 0;
+  /**
+   * The names a template method takes for the scope it is in: a loop's item and index (`names`: a template's other
+   * context variables, `let-e="even"`, as expressions over them), or a view's own value (a pipe, without an index).
+   */
+  type Loop = { item: string; index?: string; param: string; names?: Record<string, string> };
+  const params = (loops: Loop[]) => loops.map((l) => l.param).join(', ');
+  const args = (loops: Loop[]) => loops.flatMap((l) => (l.index === undefined ? [l.item] : [l.item, l.index])).join(', ');
+  /** `*ngIf="x as y"`: names a structural directive binds, in the template it renders. */
+  const aliases = new Map<string, string>();
+  const local = (loops: Loop[]): Scope => {
+    const names = new Map(scope.names);
+    for (const [k, v] of aliases) names.set(k, v);
+    for (const l of loops) {
+      names.delete(l.item); if (l.index !== undefined) names.delete(l.index);
+      for (const [k, v] of Object.entries(l.names ?? {})) names.set(k, v);
+    }
+    return { names };
+  };
+  /**
+   * Each `| name` in the template is one pipe per view it renders in, as Angular's `ɵɵpipe` creates them: a local of the
+   * view (`$pN`), and for a pure pipe the arguments it last transformed (`$cN`), so `transform` runs only when one changes.
+   */
+  const sites = new Map<ng.BindingPipe, { pipe: string; cache: string | null }>();
+  const imported = new Map<string, Map<string, string>>();
+  let usesRuntime = false;
+  /** The class a pipe's name resolves to, imported into the component's file under a name of its own. */
+  const pipeClass = (name: string): { alias: string; decl: PipeDecl } => {
+    const decl = options.pipes?.get(name) ?? COMMON_PIPES[name];
+    if (!decl) throw new Error(`${path}: the ${name} pipe is not one the release build knows: no @Pipe({ name: '${name}' }) class in the app or the libraries it imports${UNSUPPORTED_COMMON_PIPES.has(name) ? `, and @angular/common's ${name} pipe is not supported in a release build yet` : ''}`);
+    const from = decl.file === RUNTIME ? (usesRuntime = true, options.runtimeModule ?? RUNTIME) : decl.file;
+    const names = imported.get(from) ?? new Map<string, string>();
+    imported.set(from, names);
+    if (!names.has(decl.className)) names.set(decl.className, `$Pipe_${decl.className}`);
+    return { alias: names.get(decl.className)!, decl };
+  };
+  /**
+   * The pipes in a node's own expressions, as locals of the view around it: the loops its methods take, and the node
+   * wrapped in them. A pipe class with constructor parameters is made through the `$create` the build adds to it,
+   * which injects them; one with `ngOnDestroy` is destroyed with its view.
+   */
+  const withPipes = (asts: (ng.AST | null | undefined)[], loops: Loop[]): { loops: Loop[]; wrap: (body: TNode[]) => TNode[] } => {
+    const found = asts.flatMap((a) => (a ? allPipes(a instanceof ng.ASTWithSource ? a.ast : a) : [])).filter((p) => !sites.has(p));
+    if (!found.length) return { loops, wrap: (body) => body };
+    const made: { name: string; make: string; destroy?: string }[] = [];
+    let inner = loops;
+    for (const p of found) {
+      const { alias, decl } = pipeClass(p.name);
+      const k = sites.size;
+      const pipe = `$p${k}`;
+      const make = expr(decl.create ? `${alias}.$create()` : `new ${alias}()`, inner);
+      inner = [...inner, { item: pipe, param: `${pipe}: ${alias}` }];
+      const destroy = decl.destroy ? handlerOf(`${pipe}.ngOnDestroy()`, inner) : undefined;
+      made.push({ name: pipe, make, ...(destroy ? { destroy } : {}) });
+      let cache: string | null = null;
+      if (decl.pure) {
+        cache = `$c${k}`;
+        made.push({ name: cache, make: expr('new $PurePipeCache()', inner) });
+        inner = [...inner, { item: cache, param: `${cache}: $PurePipeCache` }];
+      }
+      sites.set(p, { pipe, cache });
+    }
+    return { loops: inner, wrap: (body) => made.reduceRight((b, l): TNode[] => [{ kind: 'local', name: l.name, make: l.make, ...(l.destroy ? { destroy: l.destroy } : {}), body: b }], body) };
+  };
+  const keywordRead = (n: unknown): boolean => n instanceof ng.PropertyRead && n.receiver instanceof ng.ImplicitReceiver && !(n.receiver instanceof ng.ThisReceiver) && KEYWORDS.has(n.name) && members.has(n.name);
+  /** The pipes and keyword-named member reads in an expression, outermost first (not those inside a pipe). */
+  const specialsIn = (node: ng.AST): ng.AST[] => {
+    const found: ng.AST[] = [];
+    const visit = (n: unknown) => {
+      if (n instanceof ng.BindingPipe || keywordRead(n)) { found.push(n as ng.AST); return; }
+      if (!(n instanceof ng.AST)) return;
+      for (const v of Object.values(n)) Array.isArray(v) ? v.forEach(visit) : visit(v);
+    };
+    if (node instanceof ng.BindingPipe || keywordRead(node)) return [node];
+    for (const v of Object.values(node)) Array.isArray(v) ? v.forEach(visit) : visit(v);
+    return found;
+  };
+  const code = (value: ng.AST, _loops: Loop[]): string => {
+    const root = value instanceof ng.ASTWithSource ? value.ast : value;
+    // `text="How {{ x }}"`: Angular renders the literal text with each expression's value, undefined and null as ''.
+    const interpolation = root instanceof ng.Interpolation ? root : null;
+    if (!specialsIn(root).length && !interpolation) return value instanceof ng.ASTWithSource ? sourceOf(value) : template.slice(value.sourceSpan.start, value.sourceSpan.end);
+    const textOf = (node: ng.AST): string => {
+      // A member named like a keyword (`continue()`): read on the component, which the expression's text cannot say.
+      if (keywordRead(node)) return `this.${(node as ng.PropertyRead).name}`;
+      if (node instanceof ng.BindingPipe) {
+        const site = sites.get(node);
+        if (!site) throw new Error(`${path}: the ${node.name} pipe where the release build gives it no view (in ${template.slice(node.sourceSpan.start, node.sourceSpan.end)})`);
+        const given = [node.exp, ...node.args].map(textOf);
+        if (!site.cache) return `${site.pipe}.transform(${given.join(', ')})`;
+        if (given.length > 5) throw new Error(`${path}: the ${node.name} pipe with more than 4 arguments is not supported in a release build yet`);
+        const xs = given.map((_, i) => `$x${i}`);
+        return `${site.cache}.pure${given.length}(${given.map((g) => `(${g})`).join(', ')}, (${xs.join(', ')}) => ${site.pipe}.transform(${xs.join(', ')}))`;
+      }
+      const at = node.sourceSpan.start;
+      let out = template.slice(at, node.sourceSpan.end);
+      for (const p of specialsIn(node).sort((a, b) => b.sourceSpan.start - a.sourceSpan.start)) {
+        out = out.slice(0, p.sourceSpan.start - at) + textOf(p) + out.slice(p.sourceSpan.end - at);
+      }
+      return out;
+    };
+    if (interpolation) return '`' + interpolation.strings.map((s, i) => s.replace(/[`\\$]/g, (x) => '\\' + x) + (i < interpolation.expressions.length ? `\${(${textOf(interpolation.expressions[i])}) ?? ''}` : '')).join('') + '`';
+    return textOf(root);
+  };
+  // `$any(x)` is Angular's escape from template type checking; the release build is typed by the component's code,
+  // except `$any($event)`, whose event data the handler reads as the type it declares.
+  // A string literal a template writes across lines is one string in the template's expression, and must stay one in TypeScript.
+  const clean = (code: string) =>
+    code
+      .replace(/(['"])(?:\\.|(?!\1)[\s\S])*?\1/g, (s) => s.replace(/\r?\n/g, '\\n').replace(/\r/g, '\\r'))
+      .replace(/\$any\(\s*\$event\s*\)/g, '($event as any)')
+      .replace(/\$any\(/g, '(');
+  /** The template line (0-based) of the binding being compiled, and each template method's (by its index in `methods`). */
+  let here: number | null = null;
+  const located = new Map<number, number>();
+  const at = (span: ng.ParseSourceSpan | null | undefined) => { if (span) here = span.start.line; };
+  const add = (method: string) => {
+    methods.push(method);
+    if (here !== null) located.set(methods.length - 1, here);
+  };
+  const expr = (code: string, loops: Loop[], untyped = false) => {
+    const m = `$b${next++}`;
+    add(`  ${m}(${params(loops)})${untyped ? ': any' : ''} { return ${core.rewrite(clean(code), local(loops))}; }`);
+    return m;
+  };
+  /** A method of statements over the names in scope (a pipe's `ngOnDestroy`). */
+  const handlerOf = (statements: string, loops: Loop[]) => {
+    const m = `$e${next++}`;
+    add(`  ${m}(${params(loops)}) { ${statements}; }`);
+    return m;
+  };
+  // A condition is tested, not held: a value its type says is there (a non-strict app's `signal<Person>(null)`) is read only for its truth.
+  const test = (code: string, loops: Loop[]) => expr(`!!(${code})`, loops);
+  // A component's output gives its handler the emitted value as `$event`; a view's event gives the event data.
+  const handler = (code: string, loops: Loop[], payload = false) => {
+    const m = `$e${next++}`;
+    add(`  ${m}(${[params(loops), `$event: ${payload ? 'any' : '$EventData'}`].filter(Boolean).join(', ')}) { ${core.rewrite(clean(code), local(loops), 'statements')}; }`);
+    return m;
+  };
+
+  /**
+   * The view queries an element or a component's host matches (`#ref`, or the component's class), as the methods that
+   * set and clear each one's field: an ElementRef of the view, the component itself, or the view read as its class.
+   * The field is set when the view is made and cleared when it goes, as a query's next refresh finds it gone.
+   */
+  const queryHooks = (refs: string[], component: string | null, tag: string | null, loops: Loop[]): QueryHook[] => {
+    const hooks: QueryHook[] = [];
+    for (const q of queries) {
+      if (q.ref ? !refs.includes(q.ref) : q.type !== component && q.type !== tag) continue;
+      const instance = !!component && (q.read === null || q.read === component);
+      const wrapped = q.read === 'ElementRef' || (q.read === null && !component);
+      if (wrapped) usesElementRef = true;
+      // The made node as its own class (the component, the element's view class), else untyped and read as the query's class.
+      const own = instance ? component : !wrapped && q.read === tag ? tag : null;
+      const value = wrapped ? 'new $ElementRef($q)' : own || !q.read ? '$q' : `($q as ${q.read})`;
+      const inner = [...loops, { item: '$q', param: `$q: ${own ?? 'any'}` }];
+      // A single query keeps its match once the match's view goes, which Angular's next refresh would clear.
+      const set = handlerOf(q.many ? `this.${q.field}.$add($q, ${value})` : `this.${q.field} = ${value}`, inner);
+      const unset = q.many ? handlerOf(`this.${q.field}.$remove($q)`, inner) : undefined;
+      hooks.push({ set, ...(unset ? { unset } : {}), on: instance ? 'instance' : 'view' });
+    }
+    return hooks;
+  };
+  let usesElementRef = false;
+  let usesUnset = false;
+  const queries = classic?.queries ?? [];
+  /** The `#refs` of the template's own elements, outside any embedded view: what a static query can resolve. */
+  const staticRefs = new Set<string>();
+  /** The static queries not yet resolved where the template walk is; ngOnInit waits for them. */
+  const staticQueries = new Set<ViewQuery>();
+  let lateInit = false;
+
+  /**
+   * The app's directives in the component's scope, by their selectors, as Angular's compiler matches them: those its
+   * `imports` name, directly or through an NgModule's exports, and those of an NgModule declaring it.
+   */
+  const inScope = new Set<string>();
+  const expand = (names: string[]) => {
+    for (const n of names) {
+      if (inScope.has(n)) continue;
+      inScope.add(n);
+      expand(options.ngModules?.get(n) ?? []);
+    }
+  };
+  const importsMeta = prop('imports');
+  expand(importsMeta && ts.isArrayLiteralExpression(importsMeta) ? importsMeta.elements.filter(ts.isIdentifier).map((e) => e.text) : []);
+  for (const [, names] of options.ngModules ?? []) if (names.includes(cls.name!.text)) expand(names);
+  const matcher = new ng.SelectorMatcher<DirectiveDecl>();
+  for (const d of options.directives ?? []) if (inScope.has(d.className)) matcher.addSelectables(ng.CssSelector.parse(d.selector), d);
+  /** The directives an element matches: its name, attributes, bound inputs and outputs, as Angular matches them. */
+  const matched = (name: string, attributes: string[][], bound: string[]): DirectiveDecl[] => {
+    const css = new ng.CssSelector();
+    css.setElement(name);
+    for (const [k, v] of attributes) {
+      css.addAttribute(k, v);
+      if (k === 'class') for (const c of v.split(/\s+/).filter(Boolean)) css.addClassName(c);
+    }
+    for (const b of bound) css.addAttribute(b, '');
+    const found: DirectiveDecl[] = [];
+    matcher.match(css, (_s, d) => { if (!found.includes(d)) found.push(d); });
+    return found;
+  };
+  const hostMatcher = new ng.SelectorMatcher<HostedComponent>();
+  for (const h of options.hosts ?? []) if (inScope.has(h.name)) hostMatcher.addSelectables(ng.CssSelector.parse(h.selector), h);
+  /** The component in scope an element hosts, matched as directives are. */
+  const hostedBy = (n: ng.TmplAstElement): HostedComponent | undefined => {
+    const css = new ng.CssSelector();
+    css.setElement(n.name);
+    for (const a of n.attributes) {
+      css.addAttribute(a.name, a.value);
+      if (a.name === 'class') for (const c of a.value.split(/\s+/).filter(Boolean)) css.addClassName(c);
+    }
+    for (const b of [...n.inputs.map((i) => i.name), ...n.outputs.map((o) => o.name)]) css.addAttribute(b, '');
+    const found: HostedComponent[] = [];
+    hostMatcher.match(css, (_s, h) => { if (!found.includes(h)) found.push(h); });
+    if (found.length > 1) throw new Error(`${path}: <${n.name}> matches the components ${found.map((h) => h.name).join(' and ')}; an element hosts one`);
+    return found[0];
+  };
+  let directiveCount = 0;
+  /**
+   * A directive on an element, one per view of it: made with the element as its ElementRef, its inputs set from the
+   * element's bindings and attributes of their names (the bindings then are the directive's, not the view's), its
+   * host listeners and bindings on the element, and its hooks.
+   */
+  const directiveUse = (d: DirectiveDecl, n: ng.TmplAstElement, loops: Loop[], consumed: Set<string>): DirectiveUse => {
+    const names = imported.get(d.file) ?? new Map<string, string>();
+    imported.set(d.file, names);
+    if (!names.has(d.className)) names.set(d.className, `$Dir_${d.className}`);
+    const alias = names.get(d.className)!;
+    const name = `$d${directiveCount++}`;
+    const make = expr(d.create ? `${alias}.$create()` : `new ${alias}()`, loops);
+    const inner = [...loops, { item: name, param: `${name}: ${alias}` }];
+    const valued = [...inner, { item: '$v', param: '$v: any' }];
+    const own: Scope = { names: new Map(d.members.map((m) => [m, `${name}.${m}`])) };
+    const setter = (input: string, member: string) => handlerOf(`${name}.${member}${d.signals.has(member) ? '.$assign($v)' : ' = $v'}${d.hooks.has('ngOnChanges') ? `; ${name}.$change(${JSON.stringify(member)}, $v)` : ''}`, valued);
+    const inputs: DirectiveUse['inputs'] = [];
+    for (const [input, member] of d.inputs) {
+      const b = n.inputs.find((i) => i.name === input && i.type === ng.BindingType.Property);
+      const a = n.attributes.find((x) => x.name === input);
+      if (b) {
+        at(b.sourceSpan);
+        consumed.add(input);
+        inputs.push({ set: setter(input, member), method: expr(code(b.value, loops), loops, true) });
+      } else if (a) inputs.push({ set: setter(input, member), value: a.value });
+    }
+    const listeners = d.listeners.map((l) => ({ event: l.event, method: handlerOf(core.rewrite(l.code, { names: new Map([...own.names, ['$event', '$event']]) }, 'statements'), [...inner, { item: '$event', param: '$event: any' }]) }));
+    const bindings = d.bindings.map((b) => ({ prop: b.prop, method: expr(core.rewrite(b.code, own), inner, true) }));
+    const hook = (h: string) => (d.hooks.has(h) ? handlerOf(`${name}.${h}()`, inner) : undefined);
+    const hooks = Object.fromEntries((['init:ngOnInit', 'doCheck:ngDoCheck', 'destroy:ngOnDestroy', 'afterContentInit:ngAfterContentInit', 'afterContentChecked:ngAfterContentChecked', 'afterViewInit:ngAfterViewInit', 'afterViewChecked:ngAfterViewChecked'] as const).flatMap((e) => {
+      const [field, h] = e.split(':');
+      const m = hook(h);
+      return m ? [[field, m]] : [];
+    }));
+    return { name, make, inputs, listeners, bindings, ...hooks, ...(d.hooks.has('ngOnChanges') ? { changes: true } : {}), attributes: d.attributes };
+  };
+
+  /** A function or class of the build's Angular runtime module, imported into the component's file under a name of its own. */
+  const fromRuntime = (name: string): string => {
+    usesRuntime = true;
+    const from = options.runtimeModule ?? RUNTIME;
+    const names = imported.get(from) ?? new Map<string, string>();
+    imported.set(from, names);
+    if (!names.has(name)) names.set(name, `$Ng_${name}`);
+    return names.get(name)!;
+  };
+  /**
+   * An element's static `class` and `[class.x]` toggles as one bound `class` from the runtime's ngClassNames. With NgClass (`[ngClass]` or
+   * `ngClass="a b"`), the runtime's NgClass directive, returned, which takes all three; on a component, whose root
+   * view it can't host, one bound `class` from the runtime's ngClassNames.
+   */
+  const classAttr = (n: ng.TmplAstElement, attrs: Attr[], loops: Loop[], ngClass: ng.TmplAstBoundAttribute | ng.TmplAstTextAttribute | undefined, shared = false): DirectiveUse | null => {
+    const toggles = n.inputs.filter((i) => i.type === ng.BindingType.Class);
+    if (!toggles.length && !ngClass) return null;
+    at((ngClass ?? toggles[0]).sourceSpan);
+    const fixed = attrs.findIndex((a) => a.name === 'class');
+    const base = fixed >= 0 ? (attrs.splice(fixed, 1)[0] as { value?: string }).value ?? '' : '';
+    const pairs = toggles.flatMap((t) => [JSON.stringify(t.name), `(${code(t.value, loops)})`]);
+    // Beside the forms runtime's ng-* classes the toggles go through NgClass, which keeps the classes they share.
+    if (!ngClass && !shared) {
+      attrs.push({ name: 'class', method: expr(`${fromRuntime('ngClassNames')}(${JSON.stringify(base)}, null, [${pairs.join(', ')}])`, loops) });
+      return null;
+    }
+    if (n.inputs.some((i) => i.name === 'class' && i.type === ng.BindingType.Property)) throw new Error(`${path}: [class] beside [ngClass] on <${n.name}> is not supported in a release build yet`);
+    const value = ngClass instanceof ng.TmplAstBoundAttribute ? code(ngClass.value, loops) : ngClass ? JSON.stringify(ngClass.value) : 'null';
+    if (selectors.has(n.name)) {
+      attrs.push({ name: 'class', method: expr(`${fromRuntime('ngClassNames')}(${JSON.stringify(base)}, ${value}, [${pairs.join(', ')}])`, loops) });
+      return null;
+    }
+    const alias = fromRuntime('NgClass');
+    const name = `$d${directiveCount++}`;
+    const inner = [...loops, { item: name, param: `${name}: ${alias}` }];
+    return {
+      name,
+      make: expr(`new ${alias}()`, loops),
+      inputs: [{ set: handlerOf(`${name}.apply($v)`, [...inner, { item: '$v', param: '$v: any' }]), method: expr(`[${JSON.stringify(base)}, ${value}, [${pairs.join(', ')}]] as any[]`, loops, true) }],
+      listeners: [],
+      bindings: [],
+      attributes: [],
+    };
+  };
+  /**
+   * `[ngStyle]`, or an element's `[style.x]` bindings as one NgStyle object (each set by the renderer's setStyle, removed
+   * when null), as the runtime's NgStyle directive on the element. A static `style` moves into the first, set before its
+   * first styles, as Angular sets the attribute when it makes the element.
+   */
+  const styleBindings = (n: ng.TmplAstElement) => n.inputs.filter((i) => i.type === ng.BindingType.Style && i.name !== 'style');
+  // Angular's parser namespaces a bound CSS variable (`--%NS%gap`) for view encapsulation, which NativeScript's styles don't have.
+  const styleKey = (i: ng.TmplAstBoundAttribute) => JSON.stringify(i.name.replace(/^--%NS%/, '--') + (i.unit ? `.${i.unit}` : ''));
+  const styleBindingsUse = (bound: ng.TmplAstBoundAttribute[], attrs: Attr[], loops: Loop[]): DirectiveUse =>
+    ngStyleUse(bound[0], `{ ${bound.map((i) => `${styleKey(i)}: (${code(i.value, loops)})`).join(', ')} }`, attrs, loops);
+  const ngStyleUse = (b: ng.TmplAstBoundAttribute, value: string, attrs: Attr[], loops: Loop[]): DirectiveUse => {
+    at(b.sourceSpan);
+    const alias = fromRuntime('NgStyle');
+    usesUnset = true;
+    const name = `$d${directiveCount++}`;
+    const inner = [...loops, { item: name, param: `${name}: ${alias}` }];
+    const fixed = attrs.findIndex((a) => a.name === 'style' && 'value' in a);
+    const attributes = fixed >= 0 ? [attrs.splice(fixed, 1)[0] as { name: string; value: string }] : [];
+    return {
+      name,
+      make: expr(`new ${alias}($unsetValue)`, loops),
+      inputs: [{ set: handlerOf(`${name}.apply($v)`, [...inner, { item: '$v', param: '$v: any' }]), method: expr(`[${value}] as any[]`, loops, true) }],
+      listeners: [],
+      bindings: [],
+      attributes,
+    };
+  };
+
+  /** The expressions a node evaluates in the view it is in (its children's are theirs): where its pipes are. */
+  const ownExpressions = (n: ng.TmplAstNode): ng.AST[] => {
+    if (n instanceof ng.TmplAstElement) {
+      if (!selectors.has(n.name) && stubbedElement(n.name)) return n.inputs.filter((i) => STUB_LAYOUT_ATTRS.has(i.name) || i.type === ng.BindingType.Class || i.type === ng.BindingType.Style || i.name === 'ngClass' || i.name === 'ngStyle').map((i) => i.value);
+      return [...n.inputs.map((i) => i.value), ...n.children.flatMap((c) => (c instanceof ng.TmplAstBoundText ? [c.value] : []))];
+    }
+    // `*ngFor` on an element: the element's own inputs are the template's, evaluated in each view it renders.
+    if (n instanceof ng.TmplAstTemplate) return [...n.templateAttrs, ...(n.tagName === 'ng-template' ? n.inputs : [])].flatMap((a) => (a instanceof ng.TmplAstBoundAttribute ? [a.value] : []));
+    if (n instanceof ng.TmplAstIfBlock) return n.branches.flatMap((b) => (b.expression ? [b.expression] : []));
+    if (n instanceof ng.TmplAstForLoopBlock) return [n.expression];
+    if (n instanceof ng.TmplAstSwitchBlock) return [n.expression, ...n.groups.flatMap((g) => g.cases.flatMap((c) => (c.expression ? [c.expression] : [])))];
+    return [];
+  };
+
+  /**
+   * The directives of @angular/forms, @angular/common and @angular/router an element's bindings, attributes and outputs
+   * select, and events of a global target or an animation, none of which a release build runs: `taken` names those
+   * that select an app directive or a hosted component instead.
+   */
+  const refuseUnbound = (n: ng.TmplAstElement, taken: (name: string) => boolean) => {
+    const written = [
+      ...n.inputs.map((i) => ({ name: i.name, as: i.type === ng.BindingType.TwoWay ? `[(${i.name})]` : i.type === ng.BindingType.Property ? `[${i.name}]` : null })),
+      ...n.attributes.map((a) => ({ name: a.name, as: a.name })),
+      ...n.outputs.filter((o) => o.type === ng.ParsedEventType.Regular && !o.target).map((o) => ({ name: o.name, as: `(${o.name})` })),
+    ];
+    for (const w of written) {
+      const what = FORMS_DIRECTIVES.has(w.name) ? '@angular/forms' : UNSUPPORTED_DIRECTIVES[w.name];
+      if (w.as && what && !taken(w.name)) throw new Error(`${path}: ${w.as} (${what}) on <${n.name}> is not supported in a release build yet`);
+    }
+    for (const o of n.outputs) {
+      if (o.type === ng.ParsedEventType.LegacyAnimation) throw new Error(`${path}: the animation event (@${o.name}${o.phase ? `.${o.phase}` : ''}) on <${n.name}> is not supported in a release build yet`);
+      if (o.type === ng.ParsedEventType.Animation) throw new Error(`${path}: the animation event (${o.name}) on <${n.name}> is not supported in a release build yet`);
+      if (o.target) throw new Error(`${path}: (${o.target}:${o.name}), an event of the ${o.target}, on <${n.name}> is not supported in a release build yet`);
+    }
+  };
+
+  // ---- @angular/forms ----
+  /** A forms directive's class, imported into the component's file from @angular/forms (the build's forms runtime). */
+  const fromForms = (name: string): string => {
+    const names = imported.get('@angular/forms') ?? new Map<string, string>();
+    imported.set('@angular/forms', names);
+    if (!names.has(name)) names.set(name, `$F_${name}`);
+    return names.get(name)!;
+  };
+  const formsMatcher = new ng.SelectorMatcher<FormsDirective>();
+  for (const [d, selector] of FORMS_SELECTORS) formsMatcher.addSelectables(ng.CssSelector.parse(selector), d);
+  /** The forms directives an element selects, in the order Angular runs them, as its selectors match. */
+  const formsMatched = (n: ng.TmplAstElement): FormsDirective[] => {
+    const css = new ng.CssSelector();
+    css.setElement(n.name);
+    for (const a of n.attributes) css.addAttribute(a.name, a.value);
+    for (const b of [...n.inputs.map((i) => i.name), ...n.outputs.map((o) => o.name)]) css.addAttribute(b, '');
+    const found = new Set<FormsDirective>();
+    formsMatcher.match(css, (_s, d) => { found.add(d); });
+    return FORMS_SELECTORS.map(([d]) => d).filter((d) => found.has(d));
+  };
+  /** The form directives around the element being compiled, innermost last: what Angular injects as its ControlContainer. */
+  const formContainers: { kind: FormsDirective; name: string }[] = [];
+  /** A member of the component holding a writable signal (`name = signal('')`): `[(ngModel)]` sets it, as Angular's two-way binding does. */
+  const signalMember = (name: string) => cls.members.some((m) => ts.isPropertyDeclaration(m) && m.name.getText() === name
+    && ((!!m.initializer && ts.isCallExpression(m.initializer) && /^(signal|model(\.required)?|linkedSignal)$/.test(m.initializer.expression.getText()))
+      || (!!m.type && /^(WritableSignal|ModelSignal)\b/.test(m.type.getText()))));
+  /**
+   * The forms directives an element selects, as directive uses after its others: its @nativescript/angular value
+   * accessor, validator directives, NgModel, FormControlDirective or FormControlName, form or group directive, and
+   * NgControlStatus or NgControlStatusGroup. Each is made with what Angular's injector gives it, the form directive
+   * above it found from the template, and each is in scope for what the template compiles after it (`scope`), which
+   * is how the directives below it reach a form directive and a template reference names one. Null when it selects none.
+   */
+  const formsUses = (n: ng.TmplAstElement, loops: Loop[]) => {
+    // A directive whose module the component doesn't import isn't Angular's on this element: its name is left to the
+    // element's other directives, else refused as a binding nothing takes.
+    const templateDriven = inScope.has('FormsModule') || inScope.has('NativeScriptFormsModule');
+    const reactive = inScope.has('ReactiveFormsModule');
+    const found = formsMatched(n).filter((d) => (FORMS_TEMPLATE_DRIVEN.has(d) ? templateDriven : FORMS_VALIDATORS[d] || d === 'DefaultValueAccessor' ? templateDriven || reactive : reactive));
+    if (!found.some((d) => FORMS_CONTROLS.has(d) || FORMS_CONTAINERS.has(d) || d === 'DefaultValueAccessor')) return null;
+    const where = `on <${n.name}>`;
+    const writes = (name: string) => n.inputs.find((i) => i.name === name && (i.type === ng.BindingType.Property || i.type === ng.BindingType.TwoWay)) ?? n.attributes.find((a) => a.name === name);
+    /** The input or attribute that selects a directive. */
+    const trigger = (d: FormsDirective) => d === 'NgModel' ? 'ngModel' : d === 'FormControlDirective' ? 'formControl' : d === 'FormControlName' ? 'formControlName' : d === 'NgForm' ? 'ngForm' : d === 'FormGroupDirective' ? 'formGroup'
+      : d === 'FormArrayDirective' ? 'formArray' : d === 'FormGroupName' ? 'formGroupName' : d === 'FormArrayName' ? 'formArrayName' : d === 'NgModelGroup' ? 'ngModelGroup' : FORMS_VALIDATORS[d] ?? '';
+    const describe = (d: FormsDirective) => {
+      const w = writes(trigger(d));
+      return !w ? d : w instanceof ng.TmplAstTextAttribute ? w.name : w.type === ng.BindingType.TwoWay ? `[(${w.name})]` : `[${w.name}]`;
+    };
+    if (found.includes('DefaultValueAccessor')) throw new Error(`${path}: ngDefaultControl (@angular/forms' DefaultValueAccessor, which writes an HTML input's value) ${where} is not supported in a release build yet`);
+    if (selectors.has(n.name) || hostedBy(n)) throw new Error(`${path}: ${describe(found.find((d) => !FORMS_VALIDATORS[d]) ?? found[0])} (@angular/forms) ${where}, a component, is not supported in a release build yet: it needs the component's own ControlValueAccessor (NG_VALUE_ACCESSOR)`);
+    const controls = found.filter((d) => FORMS_CONTROLS.has(d));
+    const containers = found.filter((d) => FORMS_CONTAINERS.has(d));
+    if (controls.length > 1 || containers.length > 1) throw new Error(`${path}: ${[...controls, ...containers].map(describe).join(' and ')} together ${where} are not supported in a release build yet`);
+    const control = controls[0];
+    const container = containers[0];
+    const parent = formContainers.at(-1);
+    const consumedInputs = new Set<string>(found.map(trigger));
+    if (n.inputs.some((i) => i.name === 'class' && i.type === ng.BindingType.Property)) throw new Error(`${path}: [class] beside ${describe(found[0])} ${where} is not supported in a release build yet: it would replace the ng-* classes`);
+    const consumedOutputs = new Set<ng.TmplAstBoundEvent>();
+    const refs = new Set<string>();
+    const uses: DirectiveUse[] = [];
+    let scope = loops;
+    /** The code of an input's value: its binding's, its attribute's (a string), else undefined. */
+    const value = (name: string) => {
+      const w = writes(name);
+      if (!w) return 'undefined';
+      consumedInputs.add(name);
+      return w instanceof ng.TmplAstTextAttribute ? JSON.stringify(w.value) : `(${code(w.value, loops)})`;
+    };
+    const bound = (...names: string[]) => `[${names.map((x) => String(!!writes(x))).join(', ')}]`;
+    const use = (kind: FormsDirective | 'accessor' | 'status', className: string, args: (self: string) => string, extra: (self: string, inner: Loop[]) => Partial<DirectiveUse> = () => ({})) => {
+      const alias = fromForms(className);
+      const name = `$d${directiveCount++}`;
+      // A template reference to it by its exportAs (`#f="ngForm"`) names it wherever it is in scope, its own bindings too.
+      const named = n.references.filter((r) => kind !== 'accessor' && kind !== 'status' && !!r.value && FORMS_EXPORT_AS[kind] === r.value);
+      for (const r of named) refs.add(r.name);
+      const loop: Loop = { item: name, param: `${name}: ${alias}`, ...(named.length ? { names: Object.fromEntries(named.map((r) => [r.name, name])) } : {}) };
+      const inner = [...scope, loop];
+      const u: DirectiveUse = { name, make: expr(`new ${alias}(${args(name)})`, scope), inputs: [], listeners: [], bindings: [], attributes: [], exposed: true, ...extra(name, inner) };
+      uses.push(u);
+      scope = inner;
+      return name;
+    };
+    const applies = (values: string[], self: string, inner: Loop[], before: Loop[]) => [{ set: handlerOf(`${self}.apply($v)`, [...inner, { item: '$v', param: '$v: any' }]), method: expr(`[${values.join(', ')}] as any[]`, before, true) }];
+    /** The handlers of the template's `(output)` and `[(input)]` bindings, on the directive's emitter `emitter`. */
+    const outputs = (output: string, emitter: string, inner: Loop[]) => n.outputs.filter((o) => o.name === output).map((o) => {
+      at(o.sourceSpan);
+      consumedOutputs.add(o);
+      const target = code(o.handler, loops);
+      const statement = o.type !== ng.ParsedEventType.TwoWay ? target : /^[A-Za-z_$][\w$]*$/.test(target) && signalMember(target) ? `${target}.set($event)` : `${target} = $event`;
+      return { name: emitter, method: handler(statement, inner, true) };
+    });
+    const unset = () => {
+      usesUnset = true;
+      return '$unsetValue';
+    };
+    // The value accessor and the validator directives a control's directive is given.
+    let accessorName: string | null = null;
+    const validatorNames: string[] = [];
+    if (control) {
+      const tag = core.canonical(n.name);
+      const accessor = FORMS_ACCESSORS[tag];
+      const name = control === 'NgModel' ? 'ngModel' : control === 'FormControlName' ? 'formControlName' : 'formControl';
+      const viaAccessor = accessor && (inScope.has('NativeScriptFormsModule') || inScope.has(accessor.accessor));
+      if (!viaAccessor) {
+        throw new Error(`${path}: ${describe(control)} ${where}: NG01203: No value accessor for form control ${control === 'FormControlName' ? `name: '${writes(name) instanceof ng.TmplAstTextAttribute ? (writes(name) as ng.TmplAstTextAttribute).value : ''}'` : 'unspecified name attribute'}. ${accessor ? `<${n.name}>'s accessor is @nativescript/angular's ${accessor.accessor}: import NativeScriptFormsModule` : `@nativescript/angular's value accessors take ${Object.keys(FORMS_ACCESSORS).join(', ')}; a component's own (NG_VALUE_ACCESSOR) is not supported in a release build yet`}`);
+      }
+      accessorName = use('accessor', 'NsValueAccessor', () => `${fromRuntime('hostView')}(), ${JSON.stringify(accessor.kind)}, ${unset()}`, (self, inner) => ({
+        listeners: [
+          { event: accessor.event, method: handlerOf(`${self}.onChange($event.value)`, [...inner, { item: '$event', param: '$event: any' }]) },
+          ...(accessor.kind === 'text' ? [{ event: 'blur', method: handlerOf(`${self}.onTouched()`, [...inner, { item: '$event', param: '$event: any' }]) }] : []),
+        ],
+        ...(accessor.kind === 'selectedIndex' ? { afterViewInit: handlerOf(`${self}.ngAfterViewInit()`, inner) } : {}),
+      }));
+      for (const d of found) {
+        const input = FORMS_VALIDATORS[d];
+        if (!input) continue;
+        const before = scope;
+        validatorNames.push(use(d, d, () => 'true', (self, inner) => ({ inputs: applies([value(input)], self, inner, before) })));
+      }
+    }
+    const validators = `[${validatorNames.join(', ')}]`;
+    /** The structural rules Angular checks when the directives are made, as build errors (its messages). */
+    const parentKind = parent?.kind;
+    if (control === 'FormControlName' && (!parentKind || !FORMS_REACTIVE_PARENTS.has(parentKind))) {
+      if (parentKind === 'NgModelGroup' || parentKind === 'NgForm') throw new Error(`${path}: formControlName ${where}: NG01051: formControlName cannot be used with an ngModelGroup parent. It is only compatible with parents that also have a "form" prefix: formGroupName, formArrayName, or formGroup.`);
+      throw new Error(`${path}: formControlName ${where}: NG01050: formControlName must be used with a parent formGroup or formArray directive. You'll want to add a formGroup/formArray directive and pass it an existing FormGroup/FormArray instance (you can create one in your class).`);
+    }
+    if ((container === 'FormGroupName' || container === 'FormArrayName') && (!parentKind || !FORMS_REACTIVE_PARENTS.has(parentKind))) {
+      throw new Error(`${path}: ${describe(container)} ${where}: NG0105${container === 'FormGroupName' ? '3' : '4'}: ${container === 'FormGroupName' ? 'formGroupName' : 'formArrayName'} must be used with a parent formGroup directive.  You'll want to add a formGroup directive and pass it an existing FormGroup instance (you can create one in your class).`);
+    }
+    if (container === 'NgModelGroup' && parentKind !== 'NgForm' && parentKind !== 'NgModelGroup') {
+      throw new Error(`${path}: ngModelGroup ${where}: NG01353: ngModelGroup ${parentKind ? 'cannot be used with a parent formGroup directive' : 'must be used inside an ngForm'}.`);
+    }
+    const ngModelOptions = writes('ngModelOptions');
+    const standalone = !!ngModelOptions && ngModelOptions instanceof ng.TmplAstBoundAttribute && /\bstandalone\s*:\s*true\b/.test(code(ngModelOptions.value, loops));
+    if (control === 'NgModel' && parentKind && FORMS_REACTIVE_PARENTS.has(parentKind) && !standalone) {
+      throw new Error(`${path}: ngModel ${where}: NG0135${parentKind === 'FormGroupDirective' || parentKind === 'FormArrayDirective' ? '0' : '1'}: ngModel cannot be used to register form controls with a parent ${parentKind === 'FormGroupDirective' || parentKind === 'FormArrayDirective' ? 'formGroup' : 'formGroupName or formArrayName'} directive. Use formControlName, or indicate that it's standalone in ngModelOptions.`);
+    }
+    if (control === 'NgModel' && parentKind && !FORMS_REACTIVE_PARENTS.has(parentKind) && !writes('name') && !ngModelOptions) {
+      throw new Error(`${path}: ngModel ${where}: NG01352: If ngModel is used within a form tag, either the name attribute must be set or the form control must be defined as 'standalone' in ngModelOptions.`);
+    }
+    const parentRef = control === 'NgModel' && standalone ? 'null' : parent ? parent.name : 'null';
+    let controlName: string | null = null;
+    if (control) {
+      const before = scope;
+      const acc = accessorName!;
+      if (control === 'NgModel') {
+        controlName = use('NgModel', 'NgModel', () => `${parentRef}, ${validators}, [], ${acc}, ${fromRuntime('viewChecker')}(), ${bound('ngModel', 'name', 'ngModelOptions', 'disabled')}`, (self, inner) => ({
+          inputs: applies([value('ngModel'), value('name'), value('ngModelOptions'), value('disabled')], self, inner, before),
+          outputs: outputs('ngModelChange', 'update', inner),
+          destroy: handlerOf(`${self}.ngOnDestroy()`, inner),
+        }));
+      } else if (control === 'FormControlDirective') {
+        consumedInputs.add('disabled');
+        controlName = use(control, 'FormControlDirective', () => `${validators}, [], ${acc}, 'always', ${bound('formControl', 'ngModel')}`, (self, inner) => ({
+          inputs: applies([value('formControl'), value('ngModel')], self, inner, before),
+          outputs: outputs('ngModelChange', 'update', inner),
+          destroy: handlerOf(`${self}.ngOnDestroy()`, inner),
+        }));
+      } else {
+        consumedInputs.add('disabled');
+        controlName = use(control, 'FormControlName', () => `${parent!.name}, ${validators}, [], ${acc}, ${bound('formControlName', 'ngModel')}`, (self, inner) => ({
+          inputs: applies([value('formControlName'), value('ngModel')], self, inner, before),
+          outputs: outputs('ngModelChange', 'update', inner),
+          destroy: handlerOf(`${self}.ngOnDestroy()`, inner),
+        }));
+      }
+    }
+    let containerName: string | null = null;
+    if (container) {
+      const before = scope;
+      if (container === 'NgForm') {
+        containerName = use(container, 'NgForm', () => `[], [], 'always', ${bound('ngFormOptions')}`, (self, inner) => ({
+          inputs: applies([value('ngFormOptions')], self, inner, before),
+          outputs: outputs('ngSubmit', 'ngSubmit', inner),
+          afterViewInit: handlerOf(`${self}.ngAfterViewInit()`, inner),
+        }));
+      } else if (container === 'FormGroupDirective' || container === 'FormArrayDirective') {
+        const input = container === 'FormGroupDirective' ? 'formGroup' : 'formArray';
+        containerName = use(container, container, () => `[], [], 'always', ${JSON.stringify(input)}, ${bound(input)}`, (self, inner) => ({
+          inputs: applies([value(input)], self, inner, before),
+          outputs: outputs('ngSubmit', 'ngSubmit', inner),
+          destroy: handlerOf(`${self}.ngOnDestroy()`, inner),
+        }));
+      } else {
+        const input = container === 'NgModelGroup' ? 'ngModelGroup' : container === 'FormGroupName' ? 'formGroupName' : 'formArrayName';
+        containerName = use(container, container, () => `${parent!.name}, [], [], ${container === 'FormArrayName'}, ${bound(input)}`, (self, inner) => ({
+          inputs: applies([value(input)], self, inner, before),
+          init: handlerOf(`${self}.ngOnInit()`, inner),
+          destroy: handlerOf(`${self}.ngOnDestroy()`, inner),
+        }));
+      }
+    }
+    // NgControlStatus and NgControlStatusGroup: the ng-* classes, checked with the view.
+    const statusOf = controlName ?? containerName;
+    if (statusOf) {
+      use('status', 'NgControlStatus', () => `${fromRuntime('hostView')}(), ${fromRuntime('viewChecker')}(), ${statusOf}, ${!controlName}`, (self, inner) => ({
+        inputs: [{ set: handlerOf(`${self}.check()`, [...inner, { item: '$v', param: '$v: any' }]), method: expr('[] as any[]', inner.slice(0, -1), true) }],
+        destroy: handlerOf(`${self}.destroy()`, inner),
+      }));
+    }
+    return { uses, scope, consumedInputs, consumedOutputs, refs, container: containerName ? { kind: container!, name: containerName } : null, status: !!statusOf };
+  };
+
+  const nodes = (list: ng.TmplAstNode[], loops: Loop[]): TNode[] => {
+    const out: TNode[] = [];
+    for (let k = 0; k < list.length; k++) {
+      const n = list[k];
+      if (n instanceof ng.TmplAstLetDeclaration) {
+        at(n.sourceSpan);
+        // `@let name = expression`: a slot of the view, the rest of the block in its scope reading `name` from it. A pipe
+        // in it is one per view.
+        const piped = withPipes([n.value], loops);
+        const value = expr(code(n.value, piped.loops), piped.loops);
+        const slot = `$l${lets++}`;
+        const inner = [...piped.loops, { item: slot, param: `${slot} = $LetSlot.of(this.${value}(${args(piped.loops)}))`, names: { [n.name]: `${slot}.value` } }];
+        // Angular reaches a `@let` as a bound node (`ɵɵadvance`), running the hooks before it, where it keeps its value in
+        // the view for an embedded view or a listener, or its expression holds a pipe.
+        const afterHooks = piped.loops !== loops || readAway(n.name, list.slice(k + 1));
+        out.push(...piped.wrap([{ kind: 'let', name: slot, value, ...(afterHooks ? { afterHooks } : {}), body: nodes(list.slice(k + 1), inner) }]));
+        break;
+      }
+      const piped = withPipes(ownExpressions(n), loops);
+      if (piped.loops !== loops) {
+        out.push(...piped.wrap(nodes([n], piped.loops)));
+        continue;
+      }
+      if (n instanceof ng.TmplAstElement && !selectors.has(n.name) && PLATFORM_FILTERS[n.name]) {
+        at(n.startSourceSpan);
+        // @nativescript/angular's AndroidFilterComponent and its kin: `@if (show) { <ng-content> }` in a ProxyViewContainer.
+        if (n.attributes.length || n.inputs.length || n.outputs.length || n.references.length) throw new Error(`${path}: <${n.name}> takes no attributes or bindings in a release build`);
+        if (PLATFORM_FILTERS[n.name].includes(options.platform ?? 'ios')) out.push(...nodes(n.children, loops));
+        continue;
+      }
+      if (n instanceof ng.TmplAstElement && n.name === 'ng-container') {
+        at(n.startSourceSpan);
+        out.push(...container(n, loops));
+        continue;
+      }
+      if (n instanceof ng.TmplAstElement && !selectors.has(n.name) && stubbedElement(n.name)) {
+        at(n.startSourceSpan);
+        const attrs: Attr[] = [];
+        for (const a of n.attributes) if (STUB_LAYOUT_ATTRS.has(a.name)) attrs.push({ name: a.name, value: a.value });
+        const classed = classAttr(n, attrs, loops, n.inputs.find((i) => i.name === 'ngClass' && i.type === ng.BindingType.Property) ?? n.attributes.find((a) => a.name === 'ngClass'));
+        const styled = n.inputs.find((i) => i.name === 'ngStyle' && i.type === ng.BindingType.Property);
+        const stubDirectives = [...(classed ? [classed] : []), ...(styled ? [ngStyleUse(styled, code(styled.value, loops), attrs, loops)] : [])];
+        if (styleBindings(n).length) stubDirectives.push(styleBindingsUse(styleBindings(n), attrs, loops));
+        for (const i of n.inputs) {
+          if (i.type === ng.BindingType.Class || i.type === ng.BindingType.Style) continue;
+          if ((i.type === ng.BindingType.Property || i.type === ng.BindingType.Attribute) && STUB_LAYOUT_ATTRS.has(i.name)) {
+            at(i.sourceSpan);
+            const root = i.value instanceof ng.ASTWithSource ? i.value.ast : i.value;
+            const chained = root instanceof ng.SafePropertyRead || root instanceof ng.SafeKeyedRead || root instanceof ng.SafeCall;
+            attrs.push({ name: i.name, method: expr(code(i.value, loops), loops, chained) });
+          }
+        }
+        const refs = n.references.map((r) => r.name);
+        const hooks = queryHooks(refs, null, 'ContentView', loops);
+        const statics = hooks.length ? queries.filter((q) => q.static && q.ref && refs.includes(q.ref) && staticRefs.has(q.ref)) : [];
+        for (const q of statics) staticQueries.delete(q);
+        const late = statics.length > 0 && staticQueries.size === 0;
+        out.push({ kind: 'element', tag: 'ContentView', attrs, events: [], children: [], ...(hooks.length ? { queries: hooks } : {}), ...(late ? { init: true } : {}), ...(stubDirectives.length ? { directives: stubDirectives } : {}) });
+        if (late) lateInit = true;
+        continue;
+      }
+      if (n instanceof ng.TmplAstElement) {
+        at(n.startSourceSpan);
+        const attrs: Attr[] = [];
+        const events: Event[] = [];
+        // A ListView, or a plugin view taking item templates (`<Pager>` with `<ng-template let-item>`), renders rows from templates.
+        const isList = core.canonical(n.name) === 'ListView' || (n.inputs.some((i) => i.name === 'items') && n.children.some((c) => c instanceof ng.TmplAstTemplate && c.tagName === 'ng-template' && c.variables.length > 0));
+        // The component an attribute selects renders its template into the element; its inputs and outputs are bound
+        // on it, the element's properties and events beside them.
+        const hosted = selectors.has(n.name) ? undefined : hostedBy(n);
+        const hostProps: Attr[] = [];
+        const hostEvents: Event[] = [];
+        if (hosted) {
+          const unsupported = (what: string) => new Error(`${path}: ${what} on <${n.name}>, the host of ${hosted.name}, is not supported in a release build yet`);
+          if (hosted.readsHost) throw unsupported(`${hosted.name}'s own ElementRef or host bindings`);
+          if (isList) throw unsupported('item templates');
+          if (n.children.some((c) => !(c instanceof ng.TmplAstText) || c.value.trim())) throw unsupported('content');
+          for (const i of n.inputs) if (hosted.inputs.has(i.name) && i.type === ng.BindingType.TwoWay) throw unsupported(`[(${i.name})]`);
+          for (const o of n.outputs) if (hosted.models.has(o.name.replace(/Change$/, ''))) throw unsupported(`(${o.name})`);
+        }
+        // @angular/forms' directives, made after the element's others: what the template compiles after each reads it.
+        const forms = formsUses(n, loops);
+        const scoped = forms?.scope ?? loops;
+        const link = routerLink(n, scoped);
+        if (link) events.push(link);
+        const found = matched(n.name, n.attributes.map((a) => [a.name, a.value]), [...n.inputs.map((i) => i.name), ...n.outputs.map((o) => o.name)]);
+        // An app directive or the hosted component taking NgClass's or NgStyle's input name is what that binding sets.
+        const appOwns = (name: string) => found.some((d) => d.inputs.has(name)) || !!hosted?.inputs.has(name);
+        for (const a of n.attributes) {
+          if (link && ROUTER_LINK_INPUTS.has(a.name)) continue;
+          if (a.name === 'ngClass' && !appOwns('ngClass')) continue;
+          // A static attribute is the element's too, as Angular writes every one to its host.
+          attrs.push({ name: a.name, value: a.value });
+          if (hosted?.inputs.has(a.name)) hostProps.push({ name: a.name, value: a.value });
+        }
+        for (const c of n.children) {
+          if (c instanceof ng.TmplAstText && c.value.trim()) attrs.push({ name: 'text', value: c.value });
+          if (c instanceof ng.TmplAstBoundText) {
+            at(c.sourceSpan);
+            attrs.push({ name: 'text', method: expr(code(c.value, scoped), scoped) });
+          }
+        }
+        // The static classes, `[class.on]="cond"` toggles and NgClass: one bound `class` naming them all.
+        const ngClass = appOwns('ngClass') ? undefined : n.inputs.find((i) => i.name === 'ngClass' && i.type === ng.BindingType.Property) ?? n.attributes.find((a) => a.name === 'ngClass');
+        const ngClassUse = classAttr(n, attrs, loops, ngClass, !!forms?.status);
+        const ngStyle = appOwns('ngStyle') || selectors.has(n.name) ? undefined : n.inputs.find((i) => i.name === 'ngStyle' && i.type === ng.BindingType.Property);
+        // NgSwitch on any element: the cases below it, in its subtree, compare with its value.
+        const switched = n.inputs.find((i) => i.name === 'ngSwitch');
+        if (found.length && selectors.has(n.name)) throw new Error(`${path}: the directive ${found[0].className} on the component <${n.name}> is not supported in a release build yet`);
+        const consumed = new Set<string>();
+        const directives = found.map((d) => {
+          if (d.structural) throw new Error(`${path}: the structural directive ${d.className} without its template (*) is not supported in a release build yet`);
+          return directiveUse(d, n, loops, consumed);
+        });
+        refuseUnbound(n, (name) => found.some((d) => d.inputs.has(name)) || !!hosted?.inputs.has(name) || !!hosted?.outputs.has(name) || (name === 'ngClass' && !!ngClass) || (name === 'ngStyle' && !!ngStyle)
+          || !!forms?.consumedInputs.has(name) || [...(forms?.consumedOutputs ?? [])].some((o) => o.name === name));
+        if (ngClassUse) directives.push(ngClassUse);
+        if (ngStyle) directives.push(ngStyleUse(ngStyle, code(ngStyle.value, loops), attrs, loops));
+        if (!selectors.has(n.name) && styleBindings(n).length) directives.push(styleBindingsUse(styleBindings(n), attrs, loops));
+        if (forms) directives.push(...forms.uses);
+        if (!selectors.has(n.name) && !hosted) {
+          const ref = n.references.find((r) => r.value && !forms?.refs.has(r.name));
+          if (ref) throw new Error(`${path}: #${ref.name}="${ref.value}" on <${n.name}>, a reference to a directive's exportAs, is not supported in a release build yet`);
+        }
+        for (const i of n.inputs) {
+          if (i === switched || i === ngClass || i === ngStyle || consumed.has(i.name) || forms?.consumedInputs.has(i.name) || i.type === ng.BindingType.Class || (isList && i.name === 'itemTemplateSelector') || (link && ROUTER_LINK_INPUTS.has(i.name))) continue;
+          at(i.sourceSpan);
+          if (hosted?.inputs.has(i.name) && i.type === ng.BindingType.Property) {
+            hostProps.push({ name: i.name, method: expr(code(i.value, scoped), scoped) });
+            continue;
+          }
+          if (i.type === ng.BindingType.Style && i.name !== 'style' && !selectors.has(n.name)) continue;
+          // `[attr.name]`: the renderer's setAttribute, which on a NativeScript view sets the property of that name.
+          if (i.type === ng.BindingType.Attribute && !selectors.has(n.name)) {
+            attrs.push({ name: i.name, method: expr(code(i.value, scoped), scoped, true) });
+            continue;
+          }
+          if (i.type !== ng.BindingType.Property && i.type !== ng.BindingType.TwoWay) throw new Error(`${path}: the [${ng.BindingType[i.type].toLowerCase()}.${i.name}] binding is not supported in a release build yet`);
+          // `[text]="person()?.name"`: the view takes undefined where the chain stops, as the renderer passes it, whatever the type says.
+          const root = i.value instanceof ng.ASTWithSource ? i.value.ast : i.value;
+          const chained = i.type === ng.BindingType.Property && !selectors.has(n.name) && (root instanceof ng.SafePropertyRead || root instanceof ng.SafeKeyedRead || root instanceof ng.SafeCall);
+          attrs.push({ name: i.name, method: expr(code(i.value, scoped), scoped, chained) });
+        }
+        for (const o of n.outputs) {
+          if (forms?.consumedOutputs.has(o)) continue;
+          at(o.sourceSpan);
+          if (hosted?.outputs.has(o.name)) {
+            hostEvents.push({ name: o.name, method: handler(code(o.handler, scoped), scoped, true), payload: true });
+            continue;
+          }
+          events.push({ name: o.name, method: handler(code(o.handler, scoped), scoped, selectors.has(n.name)), ...(selectors.has(n.name) ? { payload: true } : {}) });
+        }
+        const component = selectors.get(n.name);
+        const refs = n.references.map((r) => r.name);
+        if (component) {
+          const hooks = queryHooks(refs, component, null, loops);
+          out.push({ kind: 'component', name: component, props: attrs, events, ...(hooks.length ? { queries: hooks } : {}) });
+          continue;
+        }
+        if (n.name === 'page-router-outlet') {
+          // The outlet's Frame takes its name, and the static attributes @nativescript/angular sets on that Frame.
+          const passed = (a: ng.TmplAstTextAttribute) => a.name === 'actionBarVisibility' || a.name === 'class';
+          const other = [...n.inputs.map((i) => `[${i.name}]`), ...n.outputs.map((o) => `(${o.name})`), ...n.references.map((r) => `#${r.name}`), ...n.attributes.filter((a) => a.name !== 'name' && !passed(a)).map((a) => `${a.name}="${a.value}"`)];
+          if (other.length) throw new Error(`${path}: ${other[0]} on <page-router-outlet> is not supported in a release build yet`);
+          // `actionBarVisibility="auto"` is the Frame's default.
+          const frameAttrs = n.attributes.filter((a) => passed(a) && !(a.name === 'actionBarVisibility' && a.value === 'auto')).map((a) => ({ name: a.name, value: a.value }));
+          out.push({ kind: 'element', tag: 'Frame', attrs: [{ name: 'router', value: n.attributes.find((a) => a.name === 'name')?.value ?? 'primary' }, ...frameAttrs], events: [], children: [] });
+          continue;
+        }
+        const tag = elementOf(n.name);
+        if (!tag) throw new Error(`${path}: <${n.name}> is not a @nativescript/core element the release build knows`);
+        checkMeta(n);
+        const sections = isList && isSectioned(n);
+        // A reference on a host names its component; ElementRef and the view's class read the element.
+        const matches = queryHooks(refs.filter((r) => !forms?.refs.has(r)), hosted?.name ?? null, tag, loops);
+        const hooks = matches.filter((h) => h.on !== 'instance');
+        const own = matches.filter((h) => h.on === 'instance');
+        const below = () => (isList ? listTemplates(n, attrs, scoped) : hosted ? [{ kind: 'component' as const, name: hosted.name, props: hostProps, events: hostEvents, ...(own.length ? { queries: own } : {}) }] : nodes(n.children, scoped));
+        // A form or group directive is the ControlContainer of the forms directives below it.
+        const children = () => {
+          if (forms?.container) formContainers.push(forms.container);
+          try { return below(); } finally { if (forms?.container) formContainers.pop(); }
+        };
+        // A static query is resolved when the template's views are made, before ngOnInit: ngOnInit runs once the last element one names is.
+        const statics = matches.length ? queries.filter((q) => q.static && q.ref && refs.includes(q.ref) && staticRefs.has(q.ref)) : [];
+        for (const q of statics) staticQueries.delete(q);
+        const late = statics.length > 0 && staticQueries.size === 0;
+        out.push({ kind: 'element', tag, attrs, events, children: switched ? switching(n, switched.value, scoped, children) : children(), ...(sections ? { sections } : {}), ...(hooks.length ? { queries: hooks } : {}), ...(late ? { init: true } : {}), ...(directives.length ? { directives } : {}) });
+        if (late) lateInit = true;
+        // The nodes after it read its forms directives too (a template reference to one), as the codegen scopes them.
+        if (forms) {
+          out.push(...nodes(list.slice(k + 1), scoped));
+          break;
+        }
+        continue;
+      }
+      if (n instanceof ng.TmplAstIfBlock) {
+        out.push({ kind: 'if', branches: n.branches.map((b) => {
+          at(b.startSourceSpan);
+          // `@if (x; as y)`: y is the condition's value in the branch.
+          const alias = (b as ng.TmplAstIfBlockBranch & { expressionAlias?: ng.TmplAstVariable | null }).expressionAlias;
+          // The condition is read before its alias exists: `@if (person(); as person)` names the value of the `person` it reads.
+          const cond = b.expression ? test(code(b.expression, loops), loops) : null;
+          if (alias && b.expression) aliases.set(alias.name, core.rewrite(clean(code(b.expression, loops)), local(loops)));
+          const branch = { cond, body: nodes(b.children, loops) };
+          if (alias) aliases.delete(alias.name);
+          return branch;
+        }) });
+        continue;
+      }
+      if (n instanceof ng.TmplAstForLoopBlock) {
+        at(n.startSourceSpan);
+        const item = n.item.name;
+        // The index is a parameter of its own: nested loops each have a `$index`.
+        const index = `$i${loops.length}`;
+        const items = expr(code(n.expression, loops), loops);
+        const count = `this.${items}(${args(loops)}).length`;
+        const context: Record<string, string> = { $index: index, $count: count, $first: `(${index} === 0)`, $last: `(${index} === ${count} - 1)`, $even: `(${index} % 2 === 0)`, $odd: `(${index} % 2 !== 0)` };
+        const names: Record<string, string> = {};
+        for (const v of n.contextVariables) names[v.name] = context[v.value];
+        const loop: Loop = { item, index, param: `${item} = this.${items}(${args(loops)})[0], ${index} = 0`, names };
+        const inner = [...loops, loop];
+        out.push({ kind: 'for', items, key: expr(sourceOf(n.trackBy), inner), item, index, body: nodes(n.children, inner) });
+        if (n.empty) {
+          at(n.empty.startSourceSpan);
+          out.push({ kind: 'if', branches: [{ cond: test(`${count} === 0`, loops), body: nodes(n.empty.children, loops) }] });
+        }
+        continue;
+      }
+      if (n instanceof ng.TmplAstTemplate && n.templateAttrs.some((a) => a.name === 'tabItem')) {
+        out.push(tabItem(n, loops));
+        continue;
+      }
+      if (n instanceof ng.TmplAstTemplate) {
+        out.push(...structural(n, loops));
+        continue;
+      }
+      if (n instanceof ng.TmplAstSwitchBlock) {
+        const subject = code(n.expression, loops);
+        at(n.startSourceSpan);
+        const branches = n.groups.map((g) => {
+          const tests = g.cases.filter((c) => c.expression).map((c) => `(${subject}) === (${code(c.expression!, loops)})`);
+          return { cond: tests.length ? expr(tests.join(' || '), loops) : null, body: nodes(g.children, loops) };
+        });
+        // The default group renders when no case matches, wherever it is written.
+        out.push({ kind: 'if', branches: [...branches.filter((b) => b.cond), ...branches.filter((b) => !b.cond)] });
+        continue;
+      }
+      // Text in an element is its `text` (@nativescript/angular's renderer sets it on the parent): a template's text nodes bind there.
+      if (n instanceof ng.TmplAstText || n instanceof ng.TmplAstBoundText) continue;
+      throw new Error(`${path}: ${n.constructor.name} in a template is not supported in a release build yet`);
+    }
+    return out;
+  };
+
+  /**
+   * `<ListView [items]>` with `<ng-template let-item let-i="index" nsTemplateKey="…">` children, as
+   * @nativescript/angular's ListViewComponent renders them: the first template is also the default, and
+   * `[itemTemplateSelector]` is called with `(item, index, items)`. A `<Pager>` (@nstudio/nativescript-ui-pager's
+   * PagerComponent) is the same with `pagerTemplateKey`.
+   */
+  const listTemplates = (n: ng.TmplAstElement, attrs: Attr[], loops: Loop[]): TNode[] => {
+    const host = elementOf(n.name) ?? n.name;
+    const keyName = host === 'Pager' ? 'pagerTemplateKey' : 'nsTemplateKey';
+    const items = attrs.find((a) => a.name === 'items');
+    if (!items || !('method' in items)) throw new Error(`${path}: <${host}> needs [items]`);
+    const list = `this.${items.method}(${args(loops)})`;
+    // A sectioned ListView's items are sections (`{ title, items }`); a row's item is one of a section's.
+    const sectioned = isSectioned(n);
+    const rows = sectioned ? `${list}[0].items` : list;
+    const selector = n.inputs.find((i) => i.name === 'itemTemplateSelector');
+    if (selector) {
+      const m = `$b${next++}`;
+      const p = [params(loops), `$item = ${rows}[0]`, '$index = 0'].filter(Boolean).join(', ');
+      // Called as core calls it, with (item, index, items): a method of the component that declares fewer takes the ones it declares.
+      const name = sourceOf(selector.value).trim();
+      const member = cls.members.find((x) => (ts.isMethodDeclaration(x) || ts.isPropertyDeclaration(x)) && x.name.getText() === name);
+      // A method, or a property holding an arrow (`rowTemplate = (row) => …`): the parameters it declares.
+      const fn = member && ts.isMethodDeclaration(member) ? member : member && ts.isPropertyDeclaration(member) && member.initializer && (ts.isArrowFunction(member.initializer) || ts.isFunctionExpression(member.initializer)) ? member.initializer : undefined;
+      const given = ['$item', '$index', list].slice(0, fn ? fn.parameters.length : 3);
+      at(selector.sourceSpan);
+      add(`  ${m}(${p}): string { return ${core.rewrite(clean(sourceOf(selector.value)), local(loops))}(${given.join(', ')}); }`);
+      attrs.push({ name: 'itemTemplateSelector', method: m });
+    }
+    const out: TNode[] = [];
+    for (const t of n.children) {
+      if (t instanceof ng.TmplAstText) continue;
+      if (!(t instanceof ng.TmplAstTemplate) || t.tagName !== 'ng-template') throw new Error(`${path}: a ${host}'s children are <ng-template let-item> item templates`);
+      const bound = t.inputs.find((i) => i.name === keyName);
+      const key = t.attributes.find((a) => a.name === keyName)?.value ?? (bound ? literalKey(sourceOf(bound.value), path) : out.length ? null : 'default');
+      if (key === null) throw new Error(`${path}: a ${host}'s second and later <ng-template>s need a ${keyName}`);
+      if (t.inputs.some((i) => i.name === 'nsTemplateKeys')) throw new Error(`${path}: nsTemplateKeys is not supported in a release build yet`);
+      const named = (v: string) => t.variables.find((x) => (x.value || '$implicit') === v)?.name;
+      const item = named('$implicit') ?? named('item') ?? `$item${loops.length}`;
+      const index = named('index') ?? `$i${loops.length}`;
+      const names: Record<string, string> = {};
+      for (const v of t.variables) {
+        const what = v.value || '$implicit';
+        if ((what === '$implicit' || what === 'item') && v.name !== item) names[v.name] = item;
+        else if (what === 'even') names[v.name] = `(${index} % 2 === 0)`;
+        else if (what === 'odd') names[v.name] = `(${index} % 2 !== 0)`;
+        else if (!['$implicit', 'item', 'index'].includes(what)) throw new Error(`${path}: a ${host} template's "${what}" is not part of its context`);
+      }
+      // Keyed templates tell apart the kinds of row a list mixes (`Person | typeof BYLINE_ROW`): each reads its row
+      // untyped, as Angular types an ng-template's context.
+      const keyed = n.children.filter((c) => c instanceof ng.TmplAstTemplate).length > 1;
+      const loop: Loop = { item, index, param: `${item}${keyed ? ': any' : ''} = ${rows}[0], ${index} = 0`, names };
+      out.push({ kind: 'template', key, item, index, body: nodes(t.children, [...loops, loop]) });
+    }
+    const header = attrs.findIndex((a) => a.name === 'stickyHeaderTemplate');
+    if (header >= 0) {
+      attrs.splice(header, 1);
+      if (sectioned) out.push(stickyHeader(n, list, loops));
+    }
+    return out;
+  };
+
+  const isSectioned = (n: ng.TmplAstElement) =>
+    n.inputs.some((i) => i.name === 'sectioned' && sourceOf(i.value).trim() === 'true') || n.attributes.some((a) => a.name === 'sectioned' && a.value === 'true');
+
+  /**
+   * `[stickyHeaderTemplate]` naming a field that holds NativeScript XML (core parses it with `Builder.parse`
+   * and binds it to the section): the XML as a header template whose `{{ path }}` bindings read the section.
+   */
+  const stickyHeader = (n: ng.TmplAstElement, list: string, loops: Loop[]): TNode => {
+    const input = n.inputs.find((i) => i.name === 'stickyHeaderTemplate');
+    const name = input && sourceOf(input.value).trim().replace(/^this\./, '');
+    const field = name ? cls.members.find((m): m is ts.PropertyDeclaration => ts.isPropertyDeclaration(m) && m.name.getText() === name) : undefined;
+    const init = field?.initializer;
+    const xml = n.attributes.find((a) => a.name === 'stickyHeaderTemplate')?.value
+      ?? (init && (ts.isStringLiteral(init) || ts.isNoSubstitutionTemplateLiteral(init)) ? init.text : undefined);
+    if (xml === undefined) throw new Error(`${path}: a ListView's stickyHeaderTemplate is supported as a string of XML (a field initialized with a literal) in a release build`);
+    const section = `$section${loops.length}`;
+    const read = (e: string) => {
+      if (!/^\s*[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*\s*$/.test(e)) throw new Error(`${path}: the sticky header binding {{${e}}} is not supported in a release build yet (a property path is)`);
+      return `${section}.${e.trim()}`;
+    };
+    const bound = xml.replace(/([\w.-]+)\s*=\s*(['"])([^'"]*\{\{[^'"]*)\2/g, (_m, attr: string, _q: string, value: string) => {
+      const parts = value.split(/\{\{(.*?)\}\}/);
+      const whole = parts.length === 3 && !parts[0] && !parts[2];
+      const code = whole ? read(parts[1]) : '`' + parts.map((p, i) => (i % 2 ? '${' + read(p) + '}' : p.replace(/[`\\$]/g, (x) => '\\' + x))).join('') + '`';
+      return `[${attr}]="${code}"`;
+    });
+    // XML closes any element with `/>`; Angular's parser only void and custom ones.
+    const closed = bound.replace(/<([A-Za-z][\w.-]*)((?:\s+[^<>]*?)?)\s*\/>/g, '<$1$2></$1>');
+    if (bound.includes('{{')) throw new Error(`${path}: a stickyHeaderTemplate binds attributes only in a release build`);
+    const parsed = ng.parseTemplate(closed, path + '.stickyHeader.html', { preserveWhitespaces: false });
+    // Its spans are the header string's, not the template's: its methods keep the template line of the list.
+    const saved = here;
+    const first = methods.length;
+    if (parsed.errors?.length) throw new Error(`${path}: stickyHeaderTemplate: ${parsed.errors[0]}`);
+    const loop: Loop = { item: section, index: `$s${loops.length}`, param: `${section} = ${list}[0], $s${loops.length} = 0` };
+    const body = nodes(parsed.nodes, [...loops, loop]);
+    for (let k = first; k < methods.length; k++) if (saved === null) located.delete(k); else located.set(k, saved);
+    here = saved;
+    if (body.length !== 1 || body[0].kind !== 'element') throw new Error(`${path}: a stickyHeaderTemplate needs exactly one root element`);
+    return { kind: 'template', key: '$header', item: section, index: loop.index, body, header: true, xml };
+  };
+
+  /** `*tabItem="{ title, iconSource, … }"` (TabViewItemDirective): a TabViewItem with those properties around the element. */
+  const tabItem = (t: ng.TmplAstTemplate, loops: Loop[]): TNode => {
+    at(t.startSourceSpan);
+    const bound = t.templateAttrs.find((a): a is ng.TmplAstBoundAttribute => a instanceof ng.TmplAstBoundAttribute && a.name === 'tabItem');
+    const root = bound && (bound.value instanceof ng.ASTWithSource ? bound.value.ast : bound.value);
+    if (!(root instanceof ng.LiteralMap)) throw new Error(`${path}: *tabItem takes an object literal in a release build`);
+    const attrs: Attr[] = root.keys.map((k, i) => ({ name: (k as Extract<typeof k, { key: string }>).key, method: expr(template.slice(root.values[i].sourceSpan.start, root.values[i].sourceSpan.end), loops) }));
+    return { kind: 'element', tag: 'TabViewItem', attrs, events: [], children: nodes(t.children, loops) };
+  };
+
+  /**
+   * `<ng-container>`, a comment in Angular's view: its children join its parent, and its attributes only select
+   * directives. `[ngSwitch]` and `[ngTemplateOutlet]` are the directives it takes; the outlet's view follows the
+   * container's own children, as a ViewContainerRef inserts at its anchor.
+   */
+  const container = (n: ng.TmplAstElement, loops: Loop[]): TNode[] => {
+    if (n.outputs.length) throw new Error(`${path}: (${n.outputs[0].name}) on <ng-container> is not supported in a release build yet`);
+    if (n.references.length) throw new Error(`${path}: #${n.references[0].name} on <ng-container> is not supported in a release build yet`);
+    refuseUnbound(n, (name) => ['ngTemplateOutlet', 'ngTemplateOutletContext'].includes(name));
+    const selected = matched('ng-container', n.attributes.map((a) => [a.name, a.value]), n.inputs.map((i) => i.name));
+    if (selected.length) throw new Error(`${path}: the directive ${selected[0].className} on <ng-container> is not supported in a release build yet`);
+    const bound = new Map(n.inputs.map((i) => [i.name, i] as const));
+    for (const name of bound.keys()) {
+      if (!['ngSwitch', 'ngTemplateOutlet', 'ngTemplateOutletContext'].includes(name)) throw new Error(`${path}: [${name}] on <ng-container> is not supported in a release build yet`);
+    }
+    if (bound.has('ngTemplateOutletContext') && !bound.has('ngTemplateOutlet')) throw new Error(`${path}: [ngTemplateOutletContext] without [ngTemplateOutlet]`);
+    const children = () => nodes(n.children, loops);
+    const own = bound.has('ngSwitch') ? switching(n, bound.get('ngSwitch')!.value, loops, children) : children();
+    const outletted = bound.has('ngTemplateOutlet') ? outlet(bound.get('ngTemplateOutlet')!.value, bound.get('ngTemplateOutletContext')?.value, loops) : [];
+    return [...own, ...outletted];
+  };
+
+  /** The open `[ngSwitch]`es, innermost last: the method reading each one's value, and its cases' values as written. */
+  const switches: { subject: string; loops: Loop[]; cases: ng.AST[] }[] = [];
+  /** Renders a `[ngSwitch]` element's children, its `ngSwitchCase`s comparing with `===` and `ngSwitchDefault` rendering when none matches. */
+  const switching = <T>(n: ng.TmplAstElement, value: ng.AST, loops: Loop[], render: () => T): T => {
+    const cases: ng.AST[] = [];
+    const scan = (list: ng.TmplAstNode[], deeper: boolean) => {
+      for (const c of list) {
+        if (c instanceof ng.TmplAstElement && c.inputs.some((i) => i.name === 'ngSwitch')) continue;
+        if (c instanceof ng.TmplAstTemplate) {
+          const given = [...c.templateAttrs, ...c.inputs].find((a): a is ng.TmplAstBoundAttribute => a instanceof ng.TmplAstBoundAttribute && a.name === 'ngSwitchCase');
+          if (given) {
+            if (deeper) throw new Error(`${path}: an ngSwitchCase inside a loop of its [ngSwitch] is not supported in a release build yet`);
+            cases.push(given.value);
+          }
+          const loop = [...c.templateAttrs, ...c.inputs].some((a) => a.name === 'ngForOf');
+          scan(c.children, deeper || loop);
+          continue;
+        }
+        if (c instanceof ng.TmplAstForLoopBlock) { scan(c.children, true); continue; }
+        if (c instanceof ng.TmplAstElement) scan(c.children, deeper || core.canonical(c.name) === 'ListView');
+        else if (c instanceof ng.TmplAstIfBlock) for (const b of c.branches) scan(b.children, deeper);
+        else if (c instanceof ng.TmplAstSwitchBlock) for (const g of c.groups) scan(g.children, deeper);
+      }
+    };
+    scan(n.children, false);
+    switches.push({ subject: expr(code(value, loops), loops), loops, cases });
+    try { return render(); } finally { switches.pop(); }
+  };
+
+  /** `*ngSwitchCase="v"` and `*ngSwitchDefault`: an `if` on the nearest `[ngSwitch]` above it. */
+  const switchCase = (t: ng.TmplAstTemplate, given: ng.TmplAstBoundAttribute | undefined, loops: Loop[]): TNode[] => {
+    const sw = switches.at(-1);
+    if (!sw) throw new Error(`${path}: ${given ? 'ngSwitchCase' : 'ngSwitchDefault'} outside an element with [ngSwitch]`);
+    const subject = `this.${sw.subject}(${args(sw.loops)})`;
+    const cond = given
+      ? expr(`(${subject}) === (${code(given.value, loops)})`, loops)
+      : expr(sw.cases.length ? `!(${sw.cases.map((c) => `(${subject}) === (${code(c, sw.loops)})`).join(' || ')})` : 'true', loops);
+    return [{ kind: 'if', branches: [{ cond, body: nodes(t.children, loops) }] }];
+  };
+
+  /**
+   * `[ngTemplateOutlet]` (NgTemplateOutlet): the `<ng-template #name>` it names, rendered here with its `let-` variables
+   * read from the context's properties (`let-x` from `$implicit`) whenever a binding reads them, as its view's context is
+   * the latest one given. A template chosen by a condition (`a ? one : two`) is an `if`; null renders nothing.
+   */
+  const outlet = (tpl: ng.AST, context: ng.AST | undefined, loops: Loop[]): TNode[] => {
+    const root = tpl instanceof ng.ASTWithSource ? tpl.ast : tpl;
+    const given = context instanceof ng.ASTWithSource ? context.ast : context;
+    // A context written as an object literal gives each variable its property's expression.
+    const fields = given instanceof ng.LiteralMap ? new Map(given.keys.map((k, i) => [k.kind === 'property' ? k.key : undefined, given.values[i]] as const)) : null;
+    const ctx = context && !fields ? core.rewrite(clean(code(context, loops)), local(loops)) : null;
+    const read = (key: string) => {
+      if (fields) {
+        const v = fields.get(key);
+        return v ? `(${core.rewrite(clean(code(v, loops)), local(loops))})` : 'undefined';
+      }
+      return ctx === null ? 'undefined' : `(${ctx})?.${/^[A-Za-z_$][\w$]*$/.test(key) ? key : `[${JSON.stringify(key)}]`}`;
+    };
+    const render = (ast: ng.AST): TNode[] => {
+      if (ast instanceof ng.LiteralPrimitive && ast.value == null) return [];
+      if (ast instanceof ng.Conditional) return [{ kind: 'if', branches: [{ cond: test(template.slice(ast.condition.sourceSpan.start, ast.condition.sourceSpan.end), loops), body: render(ast.trueExp) }, { cond: null, body: render(ast.falseExp) }] }];
+      const name = ast instanceof ng.PropertyRead && ast.receiver instanceof ng.ImplicitReceiver ? ast.name : null;
+      const t = name !== null ? references.get(name) : undefined;
+      if (!t || t.tagName !== 'ng-template') throw new Error(`${path}: ngTemplateOutlet renders an <ng-template #name> of this template in a release build (given ${template.slice(ast.sourceSpan.start, ast.sourceSpan.end)})`);
+      const saved = new Map(t.variables.map((v) => [v.name, aliases.get(v.name)] as const));
+      for (const v of t.variables) aliases.set(v.name, read(v.value || '$implicit'));
+      try { return nodes(t.children, loops); } finally {
+        for (const [k, v] of saved) if (v === undefined) aliases.delete(k); else aliases.set(k, v);
+      }
+    };
+    return render(root);
+  };
+
+  /**
+   * `nsRouterLink` (@nativescript/angular's NSRouterLink) on any element: a tap handler navigating with its commands,
+   * a single command as a one-command array, relative to the component's route unless `relativeTo` is given. The
+   * route is the component's own, read when it is constructed: the router's current route changes as pages are made.
+   */
+  let routed = false;
+  const routerLink = (n: ng.TmplAstElement, loops: Loop[]): Event | null => {
+    const bound = new Map(n.inputs.map((i) => [i.name, i] as const));
+    const fixed = new Map(n.attributes.map((a) => [a.name, a.value] as const));
+    if (bound.has('nsRouterLinkActive') || fixed.has('nsRouterLinkActive')) throw new Error(`${path}: nsRouterLinkActive is not supported in a release build yet`);
+    if (!bound.has('nsRouterLink') && !fixed.has('nsRouterLink')) return null;
+    at(bound.get('nsRouterLink')?.sourceSpan ?? n.attributes.find((a) => a.name === 'nsRouterLink')?.sourceSpan);
+    for (const name of ROUTER_LINK_INPUTS) {
+      if (!ROUTER_LINK_SUPPORTED.has(name) && (bound.has(name) || fixed.has(name))) throw new Error(`${path}: nsRouterLink's ${name} is not supported in a release build yet`);
+    }
+    const value = (name: string) => (bound.has(name) ? `(${code(bound.get(name)!.value, loops)})` : fixed.has(name) ? JSON.stringify(fixed.get(name)) : null);
+    routed = true;
+    const body: string[] = [];
+    const given = bound.get('nsRouterLink');
+    const root = given && (given.value instanceof ng.ASTWithSource ? given.value.ast : given.value);
+    let commands: string;
+    if (root instanceof ng.LiteralArray) commands = code(given!.value, loops);
+    else if (!given) commands = `[${value('nsRouterLink')}]`;
+    else {
+      body.push(`const $commands: any = ${value('nsRouterLink')}`, 'if ($commands == null) return');
+      commands = 'Array.isArray($commands) ? $commands : [$commands]';
+    }
+    const extras = [`relativeTo: ${value('relativeTo') ?? 'this.$route'}`];
+    const transition = value('pageTransition');
+    const duration = value('pageTransitionDuration');
+    const constant = (name: string): unknown => {
+      if (fixed.has(name)) return fixed.get(name);
+      const v = bound.get(name)?.value;
+      const ast = v instanceof ng.ASTWithSource ? v.ast : v;
+      return ast instanceof ng.LiteralPrimitive && ast.value !== undefined ? ast.value : undefined;
+    };
+    // NSRouterLink.getTransition: a boolean is `animated`; 'none' and 'false' turn animation off; another string names the transition.
+    const known = constant('pageTransition');
+    if (!duration && (typeof known === 'boolean' || typeof known === 'string')) {
+      if (known === false || known === 'none' || known === 'false') extras.push('animated: false');
+      else if (typeof known === 'string') extras.push(`transition: { name: ${JSON.stringify(known)} }`);
+    } else if (transition || duration) {
+      body.push(
+        `const $given: any = ${transition ?? 'true'}`,
+        'let $animated = true',
+        'let $transition: any = undefined',
+        `if (typeof $given === 'boolean') { $animated = $given; } else if (typeof $given === 'string') { if ($given === 'none' || $given === 'false') { $animated = false; } else { $transition = { name: $given }; } } else { $transition = $given; }`,
+      );
+      if (duration) body.push(`const $duration = +${duration}`, 'if (!isNaN($duration)) { $transition = $transition ?? {}; $transition.duration = $duration; }');
+      extras.push('animated: $animated', 'transition: $transition');
+    }
+    const clear = value('clearHistory');
+    const clearing = constant('clearHistory');
+    if (clearing !== undefined) extras.push(`clearHistory: ${clearing === true || clearing === 'true'}`);
+    else if (clear) {
+      body.push(`const $clear: any = ${clear}`);
+      extras.push(`clearHistory: $clear === true || $clear === 'true'`);
+    }
+    body.push(`this.$router.navigate(${commands}, { ${extras.join(', ')} })`);
+    return { name: 'tap', method: handler(body.join('; '), loops) };
+  };
+
+  /** `*ngIf` (with `else` and `as`) and `*ngFor` (with `trackBy`, `index`, `even`, `odd`) on an element, `<ng-container>` or `<ng-template>`. */
+  const structural = (t: ng.TmplAstTemplate, loops: Loop[]): TNode[] => {
+    at(t.startSourceSpan);
+    // `*ngIf` binds the directive through templateAttrs (the template's inputs are its element's); `<ng-template [ngIf]>` through inputs.
+    const directive = t.tagName === 'ng-template' ? [...t.templateAttrs, ...t.inputs] : t.templateAttrs;
+    const bound = (name: string) => directive.find((a): a is ng.TmplAstBoundAttribute => a instanceof ng.TmplAstBoundAttribute && a.name === name);
+    const ngIf = bound('ngIf');
+    const ngForOf = bound('ngForOf');
+    const outletOf = bound('ngTemplateOutlet');
+    if (outletOf) {
+      for (const a of directive) if (!['ngTemplateOutlet', 'ngTemplateOutletContext'].includes(a.name)) throw new Error(`${path}: *ngTemplateOutlet's ${a.name} is not supported in a release build yet`);
+      // The element `*ngTemplateOutlet` is written on is the directive's own template, which it never renders.
+      return outlet(outletOf.value, bound('ngTemplateOutletContext')?.value, loops);
+    }
+    const caseOf = bound('ngSwitchCase');
+    if (caseOf || directive.some((a) => a.name === 'ngSwitchDefault')) {
+      if (directive.length !== 1) throw new Error(`${path}: ${directive.map((a) => a.name).join(', ')} on one template is not supported in a release build yet`);
+      return switchCase(t, caseOf, loops);
+    }
+    const structuralDirective = matched(t.tagName ?? 'ng-template', [], directive.map((a) => a.name)).find((d) => d.structural);
+    if (structuralDirective) throw new Error(`${path}: the structural directive ${structuralDirective.className} (TemplateRef, ViewContainerRef) is not supported in a release build yet`);
+    if (!ngIf && !ngForOf) {
+      // An `<ng-template #name>` renders only where an `else` names it.
+      if (t.tagName === 'ng-template' && t.references.length && !directive.length) return [];
+      throw new Error(`${path}: <${t.tagName}> with ${directive.map((a) => a.name).join(', ') || 'no directive'} is not supported in a release build yet`);
+    }
+    if (ngIf) {
+      for (const a of directive) if (!['ngIf', 'ngIfElse'].includes(a.name)) throw new Error(`${path}: *ngIf's ${a.name} is not supported in a release build yet`);
+      const condition = code(ngIf.value, loops);
+      const elseName = bound('ngIfElse');
+      const otherwise = elseName ? references.get(sourceOf(elseName.value).trim()) : undefined;
+      if (elseName && !otherwise) throw new Error(`${path}: *ngIf's else names no <ng-template #${sourceOf(elseName.value).trim()}>`);
+      const renamed = t.variables.map((v) => {
+        if (v.value !== 'ngIf') throw new Error(`${path}: *ngIf's ${v.value} is not supported in a release build yet`);
+        return v.name;
+      });
+      const cond = test(condition, loops);
+      for (const v of renamed) aliases.set(v, core.rewrite(clean(condition), local(loops)));
+      const body = nodes(t.children, loops);
+      for (const v of renamed) aliases.delete(v);
+      return [{ kind: 'if', branches: [{ cond, body }, ...(otherwise ? [{ cond: null, body: nodes(otherwise.children, loops) }] : [])] }];
+    }
+    for (const a of directive) if (!['ngFor', 'ngForOf', 'ngForTrackBy'].includes(a.name)) throw new Error(`${path}: *ngFor's ${a.name} is not supported in a release build yet`);
+    const item = t.variables.find((v) => (v.value || '$implicit') === '$implicit')?.name ?? `$item${loops.length}`;
+    const index = t.variables.find((v) => v.value === 'index')?.name ?? `$i${loops.length}`;
+    const names: Record<string, string> = {};
+    for (const v of t.variables) {
+      if (v.name === item || v.name === index) continue;
+      if (v.value === 'even') names[v.name] = `(${index} % 2 === 0)`;
+      else if (v.value === 'odd') names[v.name] = `(${index} % 2 !== 0)`;
+      else throw new Error(`${path}: *ngFor's ${v.value} is not supported in a release build yet`);
+    }
+    // NgForOf renders no rows for null, which an async pipe gives before its first value.
+    const source = code(ngForOf!.value, loops);
+    const items = expr(source === sourceOf(ngForOf!.value) ? source : `(${source}) ?? []`, loops);
+    const loop: Loop = { item, index, param: `${item} = this.${items}(${args(loops)})[0], ${index} = 0`, names };
+    const inner = [...loops, loop];
+    // NgForOf keeps rows by identity, or by what its trackBy function returns for (index, item).
+    const trackBy = bound('ngForTrackBy');
+    const key = trackBy ? expr(`(${sourceOf(trackBy.value)})(${index}, ${item})`, inner) : null;
+    return [{ kind: 'for', items, key, item, index, body: nodes(t.children, inner) }];
+  };
+
+  const parsed = ng.parseTemplate(template, path + '.html', { preserveWhitespaces: false });
+  if (parsed.errors?.length) throw new Error(`${path}: ${parsed.errors[0]}`);
+  const references = new Map<string, ng.TmplAstTemplate>();
+  const findReferences = (list: ng.TmplAstNode[]) => {
+    for (const n of list) {
+      if (n instanceof ng.TmplAstTemplate) for (const r of n.references) references.set(r.name, n);
+      if (n instanceof ng.TmplAstElement || n instanceof ng.TmplAstTemplate || n instanceof ng.TmplAstForLoopBlock) findReferences(n.children);
+      if (n instanceof ng.TmplAstIfBlock) for (const b of n.branches) findReferences(b.children);
+      if (n instanceof ng.TmplAstForLoopBlock && n.empty) findReferences(n.empty.children);
+      if (n instanceof ng.TmplAstSwitchBlock) for (const g of n.groups) findReferences(g.children);
+    }
+  };
+  findReferences(parsed.nodes);
+  const ownElements = (list: ng.TmplAstNode[]) => {
+    for (const n of list) {
+      if (!(n instanceof ng.TmplAstElement)) continue;
+      for (const r of n.references) staticRefs.add(r.name);
+      ownElements(n.children);
+    }
+  };
+  ownElements(parsed.nodes);
+  for (const q of queries) if (q.static && q.ref && staticRefs.has(q.ref)) staticQueries.add(q);
+  const tree = nodes(parsed.nodes, []);
+
+  // The component's source, with the template's methods added to its class and the event type imported.
+  const end = cls.members.end;
+  // ngOnChanges: the parent's bindings record each input they set (`$change`), and one check after them calls the hook
+  // with what changed since it last ran, the first time before ngOnInit.
+  const onChanges = cls.members.find((m): m is ts.MethodDeclaration => ts.isMethodDeclaration(m) && m.name.getText() === 'ngOnChanges');
+  if (onChanges) {
+    if (onChanges.parameters.length > 1) throw new Error(`${path}: ngOnChanges takes one parameter`);
+    methods.push(...changesMembers(onChanges.parameters.length > 0));
+  }
+  const cached = [...sites.values()].some((x) => x.cache);
+  let imports = `${cached ? "import { PurePipeCache as $PurePipeCache } from '@angular#kit';\n" : ''}${lets ? "import { LetSlot as $LetSlot } from '@angular#kit';\n" : ''}import { type EventData as $EventData } from '@nativescript/release';\n`;
+  if (usesElementRef) imports += `import { ElementRef as $ElementRef } from '@angular/core';\n`;
+  if (usesUnset) imports += `import { unsetValue as $unsetValue } from '@nativescript/core';\n`;
+  if (providers) imports += `import { NodeInjector } from '@angular#kit';\n`;
+  if (onChanges) {
+    imports += `import { SimpleChange as $SimpleChange } from '@angular/core';\n`;
+    if (!importsAs(sf, 'signal', '@angular/core')) {
+      if (declares(sf, 'signal')) throw new Error(`${path}: ngOnChanges needs Angular's signal, which this file's own "signal" hides`);
+      imports += `import { signal } from '@angular/core';\n`;
+    }
+  }
+  if (queries.some((q) => q.many)) {
+    usesRuntime = true;
+    const from = options.runtimeModule ?? RUNTIME;
+    imports += `import { QueryList as $QueryList } from '${isAbsolute(from) ? relativeSpecifier(dirname(path), from) : from}';\n`;
+  }
+  for (const [from, names] of imported) {
+    const spec = isAbsolute(from) ? relativeSpecifier(dirname(path), from) : from;
+    imports += `import { ${[...names].map(([c, a]) => `${c} as ${a}`).join(', ')} } from '${spec}';\n`;
+  }
+  if (routed) {
+    // The translator knows `inject` by its name, and a framework token through any alias.
+    if (!importsAs(sf, 'inject', '@angular/core')) {
+      if (declares(sf, 'inject')) throw new Error(`${path}: nsRouterLink needs Angular's inject, which this file's own "inject" hides`);
+      imports += `import { inject } from '@angular/core';\n`;
+    }
+    imports += `import { ActivatedRoute as $ActivatedRoute } from '@angular/router';\nimport { RouterExtensions as $RouterExtensions } from '@nativescript/angular';\n`;
+    methods.push('  readonly $router = inject($RouterExtensions);', '  readonly $route = inject($ActivatedRoute);');
+  }
+  const head = imports + text.slice(0, end) + '\n';
+  const source = head + methods.join('\n') + '\n' + text.slice(end);
+  // Each template method's lines in the virtual file, at its binding's line in the template it was written in.
+  const inlineAt = templateUrl ? 0 : written.indexOf(template);
+  const templateFile = templateUrl ? join(dirname(path), templateUrl) : path;
+  const firstLine = inlineAt > 0 ? written.slice(0, inlineAt).split('\n').length - 1 : 0;
+  const lines: [number, number][] = [];
+  let line = head.split('\n').length - 1;
+  methods.forEach((m, k) => {
+    const span = m.split('\n').length;
+    const at = located.get(k);
+    if (at !== undefined && inlineAt >= 0) for (let j = 0; j < span; j++) lines.push([line + j, firstLine + at + 1]);
+    line += span;
+  });
+  const { styles, scope: styleScope } = angularStyles(path, prop);
+  const scoped = styleScope ? core.scopeTemplate(tree, styleScope.content).map((n) => (n.kind === 'element' ? { ...n, attrs: [...n.attrs, { name: styleScope.host, value: '' }] } : n)) : tree;
+  return { name: cls.name.text, file: path.replace(/\.ts$/, '.release.ts'), source, ...(usesRuntime ? { usesRuntime } : {}), props, optional, outputs, template: scoped, selector, styles, ...(init ? { init: 'ngOnInit' } : {}), ...(init && lateInit ? { lateInit } : {}), ...(hook('ngDoCheck') ? { doCheck: 'ngDoCheck' } : {}), ...(hook('ngAfterContentInit') ? { afterContentInit: 'ngAfterContentInit' } : {}), ...(hook('ngAfterContentChecked') ? { afterContentChecked: 'ngAfterContentChecked' } : {}), ...(hook('ngAfterViewInit') ? { afterViewInit: 'ngAfterViewInit' } : {}), ...(hook('ngAfterViewChecked') ? { afterViewChecked: 'ngAfterViewChecked' } : {}), ...(hook('ngOnDestroy') ? { destroy: 'ngOnDestroy' } : {}), ...(onChanges ? { changes: true } : {}), ...(onPush ? { onPush } : {}), ...(classic?.host ? { host: '$host' } : {}), ...(providers ? { injector: '$injector' } : {}), ...(classic?.setters.size ? { setters: [...classic.setters] } : {}), ...(Object.keys(inputAliases).length ? { propAliases: inputAliases } : {}), ...(lines.length ? { templateLines: { file: templateFile, lines } } : {}) } as AngularComponent;
+}
+
+/**
+ * The component's `styles`, `styleUrl` and `styleUrls`, as NativeScript Angular adds them: Sass compiled by the app's own
+ * `sass`, and, unless `encapsulation: ViewEncapsulation.None`, each selector limited to the component's elements
+ * (`_ngcontent-<id>`, which its renderer sets on each element the component creates) and `:host` to `_nghost-<id>`. The
+ * compiled component has no host view of its own: its top-level elements carry the host attribute.
+ */
+function angularStyles(path: string, prop: (name: string) => ts.Expression | undefined): { styles: ComponentStyle[]; scope: { content: string; host: string } | null } {
+  const texts: { css: string; lang: string; from: string }[] = [];
+  const literal = (e: ts.Expression): string | null => (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e) ? e.text : null);
+  const inline = prop('styles');
+  for (const e of inline ? (ts.isArrayLiteralExpression(inline) ? [...inline.elements] : [inline]) : []) {
+    const css = literal(e);
+    if (css === null) throw new Error(`${path}: styles must be string literals in a compiled release`);
+    texts.push({ css, lang: 'css', from: path });
+  }
+  const urls = [prop('styleUrl'), ...(() => { const u = prop('styleUrls'); return u && ts.isArrayLiteralExpression(u) ? [...u.elements] : []; })()].filter((e): e is ts.Expression => !!e);
+  for (const e of urls) {
+    const url = literal(e);
+    if (url === null) throw new Error(`${path}: styleUrl must be a string literal in a compiled release`);
+    const file = join(dirname(path), url);
+    if (!existsSync(file)) throw new Error(`${path}: styleUrl ${url} not found`);
+    texts.push({ css: readFileSync(file, 'utf8'), lang: extname(file).slice(1), from: file });
+  }
+  if (!texts.length) return { styles: [], scope: null };
+  const none = prop('encapsulation')?.getText() === 'ViewEncapsulation.None';
+  const id = `c${createHash('sha256').update(path).digest('hex').slice(0, 8)}`;
+  const styles = texts.map((t, k): ComponentStyle => {
+    let css = t.css;
+    if (t.lang === 'scss' || t.lang === 'sass') css = (createRequire(path)('sass') as { compileString(s: string, o: object): { css: string } }).compileString(css, { loadPaths: [dirname(t.from)], syntax: t.lang === 'sass' ? 'indented' : 'scss' }).css;
+    else if (t.lang !== 'css') throw new Error(`${t.from}: ${t.lang} stylesheets are not supported in a compiled release yet`);
+    return { file: `${path}.style${k}.css`, css: none ? css : ng.encapsulateStyle(css, id) };
+  });
+  return { styles, scope: none ? null : { content: `_ngcontent-${id}`, host: `_nghost-${id}` } };
+}
+
+/** Every `BindingPipe` in an expression, those inside another pipe's arguments too. */
+/** Whether the nodes read `name` in an embedded view or a listener (the template's code outside the view's own update). */
+function readAway(name: string, nodes: ng.TmplAstNode[]): boolean {
+  let depth = 0;
+  let found = false;
+  const away = (f: () => void) => {
+    depth++;
+    try { f(); } finally { depth--; }
+  };
+  class Reads extends ng.CombinedRecursiveAstVisitor {
+    override visitPropertyRead(ast: ng.PropertyRead, context: unknown) {
+      if (depth && ast.name === name && ast.receiver instanceof ng.ImplicitReceiver && !(ast.receiver instanceof ng.ThisReceiver)) found = true;
+      return super.visitPropertyRead(ast, context);
+    }
+    override visitBoundEvent(e: ng.TmplAstBoundEvent) { away(() => super.visitBoundEvent(e)); }
+    override visitTemplate(t: ng.TmplAstTemplate) { away(() => super.visitTemplate(t)); }
+    override visitIfBlockBranch(b: ng.TmplAstIfBlockBranch) {
+      if (b.expression) this.visit(b.expression);
+      away(() => this.visitAllTemplateNodes(b.children));
+    }
+    override visitForLoopBlock(b: ng.TmplAstForLoopBlock) {
+      this.visit(b.expression);
+      away(() => this.visitAllTemplateNodes(b.children));
+      if (b.empty) this.visitForLoopBlockEmpty(b.empty);
+    }
+    override visitForLoopBlockEmpty(b: ng.TmplAstForLoopBlockEmpty) { away(() => this.visitAllTemplateNodes(b.children)); }
+    override visitSwitchBlockCaseGroup(g: ng.TmplAstSwitchBlockCaseGroup) {
+      this.visitAllTemplateNodes(g.cases);
+      away(() => this.visitAllTemplateNodes(g.children));
+    }
+    run(nodes: ng.TmplAstNode[]) { this.visitAllTemplateNodes(nodes); }
+  }
+  new Reads().run(nodes);
+  return found;
+}
+
+function allPipes(node: ng.AST): ng.BindingPipe[] {
+  const found: ng.BindingPipe[] = [];
+  const visit = (n: unknown) => {
+    if (!(n instanceof ng.AST)) return;
+    if (n instanceof ng.BindingPipe) found.push(n);
+    for (const v of Object.values(n)) Array.isArray(v) ? v.forEach(visit) : visit(v);
+  };
+  visit(node);
+  return found;
+}
+
+/** A module specifier for `file` (a .ts path) from a file in `dir`. */
+function relativeSpecifier(dir: string, file: string): string {
+  const r = relative(dir, file.replace(/\.tsx?$/, ''));
+  return r.startsWith('.') ? r : './' + r;
+}
+
+/**
+ * The `@Pipe` classes of the app's and its libraries' files, by the name templates use: whether each is pure (Angular's
+ * default) and what making one takes.
+ */
+export function angularPipes(files: string[], read: (file: string) => string): Map<string, PipeDecl> {
+  const out = new Map<string, PipeDecl>();
+  for (const file of files) {
+    const text = read(file);
+    if (!text.includes('@Pipe')) continue;
+    const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+    for (const st of sf.statements) {
+      if (!ts.isClassDeclaration(st) || !st.name) continue;
+      const meta = decorator(st, 'Pipe')?.arguments[0];
+      if (!meta || !ts.isObjectLiteralExpression(meta)) continue;
+      const get = (k: string) => meta.properties.find((p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && p.name.getText() === k)?.initializer;
+      const name = get('name');
+      if (!name || !ts.isStringLiteralLike(name)) throw new Error(`${file}: @Pipe needs a string name in a release build`);
+      if (!(ts.getModifiers(st) ?? []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) throw new Error(`${file}: the pipe ${st.name.text} is not exported`);
+      const pure = get('pure');
+      const ctor = st.members.find(ts.isConstructorDeclaration);
+      out.set(name.text, {
+        className: st.name.text, file, pure: pure?.kind !== ts.SyntaxKind.FalseKeyword,
+        ...(ctor?.parameters.length ? { create: true } : {}),
+        ...(st.members.some((m) => ts.isMethodDeclaration(m) && m.name.getText() === 'ngOnDestroy') ? { destroy: true } : {}),
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * What ngOnChanges takes in a component or directive: the template records each input it sets (`$change`), and one
+ * check after its inputs' calls `$flushChanges`, which calls the hook with what changed since it last ran.
+ */
+const changesMembers = (hasParam: boolean) => [
+  '  readonly $changed = signal(0);',
+  '  readonly $changes = new Map<string, $SimpleChange>();',
+  '  readonly $previous = new Map<string, any>();',
+  '  $change(name: string, value: any): void { const first = !this.$previous.has(name); this.$changes.set(name, new $SimpleChange(first ? undefined : this.$previous.get(name), value, first)); this.$previous.set(name, value); this.$changed.update((n) => n + 1); }',
+  hasParam
+    ? '  $flushChanges(): void { if (!this.$changes.size) return; const changes = Object.fromEntries(this.$changes); this.$changes.clear(); this.ngOnChanges(changes); }'
+    : '  $flushChanges(): void { if (!this.$changes.size) return; this.$changes.clear(); this.ngOnChanges(); }',
+];
+
+/** An app's `@Directive` class as templates use it: what it matches and the members Angular's compiler wires to its host. */
+export interface DirectiveDecl {
+  className: string;
+  file: string;
+  selector: string;
+  /** Inputs by the name the template binds: the member (a field, or a setter) they set. */
+  inputs: Map<string, string>;
+  /** `@HostListener('event', ['$event'])` and `host: { '(event)': '…' }`: the statements run with `$event`. */
+  listeners: { event: string; code: string }[];
+  /** `@HostBinding('prop')` and `host: { '[prop]': '…' }`: the host's property and the expression over the directive. */
+  bindings: { prop: string; code: string }[];
+  /** Static host attributes (`host: { role: 'x' }`). */
+  attributes: { name: string; value: string }[];
+  create: boolean;
+  hooks: Set<string>;
+  /** It injects TemplateRef: a structural directive (`*name`). */
+  structural: boolean;
+  /** Its members' names, which its host expressions read. */
+  members: string[];
+  /** The inputs that are `input()` signals, set through the signal. */
+  signals: Set<string>;
+}
+
+/** The `@Directive` classes of the app's files. */
+export function angularDirectives(files: string[], read: (file: string) => string): DirectiveDecl[] {
+  const out: DirectiveDecl[] = [];
+  for (const file of files) {
+    const text = read(file);
+    if (!text.includes('@Directive')) continue;
+    const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+    for (const st of sf.statements) {
+      if (!ts.isClassDeclaration(st) || !st.name) continue;
+      const call = decorator(st, 'Directive');
+      const meta = call?.arguments[0];
+      if (!call) continue;
+      const where = `${file}: the directive ${st.name.text}`;
+      if (!meta || !ts.isObjectLiteralExpression(meta)) throw new Error(`${where} needs a selector`);
+      const get = (k: string) => meta.properties.find((p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && p.name.getText() === k)?.initializer;
+      const selector = get('selector');
+      if (!selector || !ts.isStringLiteralLike(selector)) throw new Error(`${where} needs a string selector in a release build`);
+      if (!(ts.getModifiers(st) ?? []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) throw new Error(`${where} is not exported`);
+      const d: DirectiveDecl = { className: st.name.text, file, selector: selector.text, inputs: new Map(), listeners: [], bindings: [], attributes: [], create: false, hooks: new Set(), structural: false, signals: new Set(), members: st.members.flatMap((m) => (m.name && ts.isIdentifier(m.name) ? [m.name.text] : [])) };
+      for (const p of meta.properties) {
+        const key = ts.isPropertyAssignment(p) ? p.name.getText() : p.getText();
+        if (!['selector', 'inputs', 'host', 'standalone', 'jit'].includes(key)) throw new Error(`${where}: its ${key} ${PLURAL_FIELDS.has(key) ? 'are' : 'is'} not supported in a release build yet`);
+      }
+      const inputs = get('inputs');
+      for (const e of inputs && ts.isArrayLiteralExpression(inputs) ? inputs.elements : []) {
+        if (!ts.isStringLiteralLike(e)) throw new Error(`${where}: inputs are names in a release build`);
+        const [member, alias] = e.text.split(':').map((x) => x.trim());
+        d.inputs.set(alias ?? member, member);
+      }
+      const host = get('host');
+      for (const p of host && ts.isObjectLiteralExpression(host) ? host.properties : []) {
+        if (!ts.isPropertyAssignment(p) || !ts.isStringLiteralLike(p.initializer)) throw new Error(`${where}: host entries are strings in a release build`);
+        const key = ts.isStringLiteralLike(p.name) ? p.name.text : p.name.getText();
+        const value = p.initializer.text;
+        if (/^\(.*\)$/.test(key)) d.listeners.push({ event: key.slice(1, -1), code: value });
+        else if (/^\[.*\]$/.test(key)) d.bindings.push({ prop: key.slice(1, -1), code: value });
+        else d.attributes.push({ name: key, value });
+      }
+      for (const m of st.members) {
+        const name = m.name && (ts.isIdentifier(m.name) || ts.isStringLiteral(m.name)) ? m.name.text : undefined;
+        const made = ts.isPropertyDeclaration(m) && m.initializer && ts.isCallExpression(m.initializer) ? m.initializer.expression.getText() : '';
+        if (made === 'input' && name) {
+          const options = ((m as ts.PropertyDeclaration).initializer as ts.CallExpression).arguments[1];
+          const bad = options && (!ts.isObjectLiteralExpression(options) ? options : options.properties.find((p) => !ts.isPropertyAssignment(p) || !['alias', 'debugName'].includes(p.name.getText())));
+          if (bad) throw new Error(`${where}: input()'s ${ts.isObjectLiteralElementLike(bad) && bad.name ? bad.name.getText() : bad.getText()} (${name}) is not supported in a release build yet`);
+          const alias = options && ts.isObjectLiteralExpression(options) ? options.properties.find((p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && p.name.getText() === 'alias')?.initializer : undefined;
+          d.inputs.set(alias && ts.isStringLiteralLike(alias) ? alias.text : name, name);
+          d.signals.add(name);
+        } else if (/^(input|model|output|viewChild|viewChildren|contentChild|contentChildren)(\.required)?$/.test(made)) throw new Error(`${where}: ${made}() (${name}) in a directive is not supported in a release build yet`);
+        if (ts.isMethodDeclaration(m) && name && /^ng(OnInit|OnChanges|AfterViewInit|OnDestroy|DoCheck|AfterContentInit|AfterContentChecked|AfterViewChecked)$/.test(name)) {
+          d.hooks.add(name);
+        }
+        for (const dec of ts.canHaveDecorators(m) ? ts.getDecorators(m) ?? [] : []) {
+          const e = dec.expression;
+          const which = ts.isCallExpression(e) ? e.expression.getText() : e.getText();
+          const arg = ts.isCallExpression(e) ? e.arguments[0] : undefined;
+          if (!name) throw new Error(`${where}: a decorated member without a plain name`);
+          if (which === 'Input') {
+            const alias = arg && ts.isStringLiteralLike(arg) ? arg.text : arg && ts.isObjectLiteralExpression(arg) ? (arg.properties.find((p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && p.name.getText() === 'alias')?.initializer as ts.StringLiteral | undefined)?.text : undefined;
+            d.inputs.set(alias ?? name, name);
+          } else if (which === 'HostListener') {
+            if (!arg || !ts.isStringLiteralLike(arg) || !ts.isMethodDeclaration(m)) throw new Error(`${where}: @HostListener takes an event name, on a method`);
+            const given = ts.isCallExpression(e) ? e.arguments[1] : undefined;
+            const args = given && ts.isArrayLiteralExpression(given) ? given.elements.map((x) => (ts.isStringLiteralLike(x) ? x.text : x.getText())) : [];
+            if (arg.text.includes(':')) throw new Error(`${where}: @HostListener('${arg.text}'), a global target, is not supported in a release build yet`);
+            d.listeners.push({ event: arg.text, code: `${name}(${args.join(', ')})` });
+          } else if (which === 'HostBinding') {
+            const prop = arg && ts.isStringLiteralLike(arg) ? arg.text : name;
+            d.bindings.push({ prop, code: name });
+          } else throw new Error(`${where}: @${which} is not supported in a release build yet`);
+        }
+      }
+      for (const b of d.bindings) if (/^(class|style|attr)\./.test(b.prop)) throw new Error(`${where}: the host binding [${b.prop}] is not supported in a release build yet`);
+      const ctor = st.members.find(ts.isConstructorDeclaration);
+      d.create = !!ctor?.parameters.length;
+      d.structural = /\bTemplateRef\b/.test(ctor?.getText() ?? '') || /inject\(\s*TemplateRef\b/.test(st.getText());
+      out.push(d);
+    }
+  }
+  return out;
+}
+
+/**
+ * A file of `@Pipe` (and `@Directive`) classes as the release build compiles it: the class decorators, which only
+ * Angular's compiler reads, left out, and a class whose constructor takes parameters given a `static $create()` that
+ * injects them, as Angular's factory does (`@Inject(TOKEN)` the token, `@Optional()` optionally). Null when the file has
+ * no such class.
+ */
+export function declarableSource(path: string, text: string): string | null {
+  if (!/@(Pipe|Directive)\b/.test(text)) return null;
+  const sf = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true);
+  const edits: { start: number; end: number; text: string }[] = [];
+  let injects = false;
+  let changes = false;
+  for (const st of sf.statements) {
+    if (!ts.isClassDeclaration(st) || !st.name) continue;
+    const own = ts.getDecorators(st)?.find((d) => ts.isCallExpression(d.expression) && ['Pipe', 'Directive'].includes(d.expression.expression.getText()));
+    if (!own) continue;
+    edits.push({ start: own.getStart(), end: own.getEnd(), text: '' });
+    // A directive's member decorators (@Input, @HostListener, @HostBinding) are the template compiler's to read.
+    for (const m of st.members) for (const d of ts.canHaveDecorators(m) ? ts.getDecorators(m) ?? [] : []) edits.push({ start: d.getStart(), end: d.getEnd(), text: '' });
+    const onChanges = st.members.find((m): m is ts.MethodDeclaration => ts.isMethodDeclaration(m) && m.name.getText() === 'ngOnChanges');
+    if (onChanges) {
+      changes = true;
+      edits.push({ start: st.members.end, end: st.members.end, text: '\n' + changesMembers(onChanges.parameters.length > 0).join('\n') + '\n' });
+    }
+    const ctor = st.members.find(ts.isConstructorDeclaration);
+    if (!ctor?.parameters.length) continue;
+    const given = ctor.parameters.map((p) => {
+      const ref = p.type && ts.isTypeReferenceNode(p.type)
+        ? p.type
+        : p.type && ts.isUnionTypeNode(p.type)
+          ? p.type.types.find(ts.isTypeReferenceNode)
+          : undefined;
+      let token = ref ? ref.typeName.getText() : undefined;
+      let optional = !!(p.questionToken || p.initializer);
+      let skipSelf = false;
+      for (const d of ts.getDecorators(p) ?? []) {
+        const e = d.expression;
+        const which = ts.isCallExpression(e) ? e.expression.getText() : e.getText();
+        if (which === 'Inject' && ts.isCallExpression(e) && e.arguments[0]) token = e.arguments[0].getText();
+        else if (which === 'Optional') optional = true;
+        else if (which === 'SkipSelf') skipSelf = true;
+        else if (!['Self', 'Host'].includes(which)) throw new Error(`${path}: @${which} on ${st.name!.text}'s constructor parameter ${p.name.getText()} is not supported in a release build yet`);
+        edits.push({ start: d.getStart(), end: d.getEnd(), text: '' });
+      }
+      if (optional && skipSelf) return 'undefined as any';
+      if (!token) throw new Error(`${path}: ${st.name!.text}'s constructor parameter ${p.name.getText()} needs a class type or @Inject(token) in a release build`);
+      injects = true;
+      return `inject(${token}${optional ? ', { optional: true }' : ''})`;
+    });
+    const close = st.members.end;
+    edits.push({ start: close, end: close, text: `\n  static $create(): ${st.name.text} { return new ${st.name.text}(${given.join(', ')}); }\n` });
+  }
+  if (!edits.length) return null;
+  let out = text;
+  for (const e of edits.sort((a, b) => b.start - a.start)) out = out.slice(0, e.start) + e.text + out.slice(e.end);
+  if (changes) {
+    if (!importsAs(sf, 'signal', '@angular/core') && declares(sf, 'signal')) throw new Error(`${path}: ngOnChanges needs Angular's signal, which this file's own "signal" hides`);
+    out = `import { ${importsAs(sf, 'signal', '@angular/core') ? '' : 'signal, '}SimpleChange as $SimpleChange } from '@angular/core';\n` + out;
+  }
+  if (injects && !importsAs(sf, 'inject', '@angular/core')) {
+    if (declares(sf, 'inject')) throw new Error(`${path}: a pipe's constructor is injected with Angular's inject, which this file's own "inject" hides`);
+    out = `import { inject } from '@angular/core';\n` + out;
+  }
+  return out;
+}
+
+
+/** What `classicClass` read from a decorated class beside its rewritten source. */
+interface Classic {
+  text: string;
+  /** `@Input()` fields, now input signals read as `this.x()`. */
+  inputs: Set<string>;
+  /** `@Input()` setters, now `$set_<name>` methods the parent calls when its binding changes. */
+  setters: Set<string>;
+  /** Inputs the parent binds by another name (`@Input('name')`), by field. */
+  aliases: Map<string, string>;
+  /** Inputs the parent may leave out. */
+  optional: Set<string>;
+  /** `@ViewChild` and `@ViewChildren` fields. */
+  queries: ViewQuery[];
+  /** The class injects its own ElementRef, now its `$host` field. */
+  host: boolean;
+}
+
+/**
+ * A view query (`@ViewChild('ref')`, `@ViewChild(ChildComponent)`, `@ViewChildren`): the field it fills, what it
+ * matches, and what it reads there (`read: ElementRef`, a view class) when that is not the match itself.
+ */
+export interface ViewQuery {
+  field: string;
+  ref?: string;
+  type?: string;
+  read: string | null;
+  static: boolean;
+  many: boolean;
+}
+
+/**
+ * A component written with decorators: `@Input() x: T` (or `= init`) is `input<T>()`, read as
+ * `this.x()` and written, by the component itself, with `$assign`; `@Input() set x(v)` is a
+ * `$set_x(v)` method, called as Angular calls the setter; `@Output() e = new EventEmitter<T>()` is
+ * `output<T>()`; constructor parameter properties are `inject()`ed fields, set before the other
+ * fields as TypeScript sets them. Null when the class has none of these.
+ */
+function classicClass(path: string, text: string, cls: ts.ClassDeclaration): Classic | null {
+  const edits: { start: number; end: number; text: string }[] = [];
+  const inputs = new Set<string>();
+  const setters = new Set<string>();
+  const aliases = new Map<string, string>();
+  const optional = new Set<string>();
+  const queries: ViewQuery[] = [];
+  const used = new Set<string>();
+  const injected: string[] = [];
+  let ctor: ts.ConstructorDeclaration | undefined;
+  const locals: string[] = [];
+  let host = /\binject\(\s*ElementRef\s*\)/.test(cls.getText());
+  const decoratorsOf = (m: ts.Node) => (ts.canHaveDecorators(m) ? ts.getDecorators(m) ?? [] : []).map((d) => d.expression);
+  /** `@Input()`, `@Input('alias')`, `@Input({ alias, required })`: the name the parent binds and whether it must. */
+  const inputOptions = (d: ts.CallExpression, name: string): { alias?: string; required: boolean } => {
+    const a = d.arguments[0];
+    if (!a) return { required: false };
+    if (ts.isStringLiteralLike(a)) return { alias: a.text, required: false };
+    if (!ts.isObjectLiteralExpression(a) || d.arguments.length > 1) throw new Error(`${path}: @Input(${a.getText()}) ${name} is not supported in a release build yet`);
+    const out: { alias?: string; required: boolean } = { required: false };
+    for (const p of a.properties) {
+      const key = p.name?.getText();
+      const value = ts.isPropertyAssignment(p) ? p.initializer : undefined;
+      if (key === 'alias' && value && ts.isStringLiteralLike(value)) out.alias = value.text;
+      else if (key === 'required' && value && (value.kind === ts.SyntaxKind.TrueKeyword || value.kind === ts.SyntaxKind.FalseKeyword)) out.required = value.kind === ts.SyntaxKind.TrueKeyword;
+      else throw new Error(`${path}: @Input's ${p.getText()} (${name}) is not supported in a release build yet`);
+    }
+    return out;
+  };
+  for (const m of cls.members) {
+    const decorators = decoratorsOf(m);
+    if (ts.isPropertyDeclaration(m) && decorators.length) {
+      const name = m.name.getText();
+      const d = decorators[0];
+      const which = ts.isCallExpression(d) ? d.expression.getText() : d.getText();
+      if (decorators.length > 1 || !ts.isCallExpression(d)) throw new Error(`${path}: @${d.getText()} ${name} is not supported in a release build yet`);
+      if (which === 'Input') {
+        const { alias, required } = inputOptions(d, name);
+        const type = m.type?.getText() ?? literalType(m.initializer);
+        if (!type) throw new Error(`${path}: @Input() ${name} needs a type`);
+        // An input the parent leaves out keeps its initializer, or is undefined, as Angular leaves the field; one declared
+        // definitely assigned (`x!: T`) or `required` is one the parent gives.
+        const given = required || !!m.exclamationToken;
+        const init = m.initializer ? `input<${type}>(${m.initializer.getText()})` : !given ? `input<${type} | undefined>(undefined)` : `input.required<${type}>()`;
+        edits.push({ start: m.getStart(), end: m.getEnd(), text: `readonly ${name} = ${init};` });
+        inputs.add(name);
+        if (alias) aliases.set(name, alias);
+        if (!given) optional.add(name);
+        used.add('input');
+      } else if (which === 'Output') {
+        if (d.arguments.length) throw new Error(`${path}: @${d.getText()} ${name} is not supported in a release build yet`);
+        const init = m.initializer;
+        if (!init || !ts.isNewExpression(init) || init.expression.getText() !== 'EventEmitter') throw new Error(`${path}: @Output() ${name} needs = new EventEmitter<T>()`);
+        edits.push({ start: m.getStart(), end: m.getEnd(), text: `readonly ${name} = output<${init.typeArguments?.[0]?.getText() ?? 'void'}>();` });
+        used.add('output');
+      } else if (which === 'ViewChild' || which === 'ViewChildren') {
+        const [what, options] = d.arguments;
+        const query: ViewQuery = { field: name, read: null, static: false, many: which === 'ViewChildren' };
+        if (what && ts.isStringLiteralLike(what)) {
+          if (what.text.includes(',')) throw new Error(`${path}: @${which}('${what.text}'), a query of several names, is not supported in a release build yet`);
+          query.ref = what.text.trim();
+        } else if (what && ts.isIdentifier(what)) query.type = what.text;
+        else throw new Error(`${path}: @${d.getText()} ${name} is not supported in a release build yet`);
+        for (const p of options && ts.isObjectLiteralExpression(options) ? options.properties : []) {
+          const key = p.name?.getText();
+          const value = ts.isPropertyAssignment(p) ? p.initializer : undefined;
+          if (key === 'static' && value) query.static = value.kind === ts.SyntaxKind.TrueKeyword;
+          else if (key === 'read' && value && ts.isIdentifier(value)) query.read = value.text;
+          else throw new Error(`${path}: @${which}'s ${p.getText()} (${name}) is not supported in a release build yet`);
+        }
+        if (options && !ts.isObjectLiteralExpression(options)) throw new Error(`${path}: @${d.getText()} ${name} is not supported in a release build yet`);
+        if (query.read && /^(ViewContainerRef|TemplateRef|ChangeDetectorRef|Injector)$/.test(query.read)) throw new Error(`${path}: @${which}'s read: ${query.read} (${name}) is not supported in a release build yet`);
+        queries.push(query);
+        const decorator = ts.getDecorators(m)![0];
+        if (query.many) {
+          // A QueryList the template's matches are added to and removed from, in the order they render.
+          edits.push({ start: m.getStart(), end: m.getEnd(), text: `readonly ${name} = new $QueryList();` });
+        } else edits.push({ start: decorator.getStart(), end: decorator.getEnd(), text: '' });
+      } else throw new Error(`${path}: @${which} is not supported in a release build yet`);
+      continue;
+    }
+    if (ts.isAccessor(m) && decorators.length) {
+      const name = m.name.getText();
+      const d = decorators[0];
+      if (decorators.length > 1 || !ts.isCallExpression(d) || d.expression.getText() !== 'Input') throw new Error(`${path}: @${d.getText()} on the accessor ${name} is not supported in a release build yet`);
+      const { alias } = inputOptions(d, name);
+      // The decorator may be on either accessor; the setter is what the parent's binding calls.
+      const set = cls.members.find((x): x is ts.SetAccessorDeclaration => ts.isSetAccessorDeclaration(x) && x.name.getText() === name);
+      if (!set) throw new Error(`${path}: @Input() on the getter ${name}, which has no setter`);
+      const decorator = ts.getDecorators(m)![0];
+      edits.push({ start: decorator.getStart(), end: decorator.getEnd(), text: '' });
+      const head = set.getChildren().find((c) => c.kind === ts.SyntaxKind.SetKeyword)!;
+      edits.push({ start: head.getStart(), end: set.name.getEnd(), text: `$set_${name}` });
+      setters.add(name);
+      if (alias) aliases.set(name, alias);
+      optional.add(name);
+      continue;
+    }
+    if (decorators.length) throw new Error(`${path}: @${decorators[0].getText()} is not supported in a release build yet`);
+    if (ts.isConstructorDeclaration(m)) {
+      // A body without parameters is the translator's: it runs after the field initializers, as TypeScript runs it.
+      if (!m.parameters.length) continue;
+      for (const p of m.parameters) {
+        const modifiers = (ts.getModifiers(p) ?? []).map((x) => x.getText());
+        // Angular's factory injects each parameter: its class, or the token `@Inject` names, optionally with `@Optional()`.
+        const ref = p.type && ts.isTypeReferenceNode(p.type)
+          ? p.type
+          : p.type && ts.isUnionTypeNode(p.type)
+            ? p.type.types.find(ts.isTypeReferenceNode)
+            : undefined;
+        let token = ref ? ref.typeName.getText() : undefined;
+        let optional = !!(p.questionToken || p.initializer);
+        let skipSelf = false;
+        for (const d of decoratorsOf(p)) {
+          const which = ts.isCallExpression(d) ? d.expression.getText() : d.getText();
+          if (which === 'Inject' && ts.isCallExpression(d) && d.arguments[0]) token = d.arguments[0].getText();
+          else if (which === 'Optional') optional = true;
+          else if (which === 'SkipSelf') skipSelf = true;
+          else if (!['Self', 'Host'].includes(which)) throw new Error(`${path}: @${which} on the constructor parameter ${p.name.getText()} is not supported in a release build yet`);
+        }
+        if (!token && !(optional && skipSelf)) throw new Error(`${path}: constructor parameter ${p.getText()} needs a class type or @Inject(token)`);
+        // The component's own ElementRef is its host: the template's root view, set once it is made.
+        if (token === 'ElementRef') host = true;
+        const value = optional && skipSelf
+          ? 'undefined as any'
+          : token === 'ElementRef'
+            ? 'this.$host'
+            : (used.add('inject'), `inject(${token}${optional ? ', { optional: true }' : ''})`);
+        const typed = p.type ? `: ${p.type.getText()}` : '';
+        // A parameter property is a field; a plain parameter is a local of the constructor's body.
+        if (modifiers.length) {
+          injected.push(`  ${modifiers.join(' ')} ${p.name.getText()}${typed} = ${value};\n`);
+          // The constructor's body may still name the parameter, which is now the field.
+          if (m.body && new RegExp(`(?<![.\\w$])${p.name.getText()}\\b`).test(m.body.getText())) locals.push(`const ${p.name.getText()} = this.${p.name.getText()};`);
+        } else locals.push(`const ${p.name.getText()}${typed} = ${value};`);
+      }
+      ctor = m;
+    }
+  }
+  if (!edits.length && !ctor && !host) return null;
+  if (host) {
+    injected.unshift(`  readonly $host = new ElementRef(undefined);\n`);
+    used.add('ElementRef');
+    for (const m of cls.members) {
+      const visit = (n: ts.Node) => {
+        if (ts.isCallExpression(n) && n.expression.getText() === 'inject' && n.arguments.length === 1 && n.arguments[0].getText() === 'ElementRef') edits.push({ start: n.getStart(), end: n.getEnd(), text: 'this.$host' });
+        else ts.forEachChild(n, visit);
+      };
+      if (m !== ctor) visit(m);
+    }
+  }
+  if (injected.length) edits.push({ start: cls.members[0].getFullStart(), end: cls.members[0].getFullStart(), text: '\n' + injected.join('') });
+  // `this.input` reads the input's signal and writes it with `$assign`; `this.setter = v` calls the setter's method.
+  const isInput = (n: ts.Node): n is ts.PropertyAccessExpression => ts.isPropertyAccessExpression(n) && n.expression.kind === ts.SyntaxKind.ThisKeyword && (inputs.has(n.name.text) || setters.has(n.name.text));
+  /** The text of `n` with the reads and writes inside it rewritten. */
+  const rewritten = (n: ts.Node): string => {
+    const inner: { start: number; end: number; text: string }[] = [];
+    collect(n, inner);
+    let t = text.slice(n.getStart(), n.getEnd());
+    for (const e of inner.sort((a, b) => b.start - a.start)) t = t.slice(0, e.start - n.getStart()) + e.text + t.slice(e.end - n.getStart());
+    return t;
+  };
+  const collect = (n: ts.Node, into: typeof edits) => {
+    const write = (target: ts.PropertyAccessExpression, value: string, at: ts.Node) => {
+      const name = target.name.text;
+      into.push({ start: at.getStart(), end: at.getEnd(), text: setters.has(name) ? `this.$set_${name}(${value})` : `this.${name}.$assign(${value})` });
+    };
+    if (ts.isBinaryExpression(n) && isInput(n.left) && n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && n.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+      const op = n.operatorToken.getText().slice(0, -1);
+      if (op && setters.has(n.left.name.text)) throw new Error(`${path}: ${n.getText()} on the input setter ${n.left.name.text} is not supported in a release build yet`);
+      write(n.left, op ? `this.${n.left.name.text}() ${op} (${rewritten(n.right)})` : rewritten(n.right), n);
+      return;
+    }
+    if ((ts.isPrefixUnaryExpression(n) || ts.isPostfixUnaryExpression(n)) && isInput(n.operand) && (n.operator === ts.SyntaxKind.PlusPlusToken || n.operator === ts.SyntaxKind.MinusMinusToken)) {
+      if (setters.has(n.operand.name.text) || !ts.isExpressionStatement(n.parent)) throw new Error(`${path}: ${n.getText()} on an input is not supported in a release build yet`);
+      write(n.operand, `this.${n.operand.name.text}() ${n.operator === ts.SyntaxKind.PlusPlusToken ? '+' : '-'} 1`, n);
+      return;
+    }
+    if (isInput(n) && inputs.has(n.name.text)) {
+      into.push({ start: n.getEnd(), end: n.getEnd(), text: '()' });
+      return;
+    }
+    ts.forEachChild(n, (c) => collect(c, into));
+  };
+  for (const m of cls.members) if (m !== ctor && !(ts.isPropertyDeclaration(m) && inputs.has(m.name.getText()))) collect(m, edits);
+  if (ctor) edits.push({ start: ctor.getFullStart(), end: ctor.getEnd(), text: ctor.body?.statements.length ? `\n  constructor() {${locals.length ? ' ' + locals.join(' ') : ''}${rewritten(ctor.body).slice(1)}` : locals.length ? `\n  constructor() { ${locals.join(' ')} }` : '' });
+  let out = text;
+  for (const e of edits.sort((a, b) => b.start - a.start || b.end - a.end)) out = out.slice(0, e.start) + e.text + out.slice(e.end);
+  const imported = new Set(cls.getSourceFile().statements.flatMap((st) => ts.isImportDeclaration(st) && st.importClause?.namedBindings && ts.isNamedImports(st.importClause.namedBindings) ? st.importClause.namedBindings.elements.map((e) => e.name.text) : []));
+  const missing = [...used].filter((u) => !imported.has(u));
+  return { text: (missing.length ? `import { ${missing.join(', ')} } from '@angular/core';\n` : '') + out, inputs, setters, aliases, optional, queries, host };
+}
+
+function literalType(e: ts.Expression | undefined): string | undefined {
+  if (!e) return undefined;
+  if (ts.isNumericLiteral(e)) return 'number';
+  if (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) return 'string';
+  if (e.kind === ts.SyntaxKind.TrueKeyword || e.kind === ts.SyntaxKind.FalseKeyword) return 'boolean';
+  return undefined;
+}
+
+function literalKey(code: string, path: string): string {
+  const m = /^\s*(['"])(.*)\1\s*$/.exec(code);
+  if (!m) throw new Error(`${path}: [nsTemplateKey]="${code}" needs a string literal in a release build`);
+  return m[2];
+}
+
+/**
+ * A file's `@Pipe` classes, and each `@NgModule` with the names its `declarations`, `imports` and `exports` list. A
+ * library's directives are left out: its Angular wrappers are written against the view internals a compiled template
+ * replaces.
+ */
+export function declarablesIn(path: string, text: string, app = false): { classes: string[]; modules: Map<string, string[]> } {
+  const classes: string[] = [];
+  const modules = new Map<string, string[]>();
+  if (!/@(Pipe|NgModule)\b/.test(text)) return { classes, modules };
+  const sf = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true);
+  for (const st of sf.statements) {
+    if (!ts.isClassDeclaration(st) || !st.name) continue;
+    if (decorator(st, 'Pipe')) classes.push(st.name.text);
+    const meta = decorator(st, 'NgModule')?.arguments[0];
+    if (meta && ts.isObjectLiteralExpression(meta)) {
+      // Its `imports` and `providers` are walked where the module is imported (`ngModuleDef`); `bootstrap` is the entry's, the rest only steer Angular's compiler.
+      for (const p of app ? meta.properties : []) {
+        const key = ts.isPropertyAssignment(p) ? p.name.getText() : p.getText();
+        if (!['declarations', 'imports', 'exports', 'providers', 'bootstrap', 'schemas', 'id', 'jit', 'entryComponents'].includes(key)) throw new Error(`${path}: the NgModule ${st.name.text}'s ${key} ${PLURAL_FIELDS.has(key) ? 'are' : 'is'} not supported in a release build yet`);
+      }
+      modules.set(st.name.text, meta.properties.flatMap((p) => (ts.isPropertyAssignment(p) && ['declarations', 'imports', 'exports'].includes(p.name.getText()) && ts.isArrayLiteralExpression(p.initializer)
+        ? p.initializer.elements.filter(ts.isIdentifier).map((e) => e.text) : [])));
+    }
+  }
+  return { classes, modules };
+}
+
+/** A component class's members, and its inputs (by field, with the names its parent binds where they differ) and outputs. */
+function publicMembers(path: string, cls: ts.ClassDeclaration, classic: Classic | null) {
+  const members = new Set<string>();
+  const props: string[] = [];
+  const optional: string[] = [];
+  const outputs: string[] = [];
+  const inputAliases: Record<string, string> = {};
+  for (const m of cls.members) {
+    if (!m.name || !ts.isIdentifier(m.name)) continue;
+    members.add(m.name.text);
+    if (ts.isPropertyDeclaration(m) && m.initializer && ts.isCallExpression(m.initializer)) {
+      const callee = m.initializer.expression.getText();
+      if (/^(viewChild|viewChildren|contentChild|contentChildren)(\.required)?$/.test(callee)) throw new Error(`${path}: the signal query ${callee}() (${m.name.text}) is not supported in a release build yet`);
+      const optionsOf = (k: number, allowed: string[]) => {
+        const o = (m.initializer as ts.CallExpression).arguments[k];
+        if (!o) return undefined;
+        const bad = !ts.isObjectLiteralExpression(o) ? o : o.properties.find((p) => !ts.isPropertyAssignment(p) || !allowed.includes(p.name.getText()));
+        if (bad) throw new Error(`${path}: ${callee}()'s ${ts.isObjectLiteralElementLike(bad) && bad.name ? bad.name.getText() : bad.getText()} (${(m.name as ts.Identifier).text}) is not supported in a release build yet`);
+        return o as ts.ObjectLiteralExpression;
+      };
+      if (callee === 'output') optionsOf(0, []);
+      if (callee === 'input' || callee === 'input.required' || callee === 'model' || callee === 'model.required') {
+        props.push(m.name.text);
+        // `input(init, { alias })`, `input.required({ alias })`: the name the parent binds.
+        const options = optionsOf(callee === 'input' || callee === 'model' ? 1 : 0, ['alias', 'debugName']);
+        const alias = options && ts.isObjectLiteralExpression(options) ? options.properties.find((p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && p.name.getText() === 'alias')?.initializer : undefined;
+        if (alias && ts.isStringLiteralLike(alias)) inputAliases[m.name.text] = alias.text;
+      }
+      // An input with a default value (or `input<T>()` with implicit undefined) is one a parent may leave out.
+      if (callee === 'input' || callee === 'model') optional.push(m.name.text);
+      if (callee === 'output' || callee === 'model' || callee === 'model.required') outputs.push(m.name.text);
+    }
+  }
+  for (const [field, alias] of classic?.aliases ?? []) inputAliases[field] = alias;
+  for (const name of classic?.setters ?? []) { props.push(name); optional.push(name); }
+  return { members, props, optional, outputs, inputAliases };
+}
+
+/**
+ * A component whose selector names attributes (`[searchBar]`, `GridLayout[pane]`): the element that matches is its
+ * host, and the template binds the component's inputs and outputs there, the element's own properties and events
+ * beside them.
+ */
+export interface HostedComponent {
+  name: string;
+  selector: string;
+  inputs: Set<string>;
+  outputs: Set<string>;
+  models: Set<string>;
+  /** It reads its host element (`inject(ElementRef)`, `host: {…}`, `@HostBinding`, `@HostListener`). */
+  readsHost: boolean;
+}
+
+/** A file's component as an element hosting it sees it, when its selector names attributes. */
+export function hostedComponent(path: string, text: string): HostedComponent | null {
+  const found = componentOf(path, text);
+  if (!found?.selector || !ng.CssSelector.parse(found.selector).some((s) => s.attrs.length || s.classNames.length)) return null;
+  let sf = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const named = (f: ts.SourceFile) => f.statements.find((s): s is ts.ClassDeclaration => ts.isClassDeclaration(s) && s.name?.text === found.name)!;
+  let cls = named(sf);
+  const meta = decorator(cls, 'Component')!.arguments[0];
+  const hostMeta = !!meta && ts.isObjectLiteralExpression(meta) && meta.properties.some((p) => p.name?.getText() === 'host');
+  const hostDecorators = cls.members.some((m) => (ts.canHaveDecorators(m) ? ts.getDecorators(m) ?? [] : []).some((d) => /^(HostBinding|HostListener)\b/.test(d.expression.getText())));
+  const classic = classicClass(path, text, cls);
+  if (classic) cls = named((sf = ts.createSourceFile(path, classic.text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)));
+  const api = publicMembers(path, cls, classic);
+  const models = cls.members.filter((m): m is ts.PropertyDeclaration => ts.isPropertyDeclaration(m) && !!m.initializer && ts.isCallExpression(m.initializer) && /^model(\.required)?$/.test(m.initializer.expression.getText())).map((m) => m.name.getText());
+  return {
+    name: found.name,
+    selector: found.selector,
+    inputs: new Set(api.props.map((p) => api.inputAliases[p] ?? p)),
+    outputs: new Set(api.outputs),
+    models: new Set(models),
+    readsHost: hostMeta || hostDecorators || !!classic?.host || /\binject\(\s*ElementRef\b/.test(cls.getText()),
+  };
+}
+
+/** The element names a component's selector matches (`resource, [talkResource]` is `<resource>`; its attribute is `hostedComponent`'s). */
+export function selectorElements(selector: string): string[] {
+  return ng.CssSelector.parse(selector).flatMap((s) => (s.element && s.element !== '*' && !s.attrs.length && !s.classNames.length && !s.notSelectors.length ? [s.element] : []));
+}
+
+/** A file's `@Component` class and the selector it declares. */
+export function componentOf(path: string, text: string): { name: string; selector?: string } | null {
+  if (!text.includes('@Component')) return null;
+  const sf = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  for (const st of sf.statements) {
+    const meta = ts.isClassDeclaration(st) && st.name ? decorator(st, 'Component')?.arguments[0] : undefined;
+    if (!meta) continue;
+    const selector = ts.isObjectLiteralExpression(meta) ? meta.properties.find((p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && p.name.getText() === 'selector')?.initializer : undefined;
+    return { name: (st as ts.ClassDeclaration).name!.text, selector: selector && ts.isStringLiteralLike(selector) ? selector.text : undefined };
+  }
+  return null;
+}
+
+/** @nativescript/angular's platform filters (`<android>`, `<ios>`, `<apple>`) and the platforms each renders its content on. */
+const PLATFORM_FILTERS: Record<string, string[]> = { android: ['android'], ios: ['ios'], apple: ['ios'] };
+
+/** Words a template's expression can name as a member that TypeScript reads as a keyword. */
+const KEYWORDS = new Set(['break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete', 'do', 'else', 'enum', 'export', 'extends', 'finally', 'for', 'function', 'if', 'import', 'in', 'instanceof', 'new', 'return', 'super', 'switch', 'throw', 'try', 'var', 'void', 'while', 'with', 'yield', 'let', 'static', 'await']);
+
+/** NSRouterLink's inputs: on an element with `nsRouterLink` they are the directive's, not the view's. */
+const ROUTER_LINK_INPUTS = new Set(['nsRouterLink', 'relativeTo', 'clearHistory', 'pageTransition', 'pageTransitionDuration', 'queryParams', 'fragment', 'queryParamsHandling', 'state', 'info', 'preserveFragment', 'skipLocationChange', 'replaceUrl']);
+const ROUTER_LINK_SUPPORTED = new Set(['nsRouterLink', 'relativeTo', 'clearHistory', 'pageTransition', 'pageTransitionDuration']);
+
+/**
+ * `@Component({ providers })`: the component's own injector, made by its first field and current until its constructor
+ * returns, so that its fields and constructor inject from it as its view does.
+ */
+function withInjector(path: string, text: string, cls: ts.ClassDeclaration, providers: ts.Expression): string {
+  // A base class's fields are made before the component's first field.
+  if (cls.heritageClauses?.some((h) => h.token === ts.SyntaxKind.ExtendsKeyword)) throw new Error(`${path}: @Component's providers on a class that extends another are not supported in a release build yet`);
+  if (!ts.isArrayLiteralExpression(providers)) throw new Error(`${path}: @Component's providers are read as an array literal in a release build`);
+  for (const e of providers.elements) checkProvider(path, e);
+  const leave = 'this.$injector.leave();';
+  const edits = [{ at: cls.members.pos, text: `\n  readonly $injector = NodeInjector.enter(${providers.getText()});` }];
+  const ctor = cls.members.find((m): m is ts.ConstructorDeclaration => ts.isConstructorDeclaration(m) && !!m.body);
+  if (ctor?.body) {
+    const returns = (n: ts.Node): void => {
+      if (ts.isFunctionLike(n) || ts.isClassLike(n)) return;
+      if (ts.isReturnStatement(n)) edits.push({ at: n.getStart(), text: `{ ${leave} ` }, { at: n.getEnd(), text: ' }' });
+      else ts.forEachChild(n, returns);
+    };
+    ctor.body.statements.forEach(returns);
+    edits.push({ at: ctor.body.getEnd() - 1, text: `${leave} ` });
+  } else edits.push({ at: cls.members.end, text: `\n  constructor() { ${leave} }\n` });
+  let out = text;
+  for (const e of edits.sort((a, b) => b.at - a.at)) out = out.slice(0, e.at) + e.text + out.slice(e.at);
+  return out;
+}
+
+/**
+ * `@Self()`, `@SkipSelf()`, `@Host()` and their `inject()` options in a component with providers: which injector they
+ * start or stop at is not modelled, so a component's own provider would answer where Angular asks its parent.
+ */
+function refuseScopedInjection(path: string, cls: ts.ClassDeclaration): void {
+  const visit = (n: ts.Node): void => {
+    if (ts.isDecorator(n) && ts.isCallExpression(n.expression) && ['Self', 'SkipSelf', 'Host'].includes(n.expression.expression.getText())) {
+      throw new Error(`${path}: @${n.expression.expression.getText()}() in a component with providers is not supported in a release build yet`);
+    }
+    if (ts.isCallExpression(n) && n.expression.getText() === 'inject' && n.arguments[1] && ts.isObjectLiteralExpression(n.arguments[1])) {
+      const scoped = n.arguments[1].properties.find((p) => ['self', 'skipSelf', 'host'].includes(p.name?.getText() ?? ''));
+      if (scoped) throw new Error(`${path}: inject()'s ${scoped.name!.getText()} in a component with providers is not supported in a release build yet`);
+    }
+    ts.forEachChild(n, visit);
+  };
+  cls.members.forEach(visit);
+}
+
+/** A component provider the release build makes: a class, or `{ provide, useClass | useValue | useFactory (and deps) | useExisting }`. */
+function checkProvider(path: string, e: ts.Expression): void {
+  const what = `${path}: the provider ${e.getText().split('\n')[0]} in @Component's providers`;
+  if (ts.isIdentifier(e)) return;
+  if (!ts.isObjectLiteralExpression(e)) throw new Error(`${what} is not supported in a release build yet`);
+  const fields = new Map<string, ts.Expression>();
+  for (const p of e.properties) {
+    if (ts.isPropertyAssignment(p) && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name))) fields.set(p.name.text, p.initializer);
+    else if (ts.isShorthandPropertyAssignment(p)) fields.set(p.name.text, p.name);
+    else throw new Error(`${what} is read as \`{ provide: token, useClass: X }\` in a release build`);
+  }
+  for (const k of fields.keys()) if (!['provide', 'useClass', 'useValue', 'useFactory', 'useExisting', 'deps'].includes(k)) throw new Error(`${what}: its ${k} is not supported in a release build yet`);
+  const uses = ['useClass', 'useValue', 'useFactory', 'useExisting'].filter((k) => fields.has(k));
+  if (!fields.has('provide') || uses.length !== 1) throw new Error(`${what} needs provide and one of useClass, useValue, useFactory or useExisting`);
+  const deps = fields.get('deps');
+  if (deps && (uses[0] !== 'useFactory' || !ts.isArrayLiteralExpression(deps) || deps.elements.some((d) => !ts.isIdentifier(d) && !ts.isPropertyAccessExpression(d)))) {
+    throw new Error(`${what}: deps other than a list of tokens for useFactory are not supported in a release build yet`);
+  }
+}
+
+/**
+ * The `@Component` fields a release build reads, and those it may leave unread: `standalone`, `schemas`, `moduleId` and
+ * `jit` only steer Angular's compiler, `exportAs` names the component a reference gets anyway, `animations` only
+ * declares triggers (binding one is refused), and `preserveWhitespaces: false` is how templates are parsed.
+ */
+const COMPONENT_META = new Set([
+  'selector', 'template', 'templateUrl', 'styles', 'styleUrl', 'styleUrls', 'imports', 'changeDetection', 'encapsulation',
+  'standalone', 'schemas', 'moduleId', 'jit', 'exportAs', 'animations', 'preserveWhitespaces', 'providers',
+]);
+
+/** Decorator fields named in the plural, for messages. */
+const PLURAL_FIELDS = new Set(['providers', 'viewProviders', 'inputs', 'outputs', 'queries', 'hostDirectives', 'animations', 'schemas']);
+
+/** The directives of @angular/forms an element can select, in the order Angular runs them on one, and their selectors. */
+const FORMS_SELECTORS: [FormsDirective, string][] = [
+  ['RequiredValidator', ':not([type=checkbox])[required][formControlName],:not([type=checkbox])[required][formControl],:not([type=checkbox])[required][ngModel]'],
+  ['MinLengthValidator', '[minlength][formControlName],[minlength][formControl],[minlength][ngModel]'],
+  ['MaxLengthValidator', '[maxlength][formControlName],[maxlength][formControl],[maxlength][ngModel]'],
+  ['PatternValidator', '[pattern][formControlName],[pattern][formControl],[pattern][ngModel]'],
+  ['EmailValidator', '[email][formControlName],[email][formControl],[email][ngModel]'],
+  ['NgModel', '[ngModel]:not([formControlName]):not([formControl])'],
+  ['NgModelGroup', '[ngModelGroup]'],
+  ['NgForm', 'form:not([ngNoForm]):not([formGroup]):not([formArray]),ng-form,[ngForm]'],
+  ['FormControlDirective', '[formControl]'],
+  ['FormGroupDirective', '[formGroup]'],
+  ['FormArrayDirective', '[formArray]'],
+  ['FormControlName', '[formControlName]'],
+  ['FormGroupName', '[formGroupName]'],
+  ['FormArrayName', '[formArrayName]'],
+  ['DefaultValueAccessor', 'input:not([type=checkbox])[formControlName],textarea[formControlName],input:not([type=checkbox])[formControl],textarea[formControl],input:not([type=checkbox])[ngModel],textarea[ngModel],[ngDefaultControl]'],
+];
+type FormsDirective = 'RequiredValidator' | 'MinLengthValidator' | 'MaxLengthValidator' | 'PatternValidator' | 'EmailValidator' | 'NgModel' | 'NgModelGroup' | 'NgForm'
+  | 'FormControlDirective' | 'FormGroupDirective' | 'FormArrayDirective' | 'FormControlName' | 'FormGroupName' | 'FormArrayName' | 'DefaultValueAccessor';
+const FORMS_VALIDATORS: Partial<Record<FormsDirective, string>> = { RequiredValidator: 'required', MinLengthValidator: 'minlength', MaxLengthValidator: 'maxlength', PatternValidator: 'pattern', EmailValidator: 'email' };
+const FORMS_CONTROLS = new Set<FormsDirective>(['NgModel', 'FormControlDirective', 'FormControlName']);
+const FORMS_CONTAINERS = new Set<FormsDirective>(['NgForm', 'FormGroupDirective', 'FormArrayDirective', 'FormGroupName', 'FormArrayName', 'NgModelGroup']);
+const FORMS_TEMPLATE_DRIVEN = new Set<FormsDirective>(['NgModel', 'NgForm', 'NgModelGroup']);
+const FORMS_REACTIVE_PARENTS = new Set<FormsDirective>(['FormGroupDirective', 'FormArrayDirective', 'FormGroupName', 'FormArrayName']);
+/** A directive's exportAs, the name a template reference (`#f="ngForm"`) takes it by. */
+const FORMS_EXPORT_AS: Partial<Record<FormsDirective, string>> = { NgModel: 'ngModel', NgForm: 'ngForm', NgModelGroup: 'ngModelGroup', FormGroupDirective: 'ngForm', FormArrayDirective: 'ngForm', FormControlDirective: 'ngForm' };
+/**
+ * @nativescript/angular's value accessors (NativeScriptFormsModule), by the element they select: the view's property
+ * they write (`text` and `selectedIndex` have their own rules) and the event that changes it.
+ */
+const FORMS_ACCESSORS: Record<string, { kind: string; event: string; accessor: string }> = {
+  TextField: { kind: 'text', event: 'textChange', accessor: 'TextValueAccessor' },
+  TextView: { kind: 'text', event: 'textChange', accessor: 'TextValueAccessor' },
+  SearchBar: { kind: 'text', event: 'textChange', accessor: 'TextValueAccessor' },
+  Switch: { kind: 'checked', event: 'checkedChange', accessor: 'CheckedValueAccessor' },
+  DatePicker: { kind: 'date', event: 'dateChange', accessor: 'DateValueAccessor' },
+  TimePicker: { kind: 'time', event: 'timeChange', accessor: 'TimeValueAccessor' },
+  Slider: { kind: 'value', event: 'valueChange', accessor: 'NumberValueAccessor' },
+  SegmentedBar: { kind: 'selectedIndex', event: 'selectedIndexChange', accessor: 'SelectedIndexValueAccessor' },
+  ListPicker: { kind: 'selectedIndex', event: 'selectedIndexChange', accessor: 'SelectedIndexValueAccessor' },
+  TabView: { kind: 'selectedIndex', event: 'selectedIndexChange', accessor: 'SelectedIndexValueAccessor' },
+};
+
+/** What selects a directive of @angular/forms (with @nativescript/angular's value accessors) on an element. */
+const FORMS_DIRECTIVES = new Set([
+  'ngModel', 'ngModelChange', 'ngModelOptions', 'ngModelGroup', 'ngForm', 'ngFormOptions', 'ngNoForm', 'ngSubmit',
+  'formGroup', 'formGroupName', 'formControl', 'formControlName', 'formArray', 'formArrayName',
+]);
+
+/** Directives (and Angular's enter and leave animations) an element can select that the release build does not run, by the input or attribute that selects each. */
+const UNSUPPORTED_DIRECTIVES: Record<string, string> = {
+  ngClass: "@angular/common's NgClass",
+  ngStyle: "@angular/common's NgStyle",
+  ngPlural: "@angular/common's NgPlural",
+  ngPluralCase: "@angular/common's NgPluralCase",
+  ngComponentOutlet: "@angular/common's NgComponentOutlet",
+  ngTemplateOutlet: "@angular/common's NgTemplateOutlet, which a release build runs on <ng-container>",
+  ngTemplateOutletContext: "@angular/common's NgTemplateOutlet, which a release build runs on <ng-container>",
+  ngIf: '@angular/common\'s NgIf without its template (*ngIf)',
+  ngIfElse: '@angular/common\'s NgIf without its template (*ngIf)',
+  ngIfThen: '@angular/common\'s NgIf without its template (*ngIf)',
+  ngForOf: '@angular/common\'s NgForOf without its template (*ngFor)',
+  ngForTrackBy: '@angular/common\'s NgForOf without its template (*ngFor)',
+  ngSwitchCase: '@angular/common\'s NgSwitchCase without its template (*ngSwitchCase)',
+  ngSwitchDefault: '@angular/common\'s NgSwitchDefault without its template (*ngSwitchDefault)',
+  routerLink: "@angular/router's RouterLink; nsRouterLink is supported",
+  routerLinkActive: "@angular/router's RouterLinkActive",
+  routerLinkActiveOptions: "@angular/router's RouterLinkActive",
+  nsRouterLinkActiveOptions: "@nativescript/angular's NSRouterLinkActive",
+  'animate.enter': "Angular's enter animation",
+  'animate.leave': "Angular's leave animation",
+};
+
+/** Whether the file imports `name` from `module` under its own name. */
+function importsAs(sf: ts.SourceFile, name: string, module: string): boolean {
+  return sf.statements.some((s) => ts.isImportDeclaration(s) && ts.isStringLiteral(s.moduleSpecifier) && s.moduleSpecifier.text === module && !s.importClause?.isTypeOnly
+    && !!s.importClause?.namedBindings && ts.isNamedImports(s.importClause.namedBindings)
+    && s.importClause.namedBindings.elements.some((e) => e.name.text === name && (e.propertyName?.text ?? name) === name && !e.isTypeOnly));
+}
+
+/** Whether a top-level import or declaration of the file binds `name`. */
+function declares(sf: ts.SourceFile, name: string): boolean {
+  return sf.statements.some((s) => {
+    if (ts.isImportDeclaration(s)) {
+      const c = s.importClause;
+      return c?.name?.text === name || (!!c?.namedBindings && (ts.isNamespaceImport(c.namedBindings) ? c.namedBindings.name.text === name : c.namedBindings.elements.some((e) => e.name.text === name)));
+    }
+    if (ts.isVariableStatement(s)) return s.declarationList.declarations.some((d) => ts.isIdentifier(d.name) && d.name.text === name);
+    return (ts.isFunctionDeclaration(s) || ts.isClassDeclaration(s)) && s.name?.text === name;
+  });
+}
+
+function sourceOf(ast: ng.AST): string {
+  const s = (ast as ng.ASTWithSource).source;
+  if (s == null) throw new Error('an Angular expression without source text');
+  return s;
+}
+
+/**
+ * The route fields a release build reads, and those it may leave unread: `title` (a native screen has no window title
+ * for it) and `runGuardsAndResolvers` (with no guards or resolvers, nothing it steers runs).
+ */
+const ROUTE_FIELDS = new Set(['path', 'pathMatch', 'component', 'loadComponent', 'redirectTo', 'outlet', 'children', 'loadChildren', 'data', 'title', 'runGuardsAndResolvers']);
+const ROUTE_GUARDS = new Set(['canActivate', 'canActivateChild', 'canDeactivate', 'canMatch', 'canLoad']);
+/** The guards the release build's router runs, each with the arguments Angular calls it with. */
+const RUN_GUARDS: Record<string, number> = { canActivate: 2, canActivateChild: 2, canDeactivate: 4, canMatch: 2 };
+
+const lineOf = (n: ts.Node) => ts.getLineAndCharacterOfPosition(n.getSourceFile(), n.getStart()).line + 1;
+
+type RouteConstant = string | number | boolean | null;
+
+/** A literal's value, undefined for anything else. */
+function literalConstant(e: ts.Expression): RouteConstant | undefined {
+  return ts.isStringLiteralLike(e) ? e.text : undefined;
+}
+
+/**
+ * An expression of a route file as the value it always has: literals, `const` names, enum members, templates and `+`
+ * over them, followed through the file's imports. Undefined when it is not a compile-time constant.
+ */
+function routeConstant(file: string, e: ts.Expression, parse: (f: string) => ts.SourceFile, fileOf: (from: string, spec: string) => string | undefined, depth = 0): RouteConstant | undefined {
+  if (depth > 20) return undefined;
+  const of = (f: string, x: ts.Expression) => routeConstant(f, x, parse, fileOf, depth + 1);
+  while (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isSatisfiesExpression(e) || ts.isNonNullExpression(e)) e = e.expression;
+  if (ts.isStringLiteralLike(e)) return e.text;
+  if (ts.isNumericLiteral(e)) return Number(e.text);
+  if (ts.isPrefixUnaryExpression(e) && e.operator === ts.SyntaxKind.MinusToken && ts.isNumericLiteral(e.operand)) return -Number(e.operand.text);
+  if (e.kind === ts.SyntaxKind.TrueKeyword) return true;
+  if (e.kind === ts.SyntaxKind.FalseKeyword) return false;
+  if (e.kind === ts.SyntaxKind.NullKeyword) return null;
+  if (ts.isTemplateExpression(e)) {
+    let text = e.head.text;
+    for (const span of e.templateSpans) {
+      const v = of(file, span.expression);
+      if (v === undefined) return undefined;
+      text += String(v) + span.literal.text;
+    }
+    return text;
+  }
+  if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+    const a = of(file, e.left), b = of(file, e.right);
+    if (a === undefined || b === undefined) return undefined;
+    return typeof a === 'string' || typeof b === 'string' ? String(a) + String(b) : typeof a === 'number' && typeof b === 'number' ? a + b : undefined;
+  }
+  if (ts.isIdentifier(e)) {
+    const d = declarationOf(file, e.text, parse, fileOf);
+    const list = d && ts.isVariableDeclaration(d) ? d.parent : undefined;
+    return d && ts.isVariableDeclaration(d) && list && ts.isVariableDeclarationList(list) && list.flags & ts.NodeFlags.Const && d.initializer ? of(d.getSourceFile().fileName, d.initializer) : undefined;
+  }
+  if (ts.isPropertyAccessExpression(e) && ts.isIdentifier(e.expression)) {
+    const d = declarationOf(file, e.expression.text, parse, fileOf);
+    if (!d || !ts.isEnumDeclaration(d) || d.modifiers?.some((m) => m.kind === ts.SyntaxKind.DeclareKeyword)) return undefined;
+    let next: RouteConstant | undefined = 0;
+    for (const m of d.members) {
+      const v = m.initializer ? of(d.getSourceFile().fileName, m.initializer) : next;
+      if (m.name.getText() === e.name.text || (ts.isStringLiteral(m.name) && m.name.text === e.name.text)) return v;
+      next = typeof v === 'number' ? v + 1 : undefined;
+    }
+  }
+  return undefined;
+}
+
+/** A route's `data` as its entries in order, each value a compile-time constant; undefined when it is anything else. */
+function routeData(e: ts.Expression, constant: (e: ts.Expression) => RouteConstant | undefined): [string, RouteConstant][] | undefined {
+  while (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isSatisfiesExpression(e)) e = e.expression;
+  if (!ts.isObjectLiteralExpression(e)) return undefined;
+  const entries = new Map<string, RouteConstant>();
+  for (const p of e.properties) {
+    if (!ts.isPropertyAssignment(p) || !(ts.isIdentifier(p.name) || ts.isStringLiteral(p.name))) return undefined;
+    const v = constant(p.initializer);
+    if (v === undefined) return undefined;
+    entries.set(p.name.text, v);
+  }
+  return [...entries];
+}
+
+/** A route's fields, each one the release build reads as Angular's router does, or may leave unread. */
+function routeFields(file: string, route: ts.ObjectLiteralExpression, guards = false, constant: (e: ts.Expression) => RouteConstant | undefined = literalConstant): void {
+  const pathOf = route.properties.find((p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && p.name.getText() === 'path')?.initializer;
+  const pathText = pathOf && constant(pathOf);
+  const named = typeof pathText === 'string' ? ` on '${pathText}'` : '';
+  for (const p of route.properties) {
+    const at = `${file}:${lineOf(p)}`;
+    if (!ts.isPropertyAssignment(p) || !(ts.isIdentifier(p.name) || ts.isStringLiteral(p.name))) throw new Error(`${at}: a route's ${p.getText().split('\n')[0]} is read as \`name: value\` in a release build`);
+    const key = p.name.text;
+    const v = p.initializer;
+    if (ROUTE_GUARDS.has(key) && !(guards && key in RUN_GUARDS)) throw new Error(`${at}: route guards (${key}${named}) are not supported in a release build yet`);
+    if (key in RUN_GUARDS && !ts.isArrayLiteralExpression(v)) throw new Error(`${at}: a route's ${key} that is not an array (${v.getText().split('\n')[0]}) is not supported in a release build yet`);
+    if (key === 'canMatch' && route.properties.some((q) => q.name?.getText() === 'redirectTo')) throw new Error(`${at}: canMatch on a redirect${named} is not supported in a release build yet`);
+    if (key === 'resolve') throw new Error(`${at}: route resolvers (resolve${named}) are not supported in a release build yet`);
+    if (!ROUTE_FIELDS.has(key) && !(key in RUN_GUARDS)) throw new Error(`${at}: a route's ${key}${named} is not supported in a release build yet`);
+    if (['path', 'pathMatch', 'redirectTo', 'outlet'].includes(key) && typeof constant(v) !== 'string') throw new Error(`${at}: a route's ${key} that is not a compile-time string (${v.getText().split('\n')[0]}) is not supported in a release build yet`);
+    if (key === 'data' && !routeData(v, constant)) {
+      const bad = ts.isObjectLiteralExpression(v) ? v.properties.find((q) => !ts.isPropertyAssignment(q) || !routeData(ts.factory.createObjectLiteralExpression([q]), constant)) : undefined;
+      throw new Error(`${at}: a route's data that is not an object of compile-time constants (${(bad ?? v).getText().split('\n')[0]}) is not supported in a release build yet`);
+    }
+    if (key === 'component' && !ts.isIdentifier(v)) throw new Error(`${at}: a route's component that is not a class name (${v.getText().split('\n')[0]}) is not supported in a release build yet`);
+  }
+}
+
+/**
+ * The router's options beside its routes: `withPreloading` (lazy routes are linked in) and `withDebugTracing` (only logs)
+ * change nothing a release build does, and of forRoot's options `enableTracing`, `useHash`, `preloadingStrategy` and the
+ * scrolling ones, which a native page has no use for.
+ */
+function routerOptions(file: string, call: ts.CallExpression): void {
+  const at = `${file}:${lineOf(call)}`;
+  if (/(^|\.)forRoot$/.test(call.expression.getText())) {
+    const options = call.arguments[1];
+    if (!options) return;
+    if (!ts.isObjectLiteralExpression(options)) throw new Error(`${at}: the router's options (${options.getText()}) are not supported in a release build yet`);
+    for (const p of options.properties) {
+      const key = p.name?.getText() ?? p.getText();
+      if (!['enableTracing', 'useHash', 'preloadingStrategy', 'scrollPositionRestoration', 'anchorScrolling', 'scrollOffset'].includes(key)) throw new Error(`${at}: the router option ${key} is not supported in a release build yet`);
+    }
+    return;
+  }
+  for (const f of call.arguments.slice(1)) {
+    const name = ts.isCallExpression(f) ? f.expression.getText() : f.getText();
+    if (!['withPreloading', 'withDebugTracing'].includes(name)) throw new Error(`${at}: the router feature ${name}() is not supported in a release build yet`);
+  }
+}
+
+/** A route of the app's configuration, its lazy children and components resolved to what they import. */
+export interface RouteNode {
+  path: string;
+  component?: string;
+  redirectTo?: string;
+  full?: boolean;
+  outlet?: string;
+  /** The route's component is `NSEmptyOutletComponent`. */
+  emptyOutlet?: boolean;
+  children?: RouteNode[];
+  /** The id the route's guards are registered under (`RouteGuardModule`). */
+  guards?: number;
+  /** The route has canDeactivate guards, which take its component. */
+  deactivate?: boolean;
+  /**
+   * The route's data with what it inherits under Angular's `emptyOnly` strategy: its parent's, when its path is '' or
+   * the parent has no component; its own keys win, after the inherited ones in order.
+   */
+  data?: [string, RouteConstant][];
+}
+
+/** A guard as the route file gives it: a class to inject (with its method's parameter count), else a function. */
+interface RouteGuard {
+  route: number;
+  kind: string;
+  expr: ts.Expression;
+  inject?: { name: string; arity: number };
+}
+
+/**
+ * A route file's guards as a module of their own (route files are not compiled): the imports and top-level declarations
+ * the guards name, then each guard registered with the kit's router under its route's id.
+ */
+export interface RouteGuardModule {
+  file: string;
+  source(appDir: string, platform: 'ios' | 'android'): string;
+}
+
+/** What a class or function name resolves to across the app's files: the declaration, else null (a package's, or not found). */
+function declarationOf(file: string, name: string, parse: (f: string) => ts.SourceFile, fileOf: (from: string, spec: string) => string | undefined, seen = new Set<string>()): ts.Declaration | null {
+  if (seen.has(`${file}#${name}`)) return null;
+  seen.add(`${file}#${name}`);
+  const sf = parse(file);
+  for (const st of sf.statements) {
+    if ((ts.isClassDeclaration(st) || ts.isFunctionDeclaration(st) || ts.isEnumDeclaration(st)) && st.name?.text === name) return st;
+    if (ts.isVariableStatement(st)) {
+      const d = st.declarationList.declarations.find((x) => ts.isIdentifier(x.name) && x.name.text === name);
+      if (d) return d;
+    }
+    if ((ts.isImportDeclaration(st) || ts.isExportDeclaration(st)) && st.moduleSpecifier && ts.isStringLiteral(st.moduleSpecifier)) {
+      const bindings = ts.isImportDeclaration(st) ? st.importClause?.namedBindings : st.exportClause;
+      if (!bindings || ts.isNamespaceImport(bindings) || ts.isNamespaceExport(bindings)) continue;
+      const el = (bindings.elements as ts.NodeArray<ts.ImportSpecifier | ts.ExportSpecifier>).find((e) => e.name.text === name);
+      const target = el ? fileOf(file, st.moduleSpecifier.text) : undefined;
+      if (el) return target ? declarationOf(target, (el.propertyName ?? el.name).text, parse, fileOf, seen) : null;
+    }
+  }
+  return null;
+}
+
+/** The top-level names a node refers to, in value and type positions. */
+function namesIn(node: ts.Node, into = new Set<string>()): Set<string> {
+  const visit = (n: ts.Node) => {
+    if (ts.isIdentifier(n)) {
+      const p = n.parent;
+      const member = (ts.isPropertyAccessExpression(p) && p.name === n) || (ts.isQualifiedName(p) && p.right === n) || ((ts.isPropertyAssignment(p) || ts.isMethodDeclaration(p) || ts.isPropertyDeclaration(p) || ts.isPropertySignature(p) || ts.isMethodSignature(p) || ts.isGetAccessor(p) || ts.isSetAccessor(p)) && p.name === n);
+      if (!member) into.add(n.text);
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(node);
+  return into;
+}
+
+/** A specifier as written in `from`, for a module in `appDir`. */
+function respecify(from: string, spec: string, appDir: string): string {
+  if (!spec.startsWith('.')) return spec;
+  const r = relative(appDir, join(dirname(from), spec)).split('\\').join('/');
+  return r.startsWith('.') ? r : './' + r;
+}
+
+function guardModule(file: string, sf: ts.SourceFile, guards: RouteGuard[]): RouteGuardModule {
+  // The route file's imports and declarations the guards need, followed through the declarations they need in turn.
+  const needed = new Set<string>();
+  const pending = guards.map((g) => g.expr as ts.Node);
+  const declared = new Map<string, ts.Statement>();
+  for (const st of sf.statements) {
+    const names = ts.isVariableStatement(st) ? st.declarationList.declarations.flatMap((d) => (ts.isIdentifier(d.name) ? [d.name.text] : []))
+      : (ts.isFunctionDeclaration(st) || ts.isClassDeclaration(st) || ts.isInterfaceDeclaration(st) || ts.isTypeAliasDeclaration(st) || ts.isEnumDeclaration(st)) && st.name ? [st.name.text] : [];
+    for (const n of names) declared.set(n, st);
+  }
+  const copied = new Set<ts.Statement>();
+  // The translators name imported kit declarations by their own names, so no alias: a class guard's inject is the route
+  // file's own import of it when it has one.
+  if (guards.some((g) => g.inject)) needed.add('inject');
+  const importsInject = sf.statements.some((st) => ts.isImportDeclaration(st) && ts.isStringLiteral(st.moduleSpecifier) && st.moduleSpecifier.text === '@angular/core' && !!st.importClause?.namedBindings && ts.isNamedImports(st.importClause.namedBindings) && st.importClause.namedBindings.elements.some((e) => e.name.text === 'inject' && !e.propertyName));
+  while (pending.length) {
+    for (const n of namesIn(pending.pop()!)) {
+      if (needed.has(n)) continue;
+      needed.add(n);
+      const st = declared.get(n);
+      if (st && !copied.has(st)) { copied.add(st); pending.push(st); }
+    }
+  }
+  return {
+    file,
+    source(appDir, platform) {
+      const lines: string[] = [];
+      for (const st of sf.statements) {
+        if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier) || !st.importClause) continue;
+        const c = st.importClause;
+        const spec = JSON.stringify(respecify(file, st.moduleSpecifier.text, appDir));
+        const type = c.isTypeOnly ? 'type ' : '';
+        if (c.name && needed.has(c.name.text)) lines.push(`import ${type}${c.name.text} from ${spec};`);
+        if (c.namedBindings && ts.isNamespaceImport(c.namedBindings) && needed.has(c.namedBindings.name.text)) lines.push(`import ${type}* as ${c.namedBindings.name.text} from ${spec};`);
+        if (c.namedBindings && ts.isNamedImports(c.namedBindings)) {
+          const els = c.namedBindings.elements.filter((e) => needed.has(e.name.text)).map((e) => e.getText());
+          if (els.length) lines.push(`import ${type}{ ${els.join(', ')} } from ${spec};`);
+        }
+      }
+      lines.push("import { KitRouter } from '@angular#kit';");
+      if (guards.some((g) => g.inject) && !importsInject) lines.push("import { inject } from '@angular/core';");
+      // A compiled rxjs Observable is the app's own class on iOS, which the kit can't read: firstValueFrom there.
+      if (platform === 'ios') lines.push("import { ɵguardResult } from '@angular/router';");
+      lines.push(...sf.statements.filter((st) => copied.has(st)).map((st) => st.getText()));
+      const settle = (e: string) => (platform === 'ios' ? `ɵguardResult(${e})` : e);
+      const params = ['a', 'b', 'c', 'd'];
+      const all = params.map((p) => `${p}: any`).join(', ');
+      guards.forEach((g, i) => {
+        const arity = RUN_GUARDS[g.kind];
+        if (g.inject) {
+          lines.push(`KitRouter.shared.addGuard(${g.route}, '${g.kind}', (${all}): any => ${settle(`inject(${g.inject.name}).${g.kind}(${params.slice(0, Math.min(arity, g.inject.arity)).join(', ')})`)});`);
+        } else {
+          // Evaluated once, as Angular reads its route configuration once: a guard factory's call runs at startup.
+          lines.push(`const ɵguard${i}: (${params.slice(0, arity).map((p) => `${p}: any`).join(', ')}) => any = ${g.expr.getText()};`);
+          lines.push(`KitRouter.shared.addGuard(${g.route}, '${g.kind}', (${all}): any => ${settle(`ɵguard${i}(${params.slice(0, arity).join(', ')})`)});`);
+        }
+      });
+      return lines.join('\n') + '\n';
+    },
+  };
+}
+
+/**
+ * The router configuration the entry provides (`provideNativeScriptRouter(routes)`,
+ * `NativeScriptRouterModule.forRoot(routes)`), followed through `loadChildren` and
+ * `loadComponent` into the files they import. A route whose component is `NSEmptyOutletComponent` is marked
+ * `emptyOutlet`: its children render in a frame of their own, on a page of the outlet the route names.
+ */
+export function angularRouteTree(entry: string, read: (file: string) => string, aliased: (specifier: string) => string | undefined = () => undefined): { routes: RouteNode[]; files: Set<string>; guards: RouteGuardModule[] } | null {
+  const files = new Set<string>();
+  const parsed = new Map<string, ts.SourceFile>();
+  const parse = (f: string) => parsed.get(f) ?? parsed.set(f, ts.createSourceFile(f, read(f), ts.ScriptTarget.Latest, true)).get(f)!;
+  const guards = new Map<string, RouteGuard[]>();
+  let guardIds = 0;
+  /** A relative specifier, or one of the app's path aliases (`~/app/x`), as the file it names. */
+  const fileOf = (from: string, spec: string) => {
+    const base = spec.startsWith('.') ? join(dirname(from), spec) : aliased(spec);
+    return base === undefined ? undefined : [base + '.ts', join(base, 'index.ts')].find((p) => existsSync(p));
+  };
+  /** The array a name declares in a file, or imports into it. */
+  const arrayNamed = (file: string, name: string): { file: string; array: ts.ArrayLiteralExpression } | null => {
+    const sf = parse(file);
+    for (const st of sf.statements) {
+      if (ts.isVariableStatement(st)) {
+        for (const d of st.declarationList.declarations) {
+          if (ts.isIdentifier(d.name) && d.name.text === name && d.initializer && ts.isArrayLiteralExpression(d.initializer)) return { file, array: d.initializer };
+        }
+      }
+      if (ts.isImportDeclaration(st) && st.importClause?.namedBindings && ts.isNamedImports(st.importClause.namedBindings) && ts.isStringLiteral(st.moduleSpecifier)) {
+        const el = st.importClause.namedBindings.elements.find((e) => e.name.text === name);
+        const target = el ? fileOf(file, st.moduleSpecifier.text) : undefined;
+        if (target) return arrayNamed(target, (el!.propertyName ?? el!.name).text);
+      }
+    }
+    return null;
+  };
+  /** `() => import('./x').then((m) => m.Name)`: the file and the name. */
+  const lazy = (file: string, e: ts.Expression): { file: string; name: string } => {
+    const body = ts.isArrowFunction(e) && !ts.isBlock(e.body) ? e.body : undefined;
+    const then = body && ts.isCallExpression(body) && ts.isPropertyAccessExpression(body.expression) && body.expression.name.text === 'then' ? (body as ts.CallExpression & { expression: ts.PropertyAccessExpression }) : undefined;
+    const load = then && ts.isCallExpression(then.expression.expression) && then.expression.expression.expression.kind === ts.SyntaxKind.ImportKeyword ? then.expression.expression : undefined;
+    const pick = then?.arguments[0];
+    const name = pick && ts.isArrowFunction(pick) && ts.isPropertyAccessExpression(pick.body) ? pick.body.name.text : undefined;
+    const spec = load?.arguments[0];
+    const target = spec && ts.isStringLiteral(spec) ? fileOf(file, spec.text) : undefined;
+    if (!target || !name) throw new Error(`${file}:${ts.getLineAndCharacterOfPosition(e.getSourceFile(), e.getStart()).line + 1}: a lazy route is read as () => import('./file').then((m) => m.Name) in a release build`);
+    return { file: target, name };
+  };
+  const routesOf = (file: string, array: ts.ArrayLiteralExpression, parent?: RouteNode): RouteNode[] => {
+    files.add(file);
+    return array.elements.map((el) => {
+      if (!ts.isObjectLiteralExpression(el)) throw new Error(`${file}: a route is an object literal in a release build`);
+      const constant = (e: ts.Expression) => routeConstant(file, e, parse, fileOf);
+      routeFields(file, el, true, constant);
+      const get = (k: string) => el.properties.find((p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && p.name.getText() === k)?.initializer;
+      const text = (k: string) => { const v = get(k); const c = v && constant(v); return typeof c === 'string' ? c : undefined; };
+      const node: RouteNode = { path: text('path') ?? '' };
+      for (const kind of Object.keys(RUN_GUARDS)) {
+        const list = get(kind) as ts.ArrayLiteralExpression | undefined;
+        if (!list?.elements.length) continue;
+        node.guards ??= guardIds++;
+        if (kind === 'canDeactivate') node.deactivate = true;
+        for (const g of list.elements) {
+          let inject: RouteGuard['inject'];
+          if (ts.isIdentifier(g)) {
+            const d = declarationOf(file, g.text, parse, fileOf);
+            if (!d) throw new Error(`${file}:${lineOf(g)}: the ${kind} guard ${g.text}, which the release build can't find in the app's files, is not supported in a release build yet`);
+            if (ts.isClassDeclaration(d)) {
+              const method = d.members.find((m): m is ts.MethodDeclaration => ts.isMethodDeclaration(m) && m.name.getText() === kind);
+              inject = { name: g.text, arity: method ? method.parameters.length : RUN_GUARDS[kind] };
+            }
+          } else if (ts.isSpreadElement(g)) {
+            throw new Error(`${file}:${lineOf(g)}: a spread in a route's ${kind} is not supported in a release build yet`);
+          }
+          guards.set(file, [...(guards.get(file) ?? []), { route: node.guards, kind, expr: g, inject }]);
+        }
+      }
+      const component = get('component');
+      if (component && ts.isIdentifier(component)) {
+        if (component.text === 'NSEmptyOutletComponent') node.emptyOutlet = true;
+        else node.component = component.text;
+      }
+      const loadComponent = get('loadComponent');
+      if (loadComponent) node.component = lazy(file, loadComponent).name;
+      if (text('redirectTo') !== undefined) node.redirectTo = text('redirectTo');
+      if (text('pathMatch') === 'full') node.full = true;
+      if (text('outlet')) node.outlet = text('outlet');
+      const inherited = parent?.data && (node.path === '' || (!parent.component && !parent.emptyOutlet)) ? parent.data : [];
+      const own = get('data');
+      const data = new Map([...inherited, ...(own ? routeData(own, constant)! : [])]);
+      if (data.size) node.data = [...data];
+      const children = get('children');
+      if (children && ts.isArrayLiteralExpression(children)) node.children = routesOf(file, children, node);
+      else if (children) {
+        const named = ts.isIdentifier(children) ? arrayNamed(file, children.text) : null;
+        if (!named) throw new Error(`${file}:${lineOf(children)}: a route's children are an array in a release build (given ${children.getText()})`);
+        node.children = routesOf(named.file, named.array, node);
+      }
+      const loadChildren = get('loadChildren');
+      if (loadChildren) {
+        const { file: target, name } = lazy(file, loadChildren);
+        const found = arrayNamed(target, name);
+        if (!found) throw new Error(`${target}: no route array ${name}`);
+        node.children = [...(node.children ?? []), ...routesOf(found.file, found.array, node)];
+      }
+      return node;
+    });
+  };
+  const sf = parse(entry);
+  let found: { file: string; array: ts.ArrayLiteralExpression } | null = null;
+  const visit = (n: ts.Node) => {
+    if (found) return;
+    if (ts.isCallExpression(n) && /(^|\.)(provideNativeScriptRouter|provideRouter|forRoot)$/.test(n.expression.getText()) && n.arguments[0] && ts.isIdentifier(n.arguments[0])) {
+      routerOptions(entry, n);
+      found = arrayNamed(entry, n.arguments[0].text);
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  if (!found) return null;
+  const { file, array } = found as { file: string; array: ts.ArrayLiteralExpression };
+  const routes = routesOf(file, array);
+  return { routes, files, guards: [...guards].map(([f, list]) => guardModule(f, parse(f), list)) };
+}
+
+/** The components a route tree names. */
+export function routedComponents(routes: RouteNode[]): string[] {
+  return routes.flatMap((r) => [...(r.component ? [r.component] : []), ...routedComponents(r.children ?? [])]);
+}
+
+/** The route table: path → component, and where the app starts. */
+export function angularRoutes(text: string, file = 'routes.ts'): { routes: { path: string; component: string }[]; initial: string } {
+  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+  const routes: { path: string; component: string }[] = [];
+  let initial = '';
+  const visit = (n: ts.Node) => {
+    if (ts.isCallExpression(n) && /(^|\.)forRoot$/.test(n.expression.getText())) routerOptions(file, n);
+    const keys = ts.isObjectLiteralExpression(n) ? n.properties.map((p) => p.name?.getText()) : [];
+    if (ts.isObjectLiteralExpression(n) && keys.includes('path') && keys.some((k) => !!k && (ROUTE_GUARDS.has(k) || ['component', 'loadComponent', 'redirectTo', 'children', 'loadChildren', 'pathMatch', 'resolve'].includes(k)))) {
+      if (keys.includes('data')) throw new Error(`${file}:${lineOf(n)}: a route's data, with the routes given outside the entry, is not supported in a release build yet`);
+      routeFields(file, n);
+      // Only a flat table of paths: nested and lazy routes need provideNativeScriptRouter(routes) in the entry.
+      const nested = keys.find((k) => k === 'children' || k === 'loadChildren' || k === 'loadComponent' || k === 'outlet');
+      if (nested) throw new Error(`${file}:${lineOf(n)}: a route's ${nested}, with the routes given outside the entry, is not supported in a release build yet`);
+      const path = n.properties.find((p) => p.name?.getText() === 'path') as ts.PropertyAssignment;
+      if (keys.includes('redirectTo') && (path.initializer as ts.StringLiteral).text !== '') throw new Error(`${file}:${lineOf(n)}: a redirect from a path other than '', with the routes given outside the entry, is not supported in a release build yet`);
+    }
+    if (ts.isObjectLiteralExpression(n)) {
+      const get = (k: string) => n.properties.find((p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && (p.name as ts.Identifier).text === k)?.initializer;
+      const path = (get('path') as ts.StringLiteral | undefined)?.text;
+      const component = get('component');
+      const redirect = (get('redirectTo') as ts.StringLiteral | undefined)?.text;
+      if (path !== undefined && component && ts.isIdentifier(component)) routes.push({ path, component: component.text });
+      if (path === '' && redirect) initial = redirect;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return { routes, initial: initial || '/' + (routes[0]?.path ?? '') };
+}

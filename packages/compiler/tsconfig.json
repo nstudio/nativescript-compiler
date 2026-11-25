@@ -1,0 +1,21 @@
+{
+	"compilerOptions": {
+		"target": "es2023",
+		"lib": ["es2024"],
+		"module": "nodenext",
+		"moduleResolution": "nodenext",
+		"allowImportingTsExtensions": true,
+		"erasableSyntaxOnly": true,
+		"verbatimModuleSyntax": true,
+		"noEmit": true,
+		"strict": true,
+		"noImplicitReturns": true,
+		"noImplicitOverride": true,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
+		"skipLibCheck": true,
+		"types": ["node"],
+		"typeRoots": ["node_modules/@types", "../../node_modules/@types"]
+	},
+	"include": ["src/**/*.ts"]
+}

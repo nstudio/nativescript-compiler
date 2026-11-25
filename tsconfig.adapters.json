@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["es2024"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    "strict": false,
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": [
+    "packages/angular/*.ts",
+    "packages/vue/*.ts",
+    "packages/svelte/*.ts",
+    "packages/react/*.ts",
+    "packages/solid/*.ts",
+    "packages/octane/*.ts",
+    "packages/stubs-nativescript-ui/*.ts",
+    "packages/nativescript-canvas/*.ts"
+  ]
+}

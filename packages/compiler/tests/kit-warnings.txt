@@ -1,0 +1,83 @@
+# Warnings a build of the kit may give (tests/kit-warnings.ts checks every build against this list).
+# Platform APIs core calls on purpose though iOS deprecates them.
+deprecated NSHourCalendarUnit
+deprecated NSMinuteCalendarUnit
+deprecated NSSecondCalendarUnit
+deprecated automaticallyAdjustsScrollViewInsets
+deprecated bottomLayoutGuide
+deprecated contentEdgeInsets
+deprecated didChangeStatusBarOrientationNotification
+deprecated dimsBackgroundDuringPresentation
+deprecated gray
+deprecated interfaceOrientation
+deprecated isStatusBarHidden
+deprecated kUTTypePlainText
+deprecated keyWindow
+deprecated setAnimationCurve
+deprecated setAnimationDelegate
+deprecated setAnimationDidStop
+deprecated setAnimationRepeatCount
+deprecated setAnimationTransition(_:for:cache:)
+deprecated setAnimationWillStart
+deprecated statusBarFrame
+deprecated statusBarOrientation
+deprecated topLayoutGuide
+deprecated traitCollectionDidChange
+deprecated whiteLarge
+deprecated windows
+
+# Generated-code warnings not fixed yet: remove each line once the emitter no longer causes it. Kit code is keyed by the
+# file of core it was made from (its #sourceLocation), code outside any statement by its Swift file.
+pending @nativescript/core/abortcontroller.abortsignal.ts | comparing non-optional value of type 'AbortSignal' to 'nil' always returns false
+pending @nativescript/core/application.application-common.ts | comparing non-optional value of type 'String' to 'nil' always returns false
+pending @nativescript/core/application.application-common.ts | left side of nil coalescing operator '??' has non-optional type '(Any?) throws -> Any?', so the right side is never used
+pending @nativescript/core/application.application-common.ts | left side of nil coalescing operator '??' has non-optional type 'String', so the right side is never used
+pending @nativescript/core/application.application.ios.ts | conditional cast from 'Responder.Type' to 'AnyClass' (aka 'any AnyObject.Type') always succeeds
+pending @nativescript/core/application.application.ios.ts | conditional cast from 'SceneDelegate' to 'any UIWindowSceneDelegate' always succeeds
+pending @nativescript/core/color.color-common.ts | left side of nil coalescing operator '??' has non-optional type 'Double', so the right side is never used
+pending @nativescript/core/connectivity.index.ios.ts | comparing non-optional value of type '@Sendable () -> Unmanaged<CFDictionary>?' to 'nil' always returns true
+pending @nativescript/core/css-mediaquery.index.ts | will never be executed
+pending @nativescript/core/css.parser.ts | will never be executed
+pending @nativescript/core/file-system.file-system-access.ios.ts | no calls to throwing functions occur within 'try' expression
+pending @nativescript/core/http.http-request.index.ios.ts | left side of nil coalescing operator '??' has non-optional type 'String', so the right side is never used
+pending @nativescript/core/native-window.native-window-common.ts | comparing non-optional value of type 'String' to 'nil' always returns false
+pending @nativescript/core/text.text-common.ts | conditional cast from 'JSArrayBuffer' to 'JSArrayBuffer' always succeeds
+pending @nativescript/core/text.text-common.ts | no calls to throwing functions occur within 'try' expression
+pending @nativescript/core/ui.core.control-state-change.index.ios.ts | conditional cast from 'ObserverClass' to 'ObserverClass' always succeeds
+pending @nativescript/core/ui.core.properties.index.ts | comparing non-optional value of type 'String' to 'nil' always returns true
+pending @nativescript/core/ui.frame.frame-common.ts | comparing non-optional value of type 'Bool' to 'nil' always returns true
+pending @nativescript/core/ui.frame.index.ios.ts | comparing non-optional value of type 'Bool' to 'nil' always returns true
+pending @nativescript/core/ui.frame.index.ios.ts | conditional cast from 'UINavigationControllerImpl' to 'UINavigationControllerImpl' always succeeds
+pending @nativescript/core/ui.frame.index.ios.ts | result of call to closure returning 'Any?' is unused
+pending @nativescript/core/ui.gestures.index.ios.ts | conditional downcast from 'UIView?' to 'UIView' does nothing
+pending @nativescript/core/ui.gestures.touch-manager.ts | conditional downcast from 'View?' to 'View' does nothing
+pending @nativescript/core/ui.html-view.index.ios.ts | left side of nil coalescing operator '??' has non-optional type 'String', so the right side is never used
+pending @nativescript/core/ui.layouts.liquid-glass-container.index.ios.ts | left side of nil coalescing operator '??' has non-optional type 'Double', so the right side is never used
+pending @nativescript/core/ui.list-view.index.ios.ts | conditional cast from 'EventData' to 'EventData' always succeeds
+pending @nativescript/core/ui.list-view.index.ios.ts | conditional cast from 'ListViewHeaderCell' to 'ListViewHeaderCell' always succeeds
+pending @nativescript/core/ui.list-view.index.ios.ts | immutable value 'usingNavItem' was never used; consider replacing with '_' or removing it
+pending @nativescript/core/ui.search-bar.index.ios.ts | cast from 'UISearchBar?' to unrelated type 'UIControl' always fails
+pending @nativescript/core/ui.search-bar.index.ios.ts | comparing non-optional value of type 'String' to 'nil' always returns false
+pending @nativescript/core/ui.segmented-bar.index.ios.ts | comparing non-optional value of type 'String' to 'nil' always returns false
+pending @nativescript/core/ui.split-view.index.ios.ts | left side of nil coalescing operator '??' has non-optional type 'UISplitViewController.SplitBehavior', so the right side is never used
+pending @nativescript/core/ui.styling.background.ios.ts | immutable value '__assigned1' was never used; consider replacing with '_' or removing it
+pending @nativescript/core/ui.styling.background.ios.ts | immutable value '__assigned2' was never used; consider replacing with '_' or removing it
+pending @nativescript/core/ui.styling.background.ios.ts | immutable value '__assigned3' was never used; consider replacing with '_' or removing it
+pending @nativescript/core/ui.styling.background.ios.ts | immutable value '__assigned4' was never used; consider replacing with '_' or removing it
+pending @nativescript/core/ui.styling.css-animation-parser.ts | conditional cast from 'KeyframeInfo' to 'KeyframeInfo' always succeeds
+pending @nativescript/core/ui.styling.css-selector.ts | left side of nil coalescing operator '??' has non-optional type 'String', so the right side is never used
+pending @nativescript/core/ui.styling.css-selector.ts | variable 'result' was never used; consider replacing with '_' or removing it
+pending @nativescript/core/ui.styling.style-scope.ts | variable 'keyframesChanged' was written to, but never read
+pending @nativescript/core/ui.styling.style-scope.ts | variable 'selectorsChanged' was written to, but never read
+pending @nativescript/core/ui.styling.style.index.ts | conditional downcast from 'ViewBase?' to 'ViewBase' does nothing
+pending @nativescript/core/ui.switch.index.ios.ts | cast from 'Color?' to unrelated type 'UIColor' always fails
+pending @nativescript/core/ui.switch.index.ios.ts | left side of nil coalescing operator '??' has non-optional type 'Any?', so the right side is never used
+pending @nativescript/core/ui.tab-view.index.ios.ts | comparing non-optional value of type 'UITabBarAppearance' to 'nil' always returns false
+pending @nativescript/core/ui.text-field.index.ios.ts | comparing non-optional value of type 'String' to 'nil' always returns false
+pending @nativescript/core/ui.transition.shared-transition-helper.ios.ts | no calls to throwing functions occur within 'try' expression
+pending @nativescript/core/xhr.index.ts | conditional cast from 'JSArrayBuffer' to 'JSArrayBuffer' always succeeds
+pending Object_key_createView.swift | comparing non-optional value of type 'String' to 'nil' always returns true
+pending data.observable-array.index.swift | immutable value '_args' was never used; consider replacing with '_' or removing it
+pending application.application.ios.swift | immutable value 'value' was never used; consider replacing with '_' or removing it
+pending profiling.index.swift | immutable value 'type' was never used; consider replacing with '_' or removing it
+pending ui.search-bar.index.ios.swift | variable 'size' was never mutated; consider changing to 'let' constant

@@ -1,0 +1,29 @@
+{
+  "name": "@nstudio/nativescript-compiler-fake",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The adapter of a framework that does not exist: the compiler's adapter API as tests/adapters/run.ts checks it.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "source": "./index.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "@nstudio/nativescript-compiler": "*"
+  },
+  "nativescript": {
+    "compilerAdapter": {
+      "apiVersion": 1,
+      "detect": {
+        "priority": 1,
+        "dependencies": ["fake-framework"]
+      },
+      "testedVersions": {
+        "fake-framework": ">=1.0.0 <2.0.0"
+      }
+    }
+  }
+}

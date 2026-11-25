@@ -1,0 +1,8 @@
+{
+  "adapter": "angular",
+  "hostRuntime": ["AngularChangeDetection", "AngularCore", "AngularHttp", "AngularRouterValues"],
+  "nodePorts": {
+    "forms-port": { "specifier": "@angular/forms", "file": "runtime/angular-forms.ts" }
+  },
+  "mergeCases": 12
+}

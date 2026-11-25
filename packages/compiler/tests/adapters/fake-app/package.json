@@ -1,0 +1,11 @@
+{
+  "name": "fake-app",
+  "main": "app/app.ts",
+  "version": "1.0.0",
+  "private": true,
+  "description": "An app of the fake framework (tests/adapters/fake), which tests/adapters/run.ts translates.",
+  "dependencies": {
+    "@nativescript/core": "~9.1.0",
+    "fake-framework": "1.0.0"
+  }
+}

@@ -1,0 +1,270 @@
+package org.nativescript.kit
+
+import kotlin.contracts.ExperimentalContracts
+import kotlin.contracts.contract
+
+/** What JavaScript `throw value` throws: any value, not only errors. Its JVM stack is recorded only when tracing (`jsTraceErrors`). */
+class JSException(val value: Any?) : RuntimeException(null, null, false, jsTraceErrors) {
+    override val message: String get() = "Uncaught " + jsToString(value)
+}
+
+/** JavaScript `Error`. TypeScript classes extending `Error` subclass it and set `name` in their constructor. */
+open class JSError(message: String = "", cause: Any? = null) : JSDynamic {
+    open var name: String = "Error"
+    /** `message` and `cause` are own properties when the constructor is given them (a message other than "", any cause) or once set. */
+    var ownsMessage: Boolean = message.isNotEmpty()
+        private set
+    var ownsCause: Boolean = cause != null
+        private set
+    open var message: String = message
+        set(value) {
+            field = value
+            ownsMessage = true
+        }
+    open var cause: Any? = cause
+        set(value) {
+            field = value
+            ownsCause = true
+        }
+    private var storedStack: String? = null
+    private var properties: JSObject? = null
+    private val origin = ErrorOrigin()
+
+    /** `"Name: message"`, as `String(error)` gives it. */
+    val jsErrorString: String
+        get() = when {
+            message.isEmpty() -> name
+            name.isEmpty() -> message
+            else -> "$name: $message"
+        }
+
+    /** V8's `error.stack`: the header line and the frames the error was made in. */
+    open var stack: String
+        get() = storedStack ?: "$jsErrorString\n${origin.frames()}"
+        set(value) { storedStack = value }
+
+    override fun jsGet(key: String): Any? = when (key) {
+        "name" -> name
+        "message" -> message
+        "stack" -> stack
+        "cause" -> cause
+        else -> properties?.get(key)
+    }
+
+    override fun jsSet(key: String, value: Any?) {
+        when (key) {
+            "name" -> name = jsToString(value)
+            "message" -> message = jsToString(value)
+            "stack" -> stack = jsToString(value)
+            "cause" -> cause = value
+            else -> (properties ?: JSObject().also { properties = it })[key] = value
+        }
+    }
+
+    override val jsKeys: List<String> get() = properties?.keys ?: emptyList()
+    override val jsClassName: String? get() = name
+
+    override fun toString(): String = jsErrorString
+}
+
+/** A write to an accessor that has only a getter, as strict code makes it: V8's TypeError naming the class declaring it. */
+fun jsGetterOnlyWrite(className: String, key: String): JSException =
+    JSException(JSTypeError("Cannot set property $key of #<$className> which has only a getter"))
+
+/** An own property of the error that its constructor gives it (`stack` always, `message` and `cause` when given). */
+fun jsErrorOwns(error: JSError, key: String): Boolean = when (key) {
+    "message" -> error.ownsMessage
+    "cause" -> error.ownsCause
+    "stack" -> true
+    else -> false
+}
+
+open class JSTypeError(message: String = "", cause: Any? = null) : JSError(message, cause) {
+    init { name = "TypeError" }
+}
+
+open class JSRangeError(message: String = "", cause: Any? = null) : JSError(message, cause) {
+    init { name = "RangeError" }
+}
+
+open class JSSyntaxError(message: String = "", cause: Any? = null) : JSError(message, cause) {
+    init { name = "SyntaxError" }
+}
+
+open class JSReferenceError(message: String = "", cause: Any? = null) : JSError(message, cause) {
+    init { name = "ReferenceError" }
+}
+
+open class JSAggregateError(var errors: JSArray<Any?>, message: String = "", cause: Any? = null) : JSError(message, cause) {
+    init { name = "AggregateError" }
+
+    override fun jsGet(key: String): Any? = if (key == "errors") errors else super.jsGet(key)
+
+    @Suppress("UNCHECKED_CAST")
+    override fun jsSet(key: String, value: Any?) {
+        if (key == "errors" && value is JSArray<*>) errors = value as JSArray<Any?> else super.jsSet(key, value)
+    }
+}
+
+/**
+ * The JavaScript value a `catch` clause binds for a JVM throwable: the thrown value of a
+ * `JSException`, a RangeError for a stack overflow, and an `Error` carrying the message of
+ * anything else (an exception from an Android API, say).
+ */
+fun jsCaught(error: Throwable): Any? = when (error) {
+    is JSException -> error.value
+    else -> {
+        if (jsTraceErrors) error.printStackTrace()
+        jsCaughtJvm(error)
+    }
+}
+
+private fun jsCaughtJvm(error: Throwable): Any? = when (error) {
+    is StackOverflowError -> JSRangeError("Maximum call stack size exceeded")
+    is UninitializedPropertyAccessException -> jsLexicalName(error)?.let { JSReferenceError("Cannot access '$it' before initialization").withFrames(error) } ?: JSError(error.message ?: error.toString()).withFrames(error)
+    is NullPointerException -> JSTypeError(error.message ?: "Cannot read properties of undefined").withFrames(error)
+    is ClassCastException -> JSTypeError(error.message ?: "").withFrames(error)
+    else -> JSError(error.message ?: error.toString()).withFrames(error)
+}
+
+/** `error.stack` in V8's format over the JVM frames that threw, as many as V8 keeps; `retrace.ts` maps them to the app's source. */
+private fun <E : JSError> E.withFrames(error: Throwable): E {
+    val frames = error.stackTrace.take(10)
+    if (frames.isNotEmpty()) stack = jsErrorString + frames.joinToString("") { "\n    at ${it.className}.${it.methodName} (${it.fileName ?: "Unknown Source"}:${it.lineNumber})" }
+    return this
+}
+
+/** The module-level `let` and `const` names Kotlin declares `lateinit`, each as `kotlinName` or `kotlinName:jsName`. */
+private val jsLexicalNames = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+/** Registers a module's `let` and `const` names, so a read before their declaration runs is a ReferenceError. */
+fun jsLexical(vararg names: String) {
+    for (n in names) n.split(':').let { jsLexicalNames[it[0]] = it.getOrElse(1) { _ -> it[0] } }
+}
+
+/** The JavaScript name of the module variable a lateinit failure is of, when it is one. */
+private fun jsLexicalName(error: UninitializedPropertyAccessException): String? {
+    val name = error.message?.removePrefix("lateinit property ")?.removeSuffix(" has not been initialized") ?: return null
+    return jsLexicalNames[name]
+}
+
+/** `throw value`. */
+fun jsThrow(value: Any?): Nothing = throw JSException(value)
+
+/** Whether a reported error also prints the JVM stack it was thrown from (`adb shell setprop log.tag.NSCompiled DEBUG`). */
+var jsTraceErrors = false
+
+/** Runs `body`; an error it throws is reported as uncaught, as a JavaScript host reports an exception escaping a callback. */
+inline fun jsReport(body: () -> Unit) {
+    try {
+        body()
+    } catch (e: Throwable) {
+        jsReportThrown(e)
+    }
+}
+
+/** Reports `e`, which escaped the code a host called, as uncaught. */
+fun jsReportThrown(e: Throwable) {
+    if (jsTraceErrors) e.printStackTrace()
+    jsReportUncaught(jsCaught(e))
+}
+
+/** Runs `body`, a method Java calls; what it throws is reported as uncaught, and Java gets `fallback`. */
+inline fun <T> jsReportedOr(fallback: T, body: () -> T): T =
+    try {
+        body()
+    } catch (e: Throwable) {
+        jsReportThrown(e)
+        fallback
+    }
+
+/**
+ * What `body` reads, or where it throws its type's neutral value (undefined, zero, false, empty), the error left to
+ * the code that reads it again to report; a type with no neutral value lets the error through.
+ */
+inline fun <reified T> jsReadOrZero(body: () -> T): T =
+    try {
+        body()
+    } catch (e: Throwable) {
+        @Suppress("UNCHECKED_CAST")
+        if (null is T) null as T else (jsNeutralValue(T::class.java) ?: throw e) as T
+    }
+
+/** The neutral value of a type that holds no null, as `jsReadOrZero` gives it; null where it has none. */
+@PublishedApi
+internal fun jsNeutralValue(type: Class<*>): Any? =
+    when (type) {
+        Double::class.javaObjectType, Double::class.javaPrimitiveType -> 0.0
+        Int::class.javaObjectType, Int::class.javaPrimitiveType -> 0
+        Long::class.javaObjectType, Long::class.javaPrimitiveType -> 0L
+        Float::class.javaObjectType, Float::class.javaPrimitiveType -> 0f
+        Boolean::class.javaObjectType, Boolean::class.javaPrimitiveType -> false
+        String::class.java -> ""
+        JSNullish::class.java -> JSNullish.Undefined
+        JSArray::class.java -> JSArray<Any?>()
+        List::class.java -> emptyList<Any?>()
+        else -> null
+    }
+
+/**
+ * Without NativeScript's `Application` (a plain program, the differential tests), an uncaught error goes to
+ * `globalThis.__onUncaughtError` when script sets one, where core's handler is; else to standard error.
+ */
+var jsUncaughtHandler: (Any?) -> Unit = { value -> if (!jsReportedToScript(value)) jsError("Uncaught", value) }
+
+internal fun jsReportedToScript(value: Any?): Boolean {
+    val handler = jsField(jsGlobalThis, "__onUncaughtError")
+    if (jsIsNullish(handler)) return false
+    try {
+        jsCall(handler, value)
+    } catch (e: Throwable) {
+        jsError("Error in the uncaught error handler:", jsCaught(e))
+    }
+    return true
+}
+
+fun jsReportUncaught(value: Any?) = (JSRealm.current().uncaught ?: jsUncaughtHandler)(value)
+
+/** A framework's own handling of what no script code caught, which hears it before the app's (`UncaughtErrors`): true when it took it. */
+internal var jsUncaughtHandOff: ((Any?) -> Boolean)? = null
+
+/** `x.key` where x is undefined: JavaScript's TypeError, as V8 words it. */
+fun jsCannotRead(key: String): Nothing = throw JSException(JSTypeError("Cannot read properties of undefined (reading '$key')"))
+
+/** `x.key` where x is null. */
+fun jsCannotReadNull(key: String): Nothing = throw JSException(JSTypeError("Cannot read properties of null (reading '$key')"))
+
+/** `x.key = v` where x is undefined. */
+fun jsCannotSet(key: String): Nothing = throw JSException(JSTypeError("Cannot set properties of undefined (setting '$key')"))
+
+/** Undefined where code goes on with an object its type promised: V8's TypeError for an object missing. */
+fun jsObjectRequired(): Nothing = throw JSException(JSTypeError("Cannot convert undefined or null to object"))
+
+/** Undefined given to a field Kotlin holds present (`name`): a TypeError naming it, never a value made up for it. */
+fun <T : Any> jsRequired(value: T?, name: String): T = value ?: throw JSException(JSTypeError("$name is undefined"))
+
+/**
+ * A destructured parameter's value, `key` its pattern's first property or null for an array pattern: undefined or
+ * null is V8's TypeError. Past it, Kotlin knows the value present.
+ */
+@OptIn(ExperimentalContracts::class)
+fun jsDestructurable(value: Any?, key: String?) {
+    contract { returns() implies (value != null) }
+    if (value != null && value !== JSNull) return
+    val what = if (value == null) "undefined" else "null"
+    throw JSException(JSTypeError(when {
+        key == null -> "$what is not iterable (cannot read property Symbol(Symbol.iterator))"
+        value == null -> "Cannot destructure property '$key' of 'undefined' as it is undefined."
+        else -> "Cannot destructure property '$key' of 'object null' as it is null."
+    }))
+}
+
+/** The result of a script override of a Java method that declares it non-null: undefined or null is a TypeError. */
+fun <T : Any> jsJavaResult(value: T?, method: String): T =
+    value ?: throw JSException(JSTypeError("$method returned undefined, but Java declares its result non-null"))
+
+/** An iterable's `[Symbol.iterator]()` that gave no iterator: V8's TypeError. */
+fun jsNoIterator(): Nothing = throw JSException(JSTypeError("Result of the Symbol.iterator method is not an object"))
+
+/** `f()` where f, as the source writes it, holds no function. */
+fun jsNotAFunction(callee: String): Nothing = throw JSException(JSTypeError("$callee is not a function"))

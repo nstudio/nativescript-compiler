@@ -1,0 +1,230 @@
+package org.nativescript.kit
+
+import androidx.annotation.MainThread
+import android.os.Handler as AndroidHandler
+import android.os.Looper as AndroidLooper
+import android.util.Log as AndroidLog
+
+/**
+ * The app's modules by the names its bundle registers them under (`global.registerBundlerModules`): what core's
+ * Builder and module-name resolver load XML, stylesheets and code-behind modules through.
+ */
+object AppModules {
+    private val loaders = HashMap<String, () -> Any?>()
+    private val names = mutableListOf<String>()
+    private val loaded = HashMap<String, Any?>()
+
+    /** A module under each of its names; the first registration of a name wins, as the bundle's does. */
+    fun register(moduleNames: List<String>, loader: () -> Any?) {
+        for (name in moduleNames) if (name !in loaders) {
+            loaders[name] = loader
+            names.add(name)
+        }
+    }
+
+    /** An app source file under the names the bundle gives it: `main-page.xml`, `./main-page.xml`; a script module also as `main-page`, `./main-page` and `main-page.js`. */
+    fun register(file: String, loader: () -> Any?) {
+        val dot = file.lastIndexOf('.')
+        val moduleNames = if (dot >= 0 && file.substring(dot) in setOf(".ts", ".js")) {
+            val base = file.substring(0, dot)
+            listOf(base, "./$base", "$base.js", "./$base.js")
+        } else listOf(file, "./$file")
+        register(moduleNames, loader)
+    }
+
+    private val imports = HashMap<String, () -> Unit>()
+
+    /** A module `await import(…)` reaches: what runs it (and what only it imports) when it is first imported. */
+    fun registerImport(file: String, run: () -> Unit) {
+        imports[file] = run
+    }
+
+    /** `await import(…)` of a module registered so: it runs, once. */
+    fun runImport(file: String) {
+        imports.remove(file)?.invoke()
+    }
+
+    internal fun load(name: String): Any? {
+        if (loaded.containsKey(name)) return loaded[name]
+        val loader = loaders[name] ?: return null
+        val value = loader()
+        loaded[name] = value
+        return value
+    }
+
+    internal fun install() {
+        jsSet(jsGlobalThis, "loadModule", jsFunction { a -> load(jsToString(a.getOrNull(0))) })
+        jsSet(jsGlobalThis, "moduleExists", jsFunction { a -> loaders.containsKey(jsToString(a.getOrNull(0))) })
+        jsSet(jsGlobalThis, "getRegisteredModules", jsFunction { _ -> JSArray<Any?>(names.toList()) })
+        jsSet(jsGlobalThis, "registerModule", jsFunction { a ->
+            val name = jsToString(a.getOrNull(0))
+            val loader = a.getOrNull(1)
+            loaders[name] = { jsCall(loader, name) }
+            loaded.remove(name)
+            if (name !in names) names.add(name)
+            null
+        })
+    }
+}
+
+/** The app's script modules' exports, by file (`main-page.ts`): what the compiled app registers before it runs. */
+fun __nsRegisterAppModules(modules: Any?) {
+    val record = modules as? JSObject ?: return
+    for (file in record.jsKeys) {
+        val exports = jsGet(record, file)
+        AppModules.register(file) { exports }
+    }
+}
+
+/**
+ * An XML file's view tree built ahead of time (`(exports, moduleName, xmlModule)`), for core's Builder under the file's
+ * name as the module name resolver gives it; null removes it. `codeModule`/`codeExports`: the code-behind the factory
+ * owns, under its resolver name, and the object the module registry holds for it.
+ */
+fun __nsRegisterPage(file: String, factory: ((Any?, String, String) -> Any?)?, codeModule: String? = null, codeExports: Any? = null) {
+    if (factory == null) {
+        Core_ui_builder_index.registerPageFactory(file)
+        return
+    }
+    Core_ui_builder_index.registerPageFactory(file, { exports, moduleName, xmlModule ->
+        factory(exports, moduleName, xmlModule) as? View ?: throw JSException(JSError("The factory of $file made no view"))
+    }, codeModule, codeExports)
+}
+
+/** A `{{ }}` binding expression compiled ahead of time (`{ get, back }`), for core's Builder under its XML attribute key. */
+fun __nsRegisterCompiledBinding(key: String, binding: Any?) {
+    Core_ui_builder_binding_builder.registerCompiledBinding(key, binding)
+}
+
+/** An app class as its module exports it to core's Builder, which makes components with `new Class()`. */
+fun __nsClass(make: () -> Any?): Any? = object : JSConstructible {
+    override fun jsConstruct(args: Array<out Any?>): Any? = make()
+}
+
+/**
+ * The app: its stylesheet, which core loads as `app.css`, then the root view the template makes, as
+ * `Application.run({ create })` starts it. Run from the app's `android.app.Application`, before core's
+ * activity (`com.tns.NativeScriptActivity`) is created, as NativeScript's runtime runs the app's bundle.
+ */
+@MainThread
+object NativeScriptApplication {
+    /** The app's stylesheet as its build parsed it (rework-css's AST, as `css2json-loader` ships it), which `app.css` loads as. */
+    var cssAST: String? = null
+        set(value) {
+            field = value
+            installModuleLoader()
+        }
+
+    private fun installModuleLoader() {
+        AppModules.register("app.css") { cssAST?.let { jsJSONParse(it) } ?: "" }
+        AppModules.install()
+    }
+
+    /**
+     * The app folder's files the build packs as assets under `app/` (`app/assets/logo.png`), copied to the files
+     * folder where core resolves `~/` paths, once per install or update, as NativeScript's runtime extracts them.
+     */
+    fun extractAppFiles(context: android.content.Context) {
+        val stamp = java.io.File(context.filesDir, "app/.extracted")
+        @Suppress("DEPRECATION")
+        val version = context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime.toString()
+        if (stamp.exists() && stamp.readText() == version) return
+        fun copy(path: String) {
+            val children = context.assets.list(path) ?: emptyArray()
+            if (children.isNotEmpty()) return children.forEach { copy("$path/$it") }
+            val out = java.io.File(context.filesDir, path)
+            out.parentFile?.mkdirs()
+            try {
+                context.assets.open(path).use { input -> out.outputStream().use { input.copyTo(it) } }
+            } catch (_: java.io.FileNotFoundException) {
+                // An empty folder lists no children either.
+            }
+        }
+        copy("app")
+        stamp.parentFile?.mkdirs()
+        stamp.writeText(version)
+    }
+
+    /** What every app's entry sets up before its first module runs, whether the kit runs the app or the app's own `Application.run` does. */
+    fun prepare(cssAST: String? = null) {
+        jsTraceErrors = AndroidLog.isLoggable("NSCompiled", AndroidLog.DEBUG)
+        UncaughtErrors.install()
+        installEventLoop()
+        if (cssAST != null) this.cssAST = cssAST
+    }
+
+    fun run(cssAST: String, root: () -> View) {
+        prepare(cssAST)
+        CoreModules.initialize()
+        start(root)
+    }
+
+    /** `Application.run({ create })`, once core's modules and the app's have run. */
+    fun start(root: () -> View) {
+        jsReport {
+            val application = Core_application_application.Application ?: jsCannotRead("run")
+            // Core fires exit when the last activity finishes (Back, a task removal), not when one is recreated:
+            // the app is destroyed then, and the next launch's `create` builds it anew.
+            application.on("exit", { _ -> destroyApp() }, null)
+            application.run(JSObject("create" to jsFunction { Owner(null).also { appOwner = it }.run { root() } }))
+        }
+    }
+
+    private var appOwner: Owner? = null
+
+    /** A framework's state that lives as long as the app: torn down at exit, before the app's views are disposed. */
+    internal val beforeExit = mutableListOf<() -> Unit>()
+    /** Torn down at exit, after the app's views are disposed. */
+    internal val afterExit = mutableListOf<() -> Unit>()
+
+    private fun destroyApp() {
+        for (teardown in beforeExit) jsReport { teardown() }
+        jsReport { appOwner?.dispose() }
+        appOwner = null
+        for (teardown in afterExit) jsReport { teardown() }
+    }
+
+    private var eventLoop = false
+
+    /** Timers run from the main looper, and promise jobs run after each batch of its work: when an event handler returns and whenever the queue idles. */
+    private fun installEventLoop() {
+        if (eventLoop) return
+        eventLoop = true
+        val handler = AndroidHandler(AndroidLooper.getMainLooper())
+        val tick = Runnable {
+            JSEventLoop.processTimers()
+            Microtasks.checkpoint()
+        }
+        JSRealm.main.thread = handler.looper.thread
+        JSRealm.main.post = { job -> handler.post(job) }
+        // A view's expandos live in a tag: they go with the view, though they reach it (a pager's adapter, its own child).
+        jsJavaExpandoHost = { target, create ->
+            if (target !is _root_ide_package_.android.view.View) null
+            else target.getTag(EXPANDO_TAG) as? JSObject ?: if (create) JSObject().also { target.setTag(EXPANDO_TAG, it) } else null
+        }
+        JSEventLoop.host = { delay ->
+            handler.removeCallbacks(tick)
+            if (delay != null) handler.postDelayed(tick, Math.ceil(delay).toLong())
+        }
+        AndroidLooper.getMainLooper().queue.addIdleHandler {
+            Microtasks.checkpoint()
+            true
+        }
+        // Jobs queued by a native callback (an animator's end, a listener) run once it returns, before the looper's
+        // next message, as V8 runs them when script returns to native code: a looper kept busy by frames never idles.
+        var checkpointPosted = false
+        val checkpoint = Runnable {
+            checkpointPosted = false
+            Microtasks.checkpoint()
+        }
+        Microtasks.onEnqueue = {
+            if (!checkpointPosted) {
+                checkpointPosted = true
+                handler.postAtFrontOfQueue(checkpoint)
+            }
+        }
+    }
+}
+
+/** A view tag key no resource of an app's takes (`setTag` takes any key whose top byte is 2 or more). */
+private const val EXPANDO_TAG = 0x6e730001

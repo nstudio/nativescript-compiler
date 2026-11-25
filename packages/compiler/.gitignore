@@ -1,0 +1,18 @@
+build/
+node_modules/
+.cache/
+# Generated from @nativescript/core by tools/kit (nx run compiler:kit): never committed. The XML-free overlay is
+# generated with Core and names Core's files and module graph (overlay.json), so it holds only against that Core.
+kit-apple/Sources/NativeScriptKit/Core/
+kit-apple/Overlays/xml-free/
+kit-apple/.build/
+kit-apple/.swiftpm/
+kit-android/build/
+kit-android/.gradle/
+kit-android/.kotlin/
+# Generated from @nativescript/core by tools/kit (nx run compiler:kit-android): never committed, as its overlay.
+kit-android/generated/
+kit-android/overlays/xml-free/
+tests/app/hooks/
+tests/app/platforms/
+dist/

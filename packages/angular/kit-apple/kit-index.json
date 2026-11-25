@@ -1,0 +1,763 @@
+{
+	"version": 1,
+	"core": "9.1.5-next.7",
+	"types": {
+		"ActivatedRoute": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"children": [{"kind":"var","type":"JSArray<ActivatedRoute>"}],
+				"current": [{"kind":"var","static":true,"type":"ActivatedRoute"}],
+				"data": [{"kind":"var","type":"RxBehaviorSubject<JSRecord<Any?>>"}],
+				"firstChild": [{"kind":"var","type":"ActivatedRoute?"}],
+				"fragment": [{"kind":"var","type":"RxBehaviorSubject<String?>"}],
+				"init": [{"kind":"init","static":true,"type":"ActivatedRoute","params":[{"label":"params","name":"params","type":"[String: String]"},{"label":"outlet","name":"outlet","type":"String","default":"Router.primary"},{"label":"url","name":"url","type":"[String]","default":"[]"},{"label":"queryParams","name":"queryParams","type":"[String: String]","default":"[:]"},{"label":"data","name":"data","type":"[(String, Any?)]","default":"[]"}]}],
+				"outlet": [{"kind":"var","type":"String"}],
+				"paramMap": [{"kind":"var","type":"RxBehaviorSubject<ParamMap>"}],
+				"params": [{"kind":"var","type":"RxBehaviorSubject<JSRecord<String>>"}],
+				"parent": [{"kind":"var","type":"ActivatedRoute?"}],
+				"pathFromRoot": [{"kind":"var","type":"JSArray<ActivatedRoute>"}],
+				"queryParamMap": [{"kind":"var","type":"RxBehaviorSubject<ParamMap>"}],
+				"queryParams": [{"kind":"var","type":"RxBehaviorSubject<JSRecord<String>>"}],
+				"root": [{"kind":"var","type":"ActivatedRoute"}],
+				"routeConfig": [{"kind":"var","type":"JSObject?"}],
+				"snapshot": [{"kind":"var","type":"ActivatedRouteSnapshot"}],
+				"title": [{"kind":"var","type":"RxBehaviorSubject<String?>"}]
+			}
+		},
+		"ActivatedRoute.Snapshot": {
+			"kind": "class",
+			"origin": "runtime",
+			"alias": "ActivatedRouteSnapshot",
+			"members": {}
+		},
+		"ActivatedRouteSnapshot": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"children": [{"kind":"var","type":"JSArray<ActivatedRouteSnapshot>"}],
+				"data": [{"kind":"var","type":"JSRecord<Any?>"}],
+				"firstChild": [{"kind":"var","type":"ActivatedRouteSnapshot?"}],
+				"fragment": [{"kind":"var","type":"String?"}],
+				"init": [{"kind":"init","static":true,"type":"ActivatedRouteSnapshot","params":[{"label":"params","name":"params","type":"JSRecord<String>","default":"JSRecord([:])"},{"label":"queryParams","name":"queryParams","type":"JSRecord<String>","default":"JSRecord([:])"},{"label":"data","name":"data","type":"JSRecord<Any?>","default":"JSRecord([:])"},{"label":"url","name":"url","type":"JSArray<UrlSegment>","default":"JSArray()"},{"label":"fragment","name":"fragment","type":"String?","default":"nil"},{"label":"outlet","name":"outlet","type":"String","default":"\"primary\""},{"label":"routeConfig","name":"routeConfig","type":"JSObject?","default":"nil"}]}],
+				"outlet": [{"kind":"var","type":"String"}],
+				"paramMap": [{"kind":"var","type":"ParamMap"}],
+				"params": [{"kind":"var","type":"JSRecord<String>"}],
+				"parent": [{"kind":"var","type":"ActivatedRouteSnapshot?"}],
+				"pathFromRoot": [{"kind":"var","type":"JSArray<ActivatedRouteSnapshot>"}],
+				"queryParamMap": [{"kind":"var","type":"ParamMap"}],
+				"queryParams": [{"kind":"var","type":"JSRecord<String>"}],
+				"root": [{"kind":"var","type":"ActivatedRouteSnapshot"}],
+				"routeConfig": [{"kind":"var","type":"JSObject?"}],
+				"title": [{"kind":"var","type":"String?"}],
+				"url": [{"kind":"var","type":"JSArray<UrlSegment>"}]
+			}
+		},
+		"AngularView": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"construct": [{"kind":"func","static":true,"type":"T","params":[{"label":"_","name":"make","type":"() throws -> T"}]}]
+			}
+		},
+		"ApplicationRef": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"destroy": [{"kind":"func","type":"Void","params":[]}],
+				"init": [{"kind":"init","static":true,"type":"ApplicationRef","params":[]}],
+				"isStable": [{"kind":"var","type":"Emitter<Bool>"}],
+				"shared": [{"kind":"var","static":true,"type":"ApplicationRef"}],
+				"tick": [{"kind":"func","type":"Void","params":[]}]
+			}
+		},
+		"AsyncPipe": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"init": [{"kind":"init","static":true,"type":"AsyncPipe","params":[]}],
+				"transform": [{"kind":"func","type":"T?","params":[{"label":"_","name":"observable","type":"RxObservable<T>?"}]}]
+			}
+		},
+		"ChangeDetectorRef": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"checkNoChanges": [{"kind":"func","type":"Void","params":[]}],
+				"current": [{"kind":"func","static":true,"type":"ChangeDetectorRef","params":[]}],
+				"detach": [{"kind":"func","type":"Void","params":[]}],
+				"detectChanges": [{"kind":"func","type":"Void","params":[]}],
+				"markForCheck": [{"kind":"func","type":"Void","params":[]}],
+				"reattach": [{"kind":"func","type":"Void","params":[]}]
+			}
+		},
+		"ComponentFactory": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"init": [{"kind":"init","static":true,"type":"ComponentFactory","params":[{"label":"_","name":"make","type":"@escaping () throws -> View"}]}]
+			}
+		},
+		"ComponentRef": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"destroy": [{"kind":"func","type":"Void","params":[]}],
+				"hostView": [{"kind":"var","type":"EmbeddedViewRef"}],
+				"init": [{"kind":"init","static":true,"type":"ComponentRef","params":[{"label":"_","name":"instance","type":"Any?","default":"nil"},{"label":"_","name":"location","type":"ElementRef","default":"ElementRef()"},{"label":"_","name":"injector","type":"Injector","default":"Injector.shared"}]}],
+				"injector": [{"kind":"var","type":"Injector"}],
+				"instance": [{"kind":"var","type":"Any?"}],
+				"location": [{"kind":"var","type":"ElementRef"}],
+				"setInput": [{"kind":"func","type":"Void","params":[{"label":"_","name":"name","type":"String"},{"label":"_","name":"value","type":"Any?"}]}]
+			}
+		},
+		"DefaultUrlSerializer": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"init": [{"kind":"init","static":true,"type":"DefaultUrlSerializer","params":[]}],
+				"parse": [{"kind":"func","type":"UrlTree","params":[{"label":"_","name":"url","type":"String"}]}],
+				"serialize": [{"kind":"func","type":"String","params":[{"label":"_","name":"tree","type":"UrlTree"}]}]
+			}
+		},
+		"DestroyRef": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"current": [{"kind":"func","static":true,"type":"DestroyRef","params":[]}],
+				"onDestroy": [{"kind":"func","type":"() -> Void","params":[{"label":"_","name":"callback","type":"@escaping () -> Void"}]}, {"kind":"func","type":"() -> Void","params":[{"label":"_","name":"callback","type":"@escaping () throws -> Void"}]}]
+			}
+		},
+		"Effect": {
+			"kind": "extension",
+			"origin": "runtime",
+			"members": {
+				"deferred": [{"kind":"func","static":true,"type":"Effect","params":[{"label":"_","name":"body","type":"@escaping () -> Void"}]}]
+			}
+		},
+		"EffectOrder": {
+			"kind": "extension",
+			"origin": "runtime",
+			"members": {
+				"embedded": [{"kind":"func","static":true,"type":"T","params":[{"label":"in","name":"view","type":"Scope"},{"label":"_","name":"body","type":"() throws -> T"}]}],
+				"root": [{"kind":"func","static":true,"type":"T","params":[{"label":"_","name":"body","type":"() throws -> T"}]}],
+				"view": [{"kind":"func","static":true,"type":"T","params":[{"label":"for","name":"component","type":"AnyObject?","default":"nil"},{"label":"onPush","name":"onPush","type":"Bool","default":"false"},{"label":"injector","name":"injector","type":"Injector?","default":"nil"},{"label":"_","name":"body","type":"() throws -> T"}]}]
+			}
+		},
+		"EffectOrder.Scope": {
+			"kind": "extension",
+			"origin": "runtime",
+			"members": {
+				"view": [{"kind":"var","type":"AngularView?"}]
+			}
+		},
+		"ElementRef": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"attach": [{"kind":"func","type":"Void","params":[{"label":"_","name":"host","type":"Any?"}]}],
+				"current": [{"kind":"func","static":true,"type":"ElementRef","params":[]}],
+				"hosting": [{"kind":"func","static":true,"type":"T","params":[{"label":"_","name":"host","type":"Any?"},{"label":"_","name":"make","type":"() throws -> T"}]}],
+				"init": [{"kind":"init","static":true,"type":"ElementRef","params":[{"label":"_","name":"nativeElement","type":"Any?","default":"nil"}]}],
+				"nativeElement": [{"kind":"var","type":"Any?"}]
+			}
+		},
+		"EmbeddedViewRef": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"context": [{"kind":"var","type":"Any?"}],
+				"destroy": [{"kind":"func","type":"Void","params":[]}],
+				"destroyed": [{"kind":"var","type":"Bool"}],
+				"detectChanges": [{"kind":"func","type":"Void","params":[]}],
+				"init": [{"kind":"init","static":true,"type":"EmbeddedViewRef","params":[{"label":"_","name":"context","type":"Any?","default":"nil"}]}],
+				"markForCheck": [{"kind":"func","type":"Void","params":[]}],
+				"rootNodes": [{"kind":"var","type":"JSArray<Any?>"}]
+			}
+		},
+		"EmbeddedViews": {
+			"kind": "enum",
+			"origin": "runtime",
+			"members": {
+				"collect": [{"kind":"func","static":true,"type":"Void","params":[{"label":"_","name":"bindings","type":"() throws -> Void"}],"throws":true}],
+				"later": [{"kind":"func","static":true,"type":"Void","params":[{"label":"_","name":"update","type":"@escaping () throws -> Void"}],"throws":true}]
+			}
+		},
+		"ErrorHandler": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"handleError": [{"kind":"func","type":"Void","params":[{"label":"_","name":"error","type":"Any?"}]}],
+				"init": [{"kind":"init","static":true,"type":"ErrorHandler","params":[]}],
+				"jsClassName": [{"kind":"var","type":"String?"}],
+				"jsKeys": [{"kind":"var","type":"[String]"}],
+				"standard": [{"kind":"var","static":true,"type":"ErrorHandler"}],
+				"subscript": [{"kind":"subscript","type":"Any?","params":[{"label":"jsKey","name":"key","type":"String"}]}]
+			},
+			"open": true
+		},
+		"Host": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"init": [{"kind":"init","static":true,"type":"Host","params":[]}]
+			}
+		},
+		"HttpClient": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"delete": [{"kind":"func","type":"RxObservable<Any?>","params":[{"label":"_","name":"url","type":"String"},{"label":"_","name":"options","type":"Any?","default":"nil"}]}],
+				"get": [{"kind":"func","type":"RxObservable<Any?>","params":[{"label":"_","name":"url","type":"String"},{"label":"_","name":"options","type":"Any?","default":"nil"}]}],
+				"head": [{"kind":"func","type":"RxObservable<Any?>","params":[{"label":"_","name":"url","type":"String"},{"label":"_","name":"options","type":"Any?","default":"nil"}]}],
+				"jsonp": [{"kind":"func","type":"RxObservable<Any?>","params":[{"label":"_","name":"url","type":"String"},{"label":"_","name":"callbackParam","type":"String"}]}],
+				"options": [{"kind":"func","type":"RxObservable<Any?>","params":[{"label":"_","name":"url","type":"String"},{"label":"_","name":"options","type":"Any?","default":"nil"}]}],
+				"patch": [{"kind":"func","type":"RxObservable<Any?>","params":[{"label":"_","name":"url","type":"String"},{"label":"_","name":"body","type":"Any?","default":"nil"},{"label":"_","name":"options","type":"Any?","default":"nil"}]}],
+				"post": [{"kind":"func","type":"RxObservable<Any?>","params":[{"label":"_","name":"url","type":"String"},{"label":"_","name":"body","type":"Any?","default":"nil"},{"label":"_","name":"options","type":"Any?","default":"nil"}]}],
+				"put": [{"kind":"func","type":"RxObservable<Any?>","params":[{"label":"_","name":"url","type":"String"},{"label":"_","name":"body","type":"Any?","default":"nil"},{"label":"_","name":"options","type":"Any?","default":"nil"}]}],
+				"request": [{"kind":"func","type":"RxObservable<Any?>","params":[{"label":"_","name":"first","type":"Any?"},{"label":"_","name":"url","type":"String?","default":"nil"},{"label":"_","name":"options","type":"Any?","default":"nil"}]}],
+				"shared": [{"kind":"var","static":true,"type":"HttpClient"}]
+			}
+		},
+		"HttpClientModule": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"forRoot": [{"kind":"func","static":true,"type":"Any?","params":[]}],
+				"init": [{"kind":"init","static":true,"type":"HttpClientModule","params":[]}]
+			}
+		},
+		"HttpContext": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"delete": [{"kind":"func","type":"HttpContext","params":[{"label":"_","name":"token","type":"HttpContextToken"}]}],
+				"get": [{"kind":"func","type":"Any?","params":[{"label":"_","name":"token","type":"HttpContextToken"}]}],
+				"has": [{"kind":"func","type":"Bool","params":[{"label":"_","name":"token","type":"HttpContextToken"}]}],
+				"init": [{"kind":"init","static":true,"type":"HttpContext","params":[]}],
+				"set": [{"kind":"func","type":"HttpContext","params":[{"label":"_","name":"token","type":"HttpContextToken"},{"label":"_","name":"value","type":"Any?"}]}]
+			}
+		},
+		"HttpContextToken": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"defaultValue": [{"kind":"var","type":"() -> Any?"}],
+				"init": [{"kind":"init","static":true,"type":"HttpContextToken","params":[{"label":"_","name":"defaultValue","type":"@escaping () throws -> Any?"}]}]
+			}
+		},
+		"HttpErrorResponse": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"error": [{"kind":"var","type":"Any?"}],
+				"headers": [{"kind":"var","type":"HttpHeaders"}],
+				"init": [{"kind":"init","static":true,"type":"HttpErrorResponse","params":[{"label":"_","name":"options","type":"Any?","default":"nil"}]}],
+				"ok": [{"kind":"var","type":"Bool"}],
+				"status": [{"kind":"var","type":"Double"}],
+				"statusText": [{"kind":"var","type":"String"}],
+				"url": [{"kind":"var","type":"String?"}]
+			},
+			"base": "JSError"
+		},
+		"HttpHeaders": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"append": [{"kind":"func","type":"HttpHeaders","params":[{"label":"_","name":"name","type":"String"},{"label":"_","name":"value","type":"Any?"}]}],
+				"delete": [{"kind":"func","type":"HttpHeaders","params":[{"label":"_","name":"name","type":"String"},{"label":"_","name":"value","type":"Any?","default":"nil"}]}],
+				"get": [{"kind":"func","type":"String?","params":[{"label":"_","name":"name","type":"String"}]}],
+				"getAll": [{"kind":"func","type":"JSArray<String>?","params":[{"label":"_","name":"name","type":"String"}]}],
+				"has": [{"kind":"func","type":"Bool","params":[{"label":"_","name":"name","type":"String"}]}],
+				"init": [{"kind":"init","static":true,"type":"HttpHeaders","params":[{"label":"_","name":"headers","type":"Any?","default":"nil"}]}],
+				"keys": [{"kind":"func","type":"JSArray<String>","params":[]}],
+				"set": [{"kind":"func","type":"HttpHeaders","params":[{"label":"_","name":"name","type":"String"},{"label":"_","name":"value","type":"Any?"}]}],
+				"toJSObject": [{"kind":"func","type":"JSObject","params":[]}]
+			}
+		},
+		"HttpParams": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"append": [{"kind":"func","type":"HttpParams","params":[{"label":"_","name":"param","type":"String"},{"label":"_","name":"value","type":"Any?"}]}],
+				"appendAll": [{"kind":"func","type":"HttpParams","params":[{"label":"_","name":"params","type":"Any?"}]}],
+				"delete": [{"kind":"func","type":"HttpParams","params":[{"label":"_","name":"param","type":"String"},{"label":"_","name":"value","type":"Any?","default":"nil"}]}],
+				"get": [{"kind":"func","type":"String?","params":[{"label":"_","name":"param","type":"String"}]}],
+				"getAll": [{"kind":"func","type":"JSArray<String>?","params":[{"label":"_","name":"param","type":"String"}]}],
+				"has": [{"kind":"func","type":"Bool","params":[{"label":"_","name":"param","type":"String"}]}],
+				"init": [{"kind":"init","static":true,"type":"HttpParams","params":[{"label":"_","name":"options","type":"Any?","default":"nil"}]}],
+				"keys": [{"kind":"func","type":"JSArray<String>","params":[]}],
+				"set": [{"kind":"func","type":"HttpParams","params":[{"label":"_","name":"param","type":"String"},{"label":"_","name":"value","type":"Any?"}]}],
+				"toString": [{"kind":"func","type":"String","params":[]}]
+			}
+		},
+		"HttpRequest": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"body": [{"kind":"var","type":"Any?"}],
+				"clone": [{"kind":"func","type":"HttpRequest","params":[{"label":"_","name":"update","type":"Any?","default":"nil"}]}],
+				"context": [{"kind":"var","type":"HttpContext"}],
+				"headers": [{"kind":"var","type":"HttpHeaders"}],
+				"init": [{"kind":"init","static":true,"type":"HttpRequest","params":[{"label":"_","name":"method","type":"String"},{"label":"_","name":"url","type":"String"},{"label":"_","name":"third","type":"Any?","default":"nil"},{"label":"_","name":"fourth","type":"Any?","default":"nil"}]}],
+				"method": [{"kind":"var","type":"String"}],
+				"params": [{"kind":"var","type":"HttpParams"}],
+				"reportProgress": [{"kind":"var","type":"Bool"}],
+				"responseType": [{"kind":"var","type":"String"}],
+				"url": [{"kind":"var","type":"String"}],
+				"urlWithParams": [{"kind":"var","type":"String"}],
+				"withCredentials": [{"kind":"var","type":"Bool"}]
+			}
+		},
+		"HttpResponse": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"body": [{"kind":"var","type":"Any?"}],
+				"clone": [{"kind":"func","type":"HttpResponse","params":[{"label":"_","name":"update","type":"Any?","default":"nil"}]}],
+				"headers": [{"kind":"var","type":"HttpHeaders"}],
+				"init": [{"kind":"init","static":true,"type":"HttpResponse","params":[{"label":"_","name":"options","type":"Any?","default":"nil"}]}],
+				"ok": [{"kind":"var","type":"Bool"}],
+				"status": [{"kind":"var","type":"Double"}],
+				"statusText": [{"kind":"var","type":"String"}],
+				"type": [{"kind":"var","type":"Double"}],
+				"url": [{"kind":"var","type":"String?"}]
+			}
+		},
+		"Inject": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"init": [{"kind":"init","static":true,"type":"Inject","params":[{"label":"_","name":"token","type":"Any?"}]}],
+				"token": [{"kind":"var","type":"Any?"}]
+			}
+		},
+		"InjectionToken": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"desc": [{"kind":"var","type":"String"}],
+				"factory": [{"kind":"var","type":"(() throws -> Any?)?"}],
+				"init": [{"kind":"init","static":true,"type":"InjectionToken","params":[{"label":"_","name":"desc","type":"String","default":"\"\""},{"label":"_","name":"options","type":"Any?","default":"nil"}]}],
+				"toString": [{"kind":"func","type":"String","params":[]}]
+			}
+		},
+		"Injector": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"create": [{"kind":"func","static":true,"type":"Injector","params":[{"label":"_","name":"options","type":"Any?"},{"label":"_","name":"parent","type":"Injector?","default":"nil"}]}],
+				"enter": [{"kind":"func","static":true,"type":"Injector","params":[{"label":"_","name":"providers","type":"Any?"}]}],
+				"errorHandler": [{"kind":"var","static":true,"type":"ErrorHandler"}],
+				"get": [{"kind":"func","type":"Any?","params":[{"label":"_","name":"token","type":"Any?"},{"label":"_","name":"notFoundValue","type":"Any?","default":"nil"},{"label":"_","name":"options","type":"Any?","default":"nil"}]}],
+				"init": [{"kind":"init","static":true,"type":"Injector","params":[{"label":"_","name":"providers","type":"Any?","default":"nil"},{"label":"_","name":"parent","type":"Injector?","default":"nil"}]}],
+				"inject": [{"kind":"func","static":true,"type":"Any?","params":[{"label":"_","name":"token","type":"Any?"},{"label":"_","name":"options","type":"Any?","default":"nil"},{"label":"notFoundValue","name":"notFoundValue","type":"Any?","default":"nil"}]}],
+				"leave": [{"kind":"func","type":"Void","params":[]}],
+				"provide": [{"kind":"func","static":true,"type":"Void","params":[{"label":"_","name":"token","type":"Any?"},{"label":"useValue","name":"useValue","type":"Any?","default":"nil"},{"label":"useFactory","name":"useFactory","type":"(() throws -> Any?)?","default":"nil"}]}],
+				"register": [{"kind":"func","static":true,"type":"Void","params":[{"label":"_","name":"providers","type":"Any?"}]}],
+				"reset": [{"kind":"func","static":true,"type":"Void","params":[]}],
+				"root": [{"kind":"var","static":true,"type":"Injector"}, {"kind":"func","static":true,"type":"T","params":[{"label":"_","name":"make","type":"() throws -> T"}]}, {"kind":"func","static":true,"type":"T","params":[{"label":"_","name":"type","type":"T.Type"},{"label":"_","name":"make","type":"() throws -> T"}],"throws":true}, {"kind":"func","static":true,"type":"T","params":[{"label":"_","name":"type","type":"T.Type"},{"label":"making","name":"make","type":"() -> T"}]}],
+				"runInContext": [{"kind":"func","static":true,"type":"T","params":[{"label":"_","name":"injector","type":"Any?"},{"label":"_","name":"fn","type":"() throws -> T"}]}],
+				"shared": [{"kind":"var","static":true,"type":"Injector"}],
+				"standalone": [{"kind":"func","static":true,"type":"T","params":[{"label":"_","name":"type","type":"Any.Type"},{"label":"_","name":"imports","type":"Any?"},{"label":"_","name":"make","type":"() throws -> T"}]}]
+			}
+		},
+		"JSInjectableType": {
+			"kind": "protocol",
+			"origin": "runtime",
+			"members": {
+				"jsConstruct": [{"kind":"func","static":true,"type":"Any?","params":[],"throws":true}],
+				"jsSharedInstance": [{"kind":"var","static":true,"type":"Any?","throws":true}]
+			}
+		},
+		"JSNgModuleType": {
+			"kind": "protocol",
+			"origin": "runtime",
+			"members": {
+				"jsNgConstruct": [{"kind":"func","static":true,"type":"Any?","params":[],"throws":true}],
+				"jsNgImports": [{"kind":"var","static":true,"type":"Any?"}],
+				"jsNgProviders": [{"kind":"var","static":true,"type":"Any?"}]
+			}
+		},
+		"LetSlot": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"init": [{"kind":"init","static":true,"type":"LetSlot","params":[{"label":"_","name":"read","type":"@escaping () throws -> T"}]}],
+				"store": [{"kind":"func","type":"Void","params":[]}],
+				"value": [{"kind":"var","type":"T"}]
+			}
+		},
+		"Location": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"back": [{"kind":"func","type":"Void","params":[]}],
+				"forward": [{"kind":"func","type":"Void","params":[]}],
+				"go": [{"kind":"func","type":"Void","params":[{"label":"_","name":"path","type":"String"},{"label":"_","name":"query","type":"String","default":"\"\""},{"label":"_","name":"state","type":"Any?","default":"nil"}]}],
+				"init": [{"kind":"init","static":true,"type":"Location","params":[]}],
+				"joinWithSlash": [{"kind":"func","static":true,"type":"String","params":[{"label":"_","name":"start","type":"String"},{"label":"_","name":"end","type":"String"}]}],
+				"path": [{"kind":"func","type":"String","params":[{"label":"_","name":"includeHash","type":"Bool","default":"false"}]}],
+				"replaceState": [{"kind":"func","type":"Void","params":[{"label":"_","name":"path","type":"String"},{"label":"_","name":"query","type":"String","default":"\"\""},{"label":"_","name":"state","type":"Any?","default":"nil"}]}],
+				"shared": [{"kind":"var","static":true,"type":"Location"}],
+				"stripTrailingSlash": [{"kind":"func","static":true,"type":"String","params":[{"label":"_","name":"url","type":"String"}]}]
+			}
+		},
+		"NativeDialogRef": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"afterClosed": [{"kind":"func","type":"RxObservable<Any?>","params":[]}],
+				"close": [{"kind":"func","type":"Void","params":[{"label":"_","name":"result","type":"Any?","default":"nil"}]}],
+				"current": [{"kind":"var","static":true,"type":"NativeDialogRef"}],
+				"data": [{"kind":"var","type":"Any?"}]
+			}
+		},
+		"NativeDialogService": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"open": [{"kind":"func","type":"NativeDialogRef","params":[{"label":"_","name":"component","type":"Any?"},{"label":"_","name":"config","type":"Any?","default":"nil"}]}],
+				"shared": [{"kind":"var","static":true,"type":"NativeDialogService"}]
+			}
+		},
+		"NavigationCancel": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"id": [{"kind":"var","type":"Double"}],
+				"init": [{"kind":"init","static":true,"type":"NavigationCancel","params":[{"label":"_","name":"id","type":"Double"},{"label":"_","name":"url","type":"String"},{"label":"_","name":"reason","type":"String","default":"\"\""}]}],
+				"reason": [{"kind":"var","type":"String"}],
+				"url": [{"kind":"var","type":"String"}]
+			}
+		},
+		"NavigationEnd": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"id": [{"kind":"var","type":"Double"}],
+				"init": [{"kind":"init","static":true,"type":"NavigationEnd","params":[{"label":"id","name":"id","type":"Double"},{"label":"url","name":"url","type":"String"},{"label":"urlAfterRedirects","name":"urlAfterRedirects","type":"String"}]}, {"kind":"init","static":true,"type":"NavigationEnd","params":[{"label":"_","name":"id","type":"Double"},{"label":"_","name":"url","type":"String"},{"label":"_","name":"urlAfterRedirects","type":"String?","default":"nil"}]}],
+				"url": [{"kind":"var","type":"String"}],
+				"urlAfterRedirects": [{"kind":"var","type":"String"}]
+			}
+		},
+		"NavigationError": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"error": [{"kind":"var","type":"Any?"}],
+				"id": [{"kind":"var","type":"Double"}],
+				"init": [{"kind":"init","static":true,"type":"NavigationError","params":[{"label":"_","name":"id","type":"Double"},{"label":"_","name":"url","type":"String"},{"label":"_","name":"error","type":"Any?","default":"nil"}]}],
+				"url": [{"kind":"var","type":"String"}]
+			}
+		},
+		"NavigationStart": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"id": [{"kind":"var","type":"Double"}],
+				"init": [{"kind":"init","static":true,"type":"NavigationStart","params":[{"label":"_","name":"id","type":"Double"},{"label":"_","name":"url","type":"String"}]}],
+				"navigationTrigger": [{"kind":"var","type":"String"}],
+				"restoredState": [{"kind":"var","type":"Any?"}],
+				"url": [{"kind":"var","type":"String"}]
+			}
+		},
+		"NgZone": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"init": [{"kind":"init","static":true,"type":"NgZone","params":[]}],
+				"isInAngularZone": [{"kind":"func","static":true,"type":"Bool","params":[]}],
+				"isStable": [{"kind":"var","type":"Bool"}],
+				"onError": [{"kind":"var","type":"Emitter<Any?>"}],
+				"onMicrotaskEmpty": [{"kind":"var","type":"Emitter<Any?>"}],
+				"onStable": [{"kind":"var","type":"Emitter<Any?>"}],
+				"onUnstable": [{"kind":"var","type":"Emitter<Any?>"}],
+				"run": [{"kind":"func","type":"T","params":[{"label":"_","name":"fn","type":"() throws -> T"}]}],
+				"runGuarded": [{"kind":"func","type":"T","params":[{"label":"_","name":"fn","type":"() throws -> T"}]}],
+				"runOutsideAngular": [{"kind":"func","type":"T","params":[{"label":"_","name":"fn","type":"() throws -> T"}]}],
+				"runTask": [{"kind":"func","type":"T","params":[{"label":"_","name":"fn","type":"() throws -> T"}]}],
+				"shared": [{"kind":"var","static":true,"type":"NgZone"}]
+			}
+		},
+		"Page": {
+			"kind": "extension",
+			"origin": "runtime",
+			"members": {
+				"injected": [{"kind":"func","static":true,"type":"Page","params":[],"throws":true}]
+			}
+		},
+		"ParamMap": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"get": [{"kind":"func","type":"String?","params":[{"label":"_","name":"name","type":"String"}]}],
+				"getAll": [{"kind":"func","type":"JSArray<String>","params":[{"label":"_","name":"name","type":"String"}]}],
+				"has": [{"kind":"func","type":"Bool","params":[{"label":"_","name":"name","type":"String"}]}],
+				"init": [{"kind":"init","static":true,"type":"ParamMap","params":[{"label":"_","name":"params","type":"Any?","default":"nil"}]}],
+				"keys": [{"kind":"var","type":"JSArray<String>"}]
+			}
+		},
+		"PurePipeCache": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"init": [{"kind":"init","static":true,"type":"PurePipeCache","params":[]}],
+				"pure1": [{"kind":"func","type":"R","params":[{"label":"_","name":"a","type":"A"},{"label":"_","name":"transform","type":"(A) throws -> R"}]}],
+				"pure2": [{"kind":"func","type":"R","params":[{"label":"_","name":"a","type":"A"},{"label":"_","name":"b","type":"B"},{"label":"_","name":"transform","type":"(A, B) throws -> R"}]}],
+				"pure3": [{"kind":"func","type":"R","params":[{"label":"_","name":"a","type":"A"},{"label":"_","name":"b","type":"B"},{"label":"_","name":"c","type":"C"},{"label":"_","name":"transform","type":"(A, B, C) throws -> R"}]}],
+				"pure4": [{"kind":"func","type":"R","params":[{"label":"_","name":"a","type":"A"},{"label":"_","name":"b","type":"B"},{"label":"_","name":"c","type":"C"},{"label":"_","name":"d","type":"D"},{"label":"_","name":"transform","type":"(A, B, C, D) throws -> R"}]}],
+				"pure5": [{"kind":"func","type":"R","params":[{"label":"_","name":"a","type":"A"},{"label":"_","name":"b","type":"B"},{"label":"_","name":"c","type":"C"},{"label":"_","name":"d","type":"D"},{"label":"_","name":"e","type":"E"},{"label":"_","name":"transform","type":"(A, B, C, D, E) throws -> R"}]}]
+			}
+		},
+		"Reactivity": {
+			"kind": "extension",
+			"origin": "runtime",
+			"members": {
+				"event": [{"kind":"func","static":true,"type":"Void","params":[{"label":"dirty","name":"view","type":"AngularView?"},{"label":"_","name":"handler","type":"() -> Void"}]}]
+			}
+		},
+		"ResolveEnd": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"id": [{"kind":"var","type":"Double"}],
+				"init": [{"kind":"init","static":true,"type":"ResolveEnd","params":[{"label":"_","name":"id","type":"Double"},{"label":"_","name":"url","type":"String"},{"label":"_","name":"urlAfterRedirects","type":"String?","default":"nil"},{"label":"_","name":"state","type":"Any?","default":"nil"}]}],
+				"state": [{"kind":"var","type":"Any?"}],
+				"url": [{"kind":"var","type":"String"}],
+				"urlAfterRedirects": [{"kind":"var","type":"String"}]
+			}
+		},
+		"ResolveStart": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"id": [{"kind":"var","type":"Double"}],
+				"init": [{"kind":"init","static":true,"type":"ResolveStart","params":[{"label":"_","name":"id","type":"Double"},{"label":"_","name":"url","type":"String"},{"label":"_","name":"urlAfterRedirects","type":"String?","default":"nil"},{"label":"_","name":"state","type":"Any?","default":"nil"}]}],
+				"state": [{"kind":"var","type":"Any?"}],
+				"url": [{"kind":"var","type":"String"}],
+				"urlAfterRedirects": [{"kind":"var","type":"String"}]
+			}
+		},
+		"Route": {
+			"kind": "struct",
+			"origin": "runtime",
+			"members": {
+				"init": [{"kind":"init","static":true,"type":"Route","params":[{"label":"_","name":"path","type":"String"},{"label":"_","name":"make","type":"@escaping () throws -> View"}]}]
+			}
+		},
+		"RouteConfig": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"init": [{"kind":"init","static":true,"type":"RouteConfig","params":[{"label":"_","name":"path","type":"String"},{"label":"outlet","name":"outlet","type":"String","default":"Router.primary"},{"label":"redirectTo","name":"redirectTo","type":"String?","default":"nil"},{"label":"full","name":"full","type":"Bool","default":"false"},{"label":"emptyOutlet","name":"emptyOutlet","type":"Bool","default":"false"},{"label":"guards","name":"guards","type":"Int?","default":"nil"},{"label":"data","name":"data","type":"[(String, Any?)]","default":"[]"},{"label":"children","name":"children","type":"[RouteConfig]","default":"[]"},{"label":"_","name":"make","type":"(() throws -> View)?","default":"nil"}]}]
+			}
+		},
+		"Router": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"activating": [{"kind":"func","type":"C","params":[{"label":"_","name":"component","type":"C"}]}],
+				"addGuard": [{"kind":"func","type":"Void","params":[{"label":"_","name":"route","type":"Double"},{"label":"_","name":"kind","type":"String"},{"label":"_","name":"run","type":"@escaping RouteGuard"}]}],
+				"back": [{"kind":"func","type":"Void","params":[{"label":"_","name":"options","type":"Any?","default":"nil"}]}],
+				"backToPreviousPage": [{"kind":"func","type":"Void","params":[]}],
+				"canGoBack": [{"kind":"func","type":"Bool","params":[{"label":"_","name":"options","type":"Any?","default":"nil"}]}],
+				"canGoBackToPreviousPage": [{"kind":"func","type":"Bool","params":[]}],
+				"config": [{"kind":"var","type":"[RouteConfig]"}],
+				"createUrlTree": [{"kind":"func","type":"UrlTree","params":[{"label":"_","name":"commands","type":"Any?"},{"label":"_","name":"extras","type":"Any?","default":"nil"}]}],
+				"events": [{"kind":"var","type":"RxSubject<NavigationEnd>"}],
+				"initial": [{"kind":"var","type":"String"}],
+				"isActive": [{"kind":"func","type":"Bool","params":[{"label":"_","name":"url","type":"Any?"},{"label":"_","name":"exact","type":"Any?","default":"false"}]}],
+				"navigate": [{"kind":"func","type":"JSPromise<Bool>","params":[{"label":"_","name":"commands","type":"[Any]"},{"label":"_","name":"extras","type":"Any?","default":"nil"}]}, {"kind":"func","type":"JSPromise<Bool>","params":[{"label":"_","name":"commands","type":"JSArray<Any?>"},{"label":"_","name":"extras","type":"Any?","default":"nil"}]}],
+				"navigateByUrl": [{"kind":"func","type":"JSPromise<Bool>","params":[{"label":"_","name":"url","type":"Any?"},{"label":"_","name":"extras","type":"Any?","default":"nil"}]}],
+				"outlet": [{"kind":"func","type":"View","params":[{"label":"_","name":"name","type":"String","default":"Router.primary"}],"throws":true}],
+				"parseUrl": [{"kind":"func","type":"UrlTree","params":[{"label":"_","name":"url","type":"String"}]}],
+				"primary": [{"kind":"var","static":true,"type":"String"}],
+				"router": [{"kind":"var","type":"Router"}],
+				"routerState": [{"kind":"var","type":"JSObject"}],
+				"routes": [{"kind":"var","type":"[Route]"}],
+				"serializeUrl": [{"kind":"func","type":"String","params":[{"label":"_","name":"tree","type":"Any?"}]}],
+				"shared": [{"kind":"var","static":true,"type":"Router"}],
+				"url": [{"kind":"var","type":"String"}]
+			}
+		},
+		"RouterStateSnapshot": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"description": [{"kind":"var","type":"String"}],
+				"init": [{"kind":"init","static":true,"type":"RouterStateSnapshot","params":[{"label":"_","name":"url","type":"String"},{"label":"_","name":"root","type":"ActivatedRouteSnapshot","default":"ActivatedRouteSnapshot()"}]}],
+				"root": [{"kind":"var","type":"ActivatedRouteSnapshot"}],
+				"toString": [{"kind":"func","type":"String","params":[]}],
+				"url": [{"kind":"var","type":"String"}]
+			}
+		},
+		"RoutesRecognized": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"id": [{"kind":"var","type":"Double"}],
+				"init": [{"kind":"init","static":true,"type":"RoutesRecognized","params":[{"label":"_","name":"id","type":"Double"},{"label":"_","name":"url","type":"String"},{"label":"_","name":"urlAfterRedirects","type":"String?","default":"nil"},{"label":"_","name":"state","type":"Any?","default":"nil"}]}],
+				"state": [{"kind":"var","type":"Any?"}],
+				"url": [{"kind":"var","type":"String"}],
+				"urlAfterRedirects": [{"kind":"var","type":"String"}]
+			}
+		},
+		"RxBehaviorSubject": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"getValue": [{"kind":"func","type":"T","params":[]}],
+				"init": [{"kind":"init","static":true,"type":"RxBehaviorSubject","params":[{"label":"_","name":"value","type":"T"}]}],
+				"next": [{"kind":"func","type":"Void","params":[{"label":"_","name":"value","type":"T"}]}],
+				"value": [{"kind":"var","type":"T"}]
+			},
+			"base": "RxSubject"
+		},
+		"RxObservable": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"init": [{"kind":"init","static":true,"type":"RxObservable","params":[{"label":"_","name":"producer","type":"@escaping (@escaping (T) -> Void) -> TeardownHandle"}]}, {"kind":"init","static":true,"type":"RxObservable","params":[{"label":"full","name":"producer","type":"@escaping (@escaping (T) -> Void, @escaping (Any?) -> Void, @escaping () -> Void) -> TeardownHandle"}]}],
+				"mapValues": [{"kind":"func","type":"RxObservable<R>","params":[{"label":"_","name":"transform","type":"@escaping (T) -> R"}]}],
+				"pipe": [{"kind":"func","type":"RxObservable<A>","params":[{"label":"_","name":"a","type":"RxOperatorFunction<T, A>"}]}, {"kind":"func","type":"RxObservable<B>","params":[{"label":"_","name":"a","type":"RxOperatorFunction<T, A>"},{"label":"_","name":"b","type":"RxOperatorFunction<A, B>"}]}, {"kind":"func","type":"RxObservable<C>","params":[{"label":"_","name":"a","type":"RxOperatorFunction<T, A>"},{"label":"_","name":"b","type":"RxOperatorFunction<A, B>"},{"label":"_","name":"c","type":"RxOperatorFunction<B, C>"}]}],
+				"subscribe": [{"kind":"func","type":"TeardownHandle","params":[{"label":"_","name":"next","type":"@escaping (T) -> Void"}]}, {"kind":"func","type":"TeardownHandle","params":[{"label":"_","name":"next","type":"@escaping (T) -> Void"},{"label":"_","name":"error","type":"@escaping (Any?) -> Void"},{"label":"_","name":"complete","type":"@escaping () -> Void"}]}, {"kind":"func","type":"TeardownHandle","params":[{"label":"_","name":"next","type":"@escaping (T) throws -> Void"},{"label":"_","name":"error","type":"@escaping (Any?) throws -> Void"},{"label":"_","name":"complete","type":"@escaping () throws -> Void"}]}, {"kind":"func","type":"TeardownHandle","params":[{"label":"_","name":"next","type":"@escaping () -> Void"}]}, {"kind":"func","type":"TeardownHandle","params":[{"label":"_","name":"next","type":"@escaping (T) throws -> Void"}]}, {"kind":"func","type":"TeardownHandle","params":[{"label":"_","name":"next","type":"@escaping () throws -> Void"}]}]
+			}
+		},
+		"RxOperatorFunction": {
+			"kind": "struct",
+			"origin": "runtime",
+			"members": {}
+		},
+		"RxReplaySubject": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"init": [{"kind":"init","static":true,"type":"RxReplaySubject","params":[{"label":"_","name":"bufferSize","type":"Double","default":".infinity"}]}],
+				"next": [{"kind":"func","type":"Void","params":[{"label":"_","name":"value","type":"T"}]}]
+			},
+			"base": "RxSubject"
+		},
+		"RxSubject": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"asObservable": [{"kind":"func","type":"RxObservable<T>","params":[]}],
+				"init": [{"kind":"init","static":true,"type":"RxSubject","params":[]}],
+				"next": [{"kind":"func","type":"Void","params":[{"label":"_","name":"value","type":"T"}]}, {"kind":"func","type":"Void","params":[]}],
+				"subscribe": [{"kind":"func","type":"TeardownHandle","params":[{"label":"_","name":"next","type":"@escaping (T) -> Void"}]}]
+			},
+			"base": "RxObservable"
+		},
+		"SimpleChange": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"currentValue": [{"kind":"var","type":"Any?"}],
+				"firstChange": [{"kind":"var","type":"Bool"}],
+				"init": [{"kind":"init","static":true,"type":"SimpleChange","params":[{"label":"_","name":"previousValue","type":"Any?"},{"label":"_","name":"currentValue","type":"Any?"},{"label":"_","name":"firstChange","type":"Bool"}]}],
+				"isFirstChange": [{"kind":"func","type":"Bool","params":[]}],
+				"previousValue": [{"kind":"var","type":"Any?"}]
+			}
+		},
+		"SkipSelf": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"init": [{"kind":"init","static":true,"type":"SkipSelf","params":[]}]
+			}
+		},
+		"TemplateRef": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"elementRef": [{"kind":"var","type":"ElementRef"}],
+				"init": [{"kind":"init","static":true,"type":"TemplateRef","params":[{"label":"_","name":"elementRef","type":"ElementRef","default":"ElementRef()"}]}]
+			}
+		},
+		"UrlSegment": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"init": [{"kind":"init","static":true,"type":"UrlSegment","params":[{"label":"_","name":"path","type":"String"},{"label":"_","name":"parameters","type":"Any?","default":"nil"}]}],
+				"parameterMap": [{"kind":"var","type":"ParamMap"}],
+				"parameters": [{"kind":"var","type":"JSRecord<String>"}],
+				"path": [{"kind":"var","type":"String"}],
+				"toString": [{"kind":"func","type":"String","params":[]}]
+			}
+		},
+		"UrlTree": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"fragment": [{"kind":"var","type":"String?"}],
+				"init": [{"kind":"init","static":true,"type":"UrlTree","params":[{"label":"_","name":"path","type":"String","default":"\"/\""},{"label":"_","name":"queryParams","type":"Any?","default":"nil"},{"label":"_","name":"fragment","type":"String?","default":"nil"}]}],
+				"queryParamMap": [{"kind":"var","type":"ParamMap"}],
+				"queryParams": [{"kind":"var","type":"JSObject"}],
+				"toString": [{"kind":"func","type":"String","params":[]}]
+			}
+		},
+		"ViewContainerRef": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"clear": [{"kind":"func","type":"Void","params":[]}],
+				"createComponent": [{"kind":"func","type":"ComponentRef","params":[{"label":"_","name":"componentType","type":"Any?"},{"label":"_","name":"options","type":"Any?","default":"nil"}]}],
+				"createEmbeddedView": [{"kind":"func","type":"EmbeddedViewRef","params":[{"label":"_","name":"templateRef","type":"Any?"},{"label":"_","name":"context","type":"Any?","default":"nil"},{"label":"_","name":"options","type":"Any?","default":"nil"}]}],
+				"element": [{"kind":"var","type":"ElementRef"}],
+				"init": [{"kind":"init","static":true,"type":"ViewContainerRef","params":[]}],
+				"injector": [{"kind":"var","type":"Injector"}],
+				"length": [{"kind":"var","type":"Double"}],
+				"remove": [{"kind":"func","type":"Void","params":[{"label":"_","name":"index","type":"Double?","default":"nil"}]}]
+			}
+		},
+		"Zone": {
+			"kind": "enum",
+			"origin": "runtime",
+			"members": {
+				"enabled": [{"kind":"var","static":true,"type":"Bool"}],
+				"flushEffects": [{"kind":"func","static":true,"type":"Void","params":[{"label":"for","name":"component","type":"AnyObject"}]}],
+				"handOff": [{"kind":"func","static":true,"type":"Bool","params":[{"label":"_","name":"error","type":"Any?"}]}],
+				"inputChanged": [{"kind":"func","static":true,"type":"Void","params":[{"label":"_","name":"component","type":"AnyObject"}]}],
+				"tick": [{"kind":"func","static":true,"type":"Void","params":[]}]
+			}
+		}
+	},
+	"globals": {
+		"APP_INITIALIZER": [{"kind":"var","static":true,"type":"InjectionToken","origin":"runtime"}],
+		"Check": [{"kind":"func","static":true,"type":"Void","params":[{"label":"abortOnThrow","name":"abortOnThrow","type":"Bool","default":"false"},{"label":"_","name":"read","type":"@escaping () throws -> T"},{"label":"_","name":"apply","type":"@escaping (T) -> Void"}],"origin":"runtime"}],
+		"ContentChecked": [{"kind":"func","static":true,"type":"Void","params":[{"label":"_","name":"hook","type":"@escaping () -> Void"}],"origin":"runtime"}],
+		"ENVIRONMENT_INITIALIZER": [{"kind":"var","static":true,"type":"InjectionToken","origin":"runtime"}],
+		"EveryCheck": [{"kind":"func","static":true,"type":"Void","params":[{"label":"_","name":"hook","type":"@escaping () -> Void"}],"origin":"runtime"}],
+		"HTTP_INTERCEPTORS": [{"kind":"var","static":true,"type":"InjectionToken","origin":"runtime"}],
+		"HttpStatusCode": [{"kind":"var","static":true,"type":"JSObject","origin":"runtime"}],
+		"PLATFORM_ID": [{"kind":"var","static":true,"type":"InjectionToken","origin":"runtime"}],
+		"ViewChecked": [{"kind":"func","static":true,"type":"Void","params":[{"label":"_","name":"hook","type":"@escaping () -> Void"}],"origin":"runtime"}],
+		"bootstrapApplication": [{"kind":"func","static":true,"type":"JSPromise<Any?>","params":[{"label":"_","name":"rootComponent","type":"Any?"},{"label":"_","name":"options","type":"Any?","default":"nil"}],"origin":"runtime"}],
+		"convertToParamMap": [{"kind":"func","static":true,"type":"ParamMap","params":[{"label":"_","name":"params","type":"Any?"}],"origin":"runtime"}],
+		"createRouterStateSnapshot": [{"kind":"func","static":true,"type":"JSObject","params":[{"label":"_","name":"url","type":"String","default":"\"/\""}],"origin":"runtime"}],
+		"filter": [{"kind":"func","static":true,"type":"RxOperatorFunction<T, T>","params":[{"label":"_","name":"predicate","type":"@escaping (T, Double) throws -> Bool"}],"origin":"runtime"}, {"kind":"func","static":true,"type":"RxOperatorFunction<T, T>","params":[{"label":"_","name":"predicate","type":"@escaping (T) throws -> Bool"}],"origin":"runtime"}],
+		"forwardRef": [{"kind":"func","static":true,"type":"Any?","params":[{"label":"_","name":"fn","type":"@escaping () throws -> Any?"}],"origin":"runtime"}],
+		"importProvidersFrom": [{"kind":"func","static":true,"type":"Any?","params":[{"label":"_","name":"modules","type":"Any?..."}],"origin":"runtime"}],
+		"isPlatformBrowser": [{"kind":"func","static":true,"type":"Bool","params":[{"label":"_","name":"platformId","type":"Any?"}],"origin":"runtime"}],
+		"isPlatformServer": [{"kind":"func","static":true,"type":"Bool","params":[{"label":"_","name":"platformId","type":"Any?"}],"origin":"runtime"}],
+		"makeEnvironmentProviders": [{"kind":"func","static":true,"type":"Any?","params":[{"label":"_","name":"providers","type":"Any?"}],"origin":"runtime"}],
+		"map": [{"kind":"func","static":true,"type":"RxOperatorFunction<T, R>","params":[{"label":"_","name":"project","type":"@escaping (T, Double) throws -> R"}],"origin":"runtime"}, {"kind":"func","static":true,"type":"RxOperatorFunction<T, R>","params":[{"label":"_","name":"project","type":"@escaping (T) throws -> R"}],"origin":"runtime"}],
+		"provideAppInitializer": [{"kind":"func","static":true,"type":"Any?","params":[{"label":"_","name":"fn","type":"@escaping () throws -> Any?"}],"origin":"runtime"}],
+		"provideEnvironmentInitializer": [{"kind":"func","static":true,"type":"Any?","params":[{"label":"_","name":"fn","type":"@escaping () throws -> Any?"}],"origin":"runtime"}],
+		"provideHttpClient": [{"kind":"func","static":true,"type":"Any?","params":[{"label":"_","name":"features","type":"Any?..."}],"origin":"runtime"}],
+		"provideNativeScriptHttpClient": [{"kind":"func","static":true,"type":"Any?","params":[{"label":"_","name":"features","type":"Any?..."}],"origin":"runtime"}],
+		"provideNativeScriptNgZone": [{"kind":"func","static":true,"type":"Any?","params":[{"label":"_","name":"options","type":"Any?","default":"nil"}],"origin":"runtime"}],
+		"provideNativeScriptRouter": [{"kind":"func","static":true,"type":"Any?","params":[{"label":"_","name":"routes","type":"Any?","default":"nil"},{"label":"_","name":"features","type":"Any?..."}],"origin":"runtime"}],
+		"provideRouter": [{"kind":"func","static":true,"type":"Any?","params":[{"label":"_","name":"routes","type":"Any?","default":"nil"},{"label":"_","name":"features","type":"Any?..."}],"origin":"runtime"}],
+		"resolveForwardRef": [{"kind":"func","static":true,"type":"Any?","params":[{"label":"_","name":"value","type":"Any?"}],"origin":"runtime"}],
+		"runNativeScriptAngularApp": [{"kind":"func","static":true,"type":"Void","params":[{"label":"_","name":"options","type":"Any?","default":"nil"}],"origin":"runtime"}],
+		"rxFirstValueFrom": [{"kind":"func","static":true,"type":"JSPromise<T>","params":[{"label":"_","name":"source","type":"RxObservable<T>"}],"origin":"runtime"}],
+		"take": [{"kind":"func","static":true,"type":"RxOperatorFunction<T, T>","params":[{"label":"_","name":"count","type":"Double"}],"origin":"runtime"}],
+		"takeUntilDestroyed": [{"kind":"func","static":true,"type":"RxOperatorFunction<T, T>","params":[{"label":"_","name":"destroyRef","type":"DestroyRef?","default":"nil"}],"origin":"runtime"}],
+		"toSignal": [{"kind":"func","static":true,"type":"Signal<T>","params":[{"label":"_","name":"source","type":"RxObservable<T>"},{"label":"initialValue","name":"initialValue","type":"T"}],"origin":"runtime"}, {"kind":"func","static":true,"type":"Signal<T?>","params":[{"label":"_","name":"source","type":"RxObservable<T>"}],"origin":"runtime"}],
+		"withFetch": [{"kind":"func","static":true,"type":"Any?","params":[],"origin":"runtime"}],
+		"withInterceptors": [{"kind":"func","static":true,"type":"Any?","params":[{"label":"_","name":"fns","type":"Any?"}],"origin":"runtime"}],
+		"withInterceptorsFromDi": [{"kind":"func","static":true,"type":"Any?","params":[],"origin":"runtime"}]
+	}
+}

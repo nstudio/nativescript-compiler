@@ -1,0 +1,56 @@
+{
+  "name": "@nstudio/nativescript-compiler-vue",
+  "version": "9.2.0-alpha.9",
+  "description": "The Vue adapter of @nstudio/nativescript-compiler: compiles a NativeScript app written with Vue into a native iOS or Android app with no JavaScript runtime.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "source": "./index.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/"
+  ],
+  "scripts": {
+    "build": "ns-compiled-adapter build .",
+    "prepack": "npm run build"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nstudio/nativescript-compiler.git",
+    "directory": "packages/vue"
+  },
+  "dependencies": {
+    "@vue/compiler-sfc": "^3.5.0"
+  },
+  "peerDependencies": {
+    "@nstudio/nativescript-compiler": "9.2.0-alpha.9"
+  },
+  "nativescript": {
+    "compilerAdapter": {
+      "apiVersion": 1,
+      "detect": {
+        "priority": 60,
+        "dependencies": [
+          "nativescript-vue",
+          "vue"
+        ],
+        "entryMentions": [
+          "nativescript-vue"
+        ],
+        "entryImports": [
+          "vue"
+        ]
+      },
+      "testedVersions": {
+        "nativescript-vue": ">=3.1.0 <4.0.0"
+      }
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

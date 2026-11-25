@@ -1,0 +1,584 @@
+import Foundation
+
+// What translated code calls for JavaScript operations Swift has no
+// expression for: async loops, update expressions, uncaught errors, and the
+// String and Math members whose JavaScript behavior differs from Swift's.
+
+/// Runs an async loop's iterations without growing the stack: an iteration
+/// that continues synchronously is run by the iteration already running,
+/// one that continues from a promise job starts a new run.
+public final class JSAsyncLoop {
+    nonisolated deinit {}
+    private var running = false
+    private var pending = false
+    private var iteration: ((@escaping () -> Void) -> Void)?
+
+    public init() {}
+
+    public func run(_ body: @escaping (@escaping () -> Void) -> Void) {
+        iteration = body
+        step()
+    }
+
+    private func step() {
+        if running { pending = true; return }
+        running = true
+        repeat {
+            pending = false
+            iteration?({ self.step() })
+        } while pending
+        running = false
+    }
+}
+
+/// Runs `body`; an error it throws is reported as uncaught, as a JavaScript
+/// host reports an exception escaping a callback.
+public func jsReport(_ body: () throws -> Void) {
+    do { try body() } catch { jsReportUncaught(jsCaught(error)) }
+}
+
+/// Without NativeScript's `Application` (a plain program, the differential tests), an uncaught error goes to
+/// `globalThis.__onUncaughtError` when script sets one, where core's handler is; else to standard error.
+public var jsUncaughtHandler: (Any?) -> Void = { value in
+    if !jsReportedToScript(value) { jsError("Uncaught", value) }
+}
+
+func jsReportedToScript(_ value: Any?) -> Bool {
+    let handler = jsField(jsGlobalThis, "__onUncaughtError")
+    if jsIsNullish(handler) { return false }
+    do { _ = try jsCall(handler, value) } catch { jsError("Error in the uncaught error handler:", jsCaught(error)) }
+    return true
+}
+
+public func jsReportUncaught(_ value: Any?) { jsUncaughtHandler(value) }
+
+/// A framework's own handling of what no script code caught, which hears it before the app's (`UncaughtErrors`): true
+/// when it took it.
+var jsUncaughtHandOff: ((Any?) -> Bool)?
+
+/// `Object.is` for a signal's writes: objects by identity.
+public func jsSame<T: AnyObject>(_ a: T, _ b: T) -> Bool { a === b }
+public func jsSame<T: AnyObject>(_ a: T?, _ b: T?) -> Bool { a === b }
+public func jsSame(_ a: Any?, _ b: Any?) -> Bool { jsSameValue(a, b) }
+
+@discardableResult public func jsPostIncrement(_ x: inout Double) -> Double { let old = x; x += 1; return old }
+@discardableResult public func jsPostDecrement(_ x: inout Double) -> Double { let old = x; x -= 1; return old }
+@discardableResult public func jsPreIncrement(_ x: inout Double) -> Double { x += 1; return x }
+@discardableResult public func jsPreDecrement(_ x: inout Double) -> Double { x -= 1; return x }
+
+/// `a ?? b` for an untyped value: null and undefined both give way.
+public func jsNullishCoalesce(_ a: Any?, _ b: @autoclosure () throws -> Any?) rethrows -> Any? {
+    jsIsNullish(a) ? try b() : a
+}
+
+/// An untyped value read as an array whose elements convert with `element`.
+public func jsArrayFrom<T>(_ value: Any?, _ element: (Any?) throws -> T) rethrows -> JSArray<T> {
+    // An array of the type already is the same array: what is written through either is in both. So is the typed array
+    // an untyped view stands for, and the untyped view of any typed array.
+    let flat = jsFlat(value)
+    if let same = flat as? JSArray<T> { return same }
+    if let view = flat as? JSArrayProtocol, let source = view.jsViewSource as? JSArray<T> { return source }
+    if T.self == Any?.self, let typed = flat as? JSArrayProtocol { return unsafeDowncast(typed.jsUntyped, to: JSArray<T>.self) }
+    guard let array = value as? JSArrayProtocol else { return JSArray<T>() }
+    return JSArray(try array.jsAnyElements.map(element))
+}
+
+/// `jsArrayFrom` for code that may hold undefined where it declares an array (a cache miss,
+/// `cache[key]`): undefined and null stay nil, as script's value stays undefined.
+public func jsArrayOrNil<T>(_ value: Any?, _ element: (Any?) throws -> T) rethrows -> JSArray<T>? {
+    jsIsNullish(value) ? nil : try jsArrayFrom(value, element)
+}
+
+/// `jsArrayFrom`, `jsArrayOrNil` and `jsRecordOf` with the result's type named. Left to inference, the element type
+/// would be an optional of the right one (from a write through the result, `jsRecordOf(values) { $0 }[key] = value`,
+/// or an implicitly unwrapped element conversion), and the result a converted copy instead of the array itself.
+public func jsArrayFrom<T>(_ value: Any?, as type: JSArray<T>.Type, _ element: (Any?) throws -> T) rethrows -> JSArray<T> { try jsArrayFrom(value, element) }
+public func jsArrayOrNil<T>(_ value: Any?, as type: JSArray<T>.Type, _ element: (Any?) throws -> T) rethrows -> JSArray<T>? { try jsArrayOrNil(value, element) }
+public func jsRecordOf<T>(_ value: Any?, as type: JSRecord<T>.Type, _ element: (Any?) throws -> T) rethrows -> JSRecord<T> { try jsRecordOf(value, element) }
+public func jsRecordOrNil<T>(_ value: Any?, as type: JSRecord<T>.Type, _ element: (Any?) throws -> T) rethrows -> JSRecord<T>? {
+    jsIsNullish(value) ? nil : try jsRecordOf(value, element)
+}
+
+/// A member of an untyped object, or undefined; reading a typed object from JSON never throws.
+public func jsField(_ object: Any?, _ key: String) -> Any? {
+    (try? jsGet(object, key)) ?? nil
+}
+
+/// `Object.keys` for what translated code holds: a typed object, an untyped one, a dictionary.
+public func jsKeysOf(_ value: Any?) -> [String] {
+    if let string = jsFlat(value) as? String { return (0..<string.utf16.count).map { String($0) } }
+    if let dynamic = value as? JSDynamic { return dynamic.jsKeys }
+    if let dictionary = value as? [String: Any] { return Array(dictionary.keys).sorted() }
+    if let array = value as? JSArrayProtocol { return (0..<array.jsLength).filter(array.jsHasElement).map(String.init) + (jsSideProperties(array, create: false)?.keys ?? []) }
+    return []
+}
+
+/// `key in object`.
+public func jsHasKey(_ object: Any?, _ key: String) -> Bool {
+    if jsIsSymbolKey(key), let v = jsFlat(object), let shape = jsClassShape(of: v), shape.expando {
+        return jsExpandoHas(jsExpando(jsClassInstance(v), as: shape.expandoType!), key, symbolPlain: shape.symbolPlain, symbolFieldsPlain: shape.symbolFieldsPlain)
+    }
+    // Error.prototype's `message` and `name`.
+    if let error = jsFlat(object) as? JSError, key == "message" || key == "name" || jsErrorOwns(error, key) { return true }
+    if let plain = jsFlat(object) as? JSObject {
+        if plain.has(key) { return true }
+        let proto = plain.jsPrototype != nil ? jsFlat(plain.jsPrototype) : JSPrototypes.prototypeOf(object: plain)
+        return proto is JSNull ? false : jsHasKey(proto, key)
+    }
+    // A class object passes a cast to a protocol its instances take; its keys are a function's own and its statics.
+    if let v = jsFlat(object), jsIsClassObject(v) {
+        if key == "name" || key == "length" || key == "prototype" { return true }
+        if let cls = v as? JSStaticKeyed.Type { return cls.jsStaticKeys.contains(key) }
+        return (v as? AnyClass).map { JSPrototypes.staticMember($0, key) != nil } ?? false
+    }
+    // A field given a descriptor is the object's own even where hidden from `jsKeys`.
+    if let definable = jsFlat(object) as? JSDefinable, !jsIsSymbolKey(key), jsSideProperties(definable, create: false)?.has(key) == true { return true }
+    // A typed object's `jsKeys` lists every field anew; a symbol key is never a field's.
+    if let expando = jsFlat(object) as? JSExpando { return jsExpandoHas(expando, key) || (!jsIsSymbolKey(key) && (expando.jsKeys.contains(key) || (expando as? JSMemberKeyed)?.jsHasMember(key) == true || JSPrototypes.objectPrototype.has(key))) }
+    if jsIsSymbolKey(key) {
+        let v = jsFlat(object)
+        if (v as? JSSymbolKeyed)?.jsSymbolKeys.contains(key) == true || (v as? JSMemberKeyed)?.jsHasMember(key) == true { return true }
+        return (v as? JSDynamic).map { JSPrototypes.holder(type(of: $0) as AnyClass, key) != nil } ?? false
+    }
+    if let dynamic = object as? JSDynamic {
+        if dynamic.jsKeys.contains(key) || (dynamic as? JSMemberKeyed)?.jsHasMember(key) == true { return true }
+        // Accessors are the prototype's, as `in` finds them in JavaScript.
+        return JSPrototypes.holder(type(of: dynamic) as AnyClass, key) != nil || JSPrototypes.objectPrototype.has(key)
+    }
+    if let array = object as? JSArrayProtocol {
+        return key == "length" || (Int(key).map(array.jsHasElement) ?? false) || jsSideProperties(array, create: false)?.has(key) == true
+    }
+    return false
+}
+
+// MARK: Strings, in UTF-16 code units as JavaScript indexes them
+
+private func units(_ s: String) -> [UInt16] { jsUnits(s) }
+private func string(_ u: ArraySlice<UInt16>) -> String { jsString(utf16: u) }
+private func clampIndex(_ v: Double, _ count: Int) -> Int {
+    if v.isNaN { return 0 }
+    return Int(max(0, min(Double(count), v.rounded(.towardZero))))
+}
+
+/// Compares strings by UTF-16 code units, as JavaScript's `<` does: -1, 0 or 1.
+public func jsCompare(_ a: String, _ b: String) -> Int { jsCompareUnits(a, b) }
+
+public func jsStartsWith(_ s: String, _ search: String, _ position: Double? = nil) -> Bool {
+    let u = JSStringUnits(s)
+    return u.matches(search, at: clampIndex(position ?? 0, u.count))
+}
+
+public func jsEndsWith(_ s: String, _ search: String, _ endPosition: Double? = nil) -> Bool {
+    let u = JSStringUnits(s)
+    let end = clampIndex(endPosition ?? Double(u.count), u.count)
+    let n = search.utf16.count
+    return n <= end && u.matches(search, at: end - n)
+}
+
+public func jsIndexOf(_ s: String, _ search: String, _ position: Double?) -> Double {
+    let u = JSStringUnits(s)
+    return u.firstIndex(of: search, from: clampIndex(position ?? 0, u.count)).map(Double.init) ?? -1
+}
+
+public func jsLastIndexOf(_ s: String, _ search: String, _ fromIndex: Double? = nil) -> Double {
+    let u = units(s), n = Array(search.utf16)
+    var i = u.count - n.count
+    // A NaN or missing position searches from the end.
+    if let f = fromIndex, !f.isNaN { i = min(i, Int(max(0, min(Double(u.count), f)))) }
+    while i >= 0 {
+        if u[i..<(i + n.count)].elementsEqual(n) { return Double(i) }
+        i -= 1
+    }
+    return -1
+}
+
+/// `s.substring(a, b)`: negative and NaN are 0, and the bounds swap if reversed.
+public func jsSubstring(_ s: String, _ start: Double, _ end: Double? = nil) -> String {
+    let u = JSStringUnits(s)
+    var a = clampIndex(start, u.count), b = clampIndex(end ?? Double(u.count), u.count)
+    if a > b { swap(&a, &b) }
+    return u.slice(a..<b)
+}
+
+/// `s.substr(start, length)`: a negative start counts from the end.
+public func jsSubstr(_ s: String, _ start: Double, _ length: Double? = nil) -> String {
+    let u = JSStringUnits(s)
+    let a = jsRelativeIndex(start, u.count)
+    let n = length.map { Int(max(0, min(jsToIntegerOrInfinity($0), Double(u.count - a)))) } ?? u.count - a
+    return u.slice(a..<(a + n))
+}
+
+/// `s.split(separator, limit)` with an untyped separator: a regular expression splits as one, any other value by its string.
+public func jsSplit(_ s: String, untyped separator: Any?, _ limit: Double? = nil) -> JSArray<String> {
+    switch jsFlat(separator) {
+    case nil: return jsSplit(s, nil as String?, limit)
+    case let re as JSRegExp: return jsSplit(s, re, limit).map { $0 ?? "" }
+    default: return jsSplit(s, jsToString(separator), limit)
+    }
+}
+
+/// `jsSplit(_:untyped:_:)` where a regular expression's group that took no part stays undefined.
+public func jsSplit(_ s: String, untypedKeepingUnset separator: Any?, _ limit: Double? = nil) -> JSArray<String?> {
+    if let re = jsFlat(separator) as? JSRegExp { return jsSplit(s, re, limit) }
+    return JSArray<String?>(jsSplit(s, untyped: separator, limit).storage.map { $0 })
+}
+
+/// `array.join(separator)` with an untyped separator: undefined joins with a comma, null with "null".
+public func jsJoinSeparator(_ separator: Any?) -> String {
+    jsFlat(separator) == nil ? "," : jsToString(separator)
+}
+
+/// `s.split(separator, limit)` with a string separator.
+/// A separator, valid UTF-16 as every Swift string is, matches the same text at the same places among UTF-8
+/// bytes as among UTF-16 units: the search runs over the bytes, in place.
+public func jsSplit(_ s: String, _ separator: String?, _ limit: Double? = nil) -> JSArray<String> {
+    let max = limit.map { Int(jsToUint32Bits($0)) } ?? Int.max
+    guard let separator else { return JSArray(max > 0 ? [s] : []) }
+    var parts: [String] = []
+    if separator.isEmpty {
+        for c in units(s).prefix(max) { parts.append(string([c][...])) }
+        return JSArray(parts)
+    }
+    var text = s, needle = separator
+    text.withUTF8 { bytes in
+        needle.withUTF8 { sep in
+            func piece(_ range: Range<Int>) -> String { String(decoding: UnsafeBufferPointer(rebasing: bytes[range]), as: UTF8.self) }
+            var start = 0
+            while parts.count < max, start + sep.count <= bytes.count,
+                  let found = memmem(bytes.baseAddress! + start, bytes.count - start, sep.baseAddress!, sep.count) {
+                let at = bytes.baseAddress!.distance(to: found.assumingMemoryBound(to: UInt8.self))
+                parts.append(piece(start..<at))
+                start = at + sep.count
+            }
+            if parts.count < max { parts.append(piece(start..<bytes.count)) }
+        }
+    }
+    return JSArray(parts)
+}
+
+private func jsToUint32Bits(_ v: Double) -> UInt32 {
+    guard v.isFinite else { return 0 }
+    return UInt32(truncatingIfNeeded: Int64(v.truncatingRemainder(dividingBy: 4294967296)))
+}
+
+/// `s.replaceAll(pattern, replacement)` with a string pattern.
+public func jsReplaceAll(_ s: String, _ pattern: String, _ replacement: String) -> String {
+    let u = units(s), p = units(pattern)
+    var out: [UInt16] = []
+    var cursor = 0
+    var at = jsUnitsIndex(u, p, from: 0)
+    while let i = at {
+        out += u[cursor..<i]
+        out += jsSubstitution(replacement, matched: pattern, at: i, in: s, captures: [pattern], groups: nil).utf16
+        cursor = i + p.count
+        at = jsUnitsIndex(u, p, from: i + max(1, p.count))
+    }
+    out += u[cursor...]
+    return string(out[...])
+}
+
+public func jsPadEnd(_ s: String, _ length: Double, _ fill: String = " ") throws -> String {
+    s + (try jsPadding(s, length, fill))
+}
+
+/// V8's longest string, in UTF-16 units: a longer result is a RangeError.
+let jsMaxStringLength = 536_870_888.0
+
+/// What `padStart`/`padEnd` add to reach `length` UTF-16 units: `fill` repeated and cut.
+func jsPadding(_ s: String, _ length: Double, _ fill: String) throws -> String {
+    let target = jsToIntegerOrInfinity(length), have = Double(s.utf16.count)
+    guard target > have, !fill.isEmpty else { return "" }
+    if target > jsMaxStringLength { throw JSException(value: JSRangeError("Invalid string length")) }
+    let missing = Int(target - have), f = fill.utf16.count
+    return string(Array(String(repeating: fill, count: missing / f + 1).utf16.prefix(missing))[...])
+}
+
+public func jsRepeat(_ s: String, _ count: Double) throws -> String {
+    let n = jsToIntegerOrInfinity(count)
+    guard n >= 0, n.isFinite else { throw JSException(value: JSRangeError("Invalid count value: \(jsNumberToString(count))")) }
+    if s.isEmpty || n == 0 { return "" }
+    if Double(s.utf16.count) * n > jsMaxStringLength { throw JSException(value: JSRangeError("Invalid string length")) }
+    return String(repeating: s, count: Int(n))
+}
+
+public func jsCharCodeAt(_ s: String, _ index: Double) -> Double {
+    let u = JSStringUnits(s)
+    let i = index.isNaN ? 0 : index.rounded(.towardZero)
+    return i >= 0 && i < Double(u.count) ? Double(u[Int(i)]) : .nan
+}
+
+public func jsCodePointAt(_ s: String, _ index: Double) -> Double? {
+    let u = JSStringUnits(s)
+    let k = jsToIntegerOrInfinity(index)
+    guard k >= 0, k < Double(u.count) else { return nil }
+    let i = Int(k)
+    let first = u[i]
+    if UTF16.isLeadSurrogate(first), i + 1 < u.count, UTF16.isTrailSurrogate(u[i + 1]) {
+        return Double((UInt32(first) - 0xD800) * 0x400 + (UInt32(u[i + 1]) - 0xDC00) + 0x10000)
+    }
+    return Double(first)
+}
+
+public func jsStringAt(_ s: String, _ index: Double) -> String? {
+    let u = JSStringUnits(s)
+    var k = jsToIntegerOrInfinity(index)
+    if k < 0 { k += Double(u.count) }
+    return k >= 0 && k < Double(u.count) ? jsString(unit: u[Int(k)]) : nil
+}
+
+public func jsFromCharCode(_ codes: Double...) -> String {
+    jsFromCharCode(codes: codes)
+}
+
+public func jsFromCharCode(codes: [Double]) -> String {
+    string(codes.map { UInt16(truncatingIfNeeded: Int64(jsToUint32Bits($0))) }[...])
+}
+
+public func jsFromCodePoint(_ points: Double...) throws -> String {
+    var units: [UInt16] = []
+    for p in points {
+        guard p >= 0, p <= 0x10FFFF, p.rounded(.towardZero) == p else { throw JSException(JSRangeError("Invalid code point \(jsNumberToString(p))")) }
+        let v = UInt32(p)
+        if v < 0x10000 { units.append(UInt16(v)) } else { units += [UInt16(0xD800 + ((v - 0x10000) >> 10)), UInt16(0xDC00 + ((v - 0x10000) & 0x3FF))] }
+    }
+    return string(units[...])
+}
+
+/// What `for (const c of s)` visits: code points, a surrogate pair together.
+public func jsCodePoints(_ s: String) -> [String] {
+    s.unicodeScalars.map { String($0) }
+}
+
+private let jsWhitespace: Set<UInt16> = [0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0xA0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000, 0xFEFF]
+
+public func jsTrimStart(_ s: String) -> String { let u = units(s); return string(u.drop(while: jsWhitespace.contains)) }
+public func jsTrimEnd(_ s: String) -> String {
+    let u = units(s)
+    var end = u.count
+    while end > 0 && jsWhitespace.contains(u[end - 1]) { end -= 1 }
+    return string(u[..<end])
+}
+public func jsTrim(_ s: String) -> String { jsTrimEnd(jsTrimStart(s)) }
+
+public func jsLocaleCompare(_ a: String, _ b: String) -> Double {
+    switch a.compare(b, options: [], range: nil, locale: Locale.current) {
+    case .orderedAscending: return -1
+    case .orderedDescending: return 1
+    case .orderedSame: return 0
+    }
+}
+
+// MARK: Math and Number
+
+public func jsMathMax(values: [Double]) -> Double {
+    var out = -Double.infinity
+    for v in values {
+        if v.isNaN { return .nan }
+        if v > out || (v == 0 && out == 0 && out.sign == .minus) { out = v }
+    }
+    return out
+}
+
+public func jsMathMin(values: [Double]) -> Double {
+    var out = Double.infinity
+    for v in values {
+        if v.isNaN { return .nan }
+        if v < out || (v == 0 && out == 0 && v.sign == .minus) { out = v }
+    }
+    return out
+}
+
+extension JSArray {
+    /// `a.push(...items)`.
+    @discardableResult public func push(contentsOf items: JSArray<Element>) -> Double {
+        for item in items.storage { _ = push(item) }
+        return length
+    }
+
+    /// `a.unshift(...items)`.
+    @discardableResult public func unshift(contentsOf items: JSArray<Element>) -> Double {
+        for item in items.storage.reversed() { _ = unshift(item) }
+        return length
+    }
+}
+
+public func jsSign(_ x: Double) -> Double { x.isNaN ? .nan : x > 0 ? 1 : x < 0 ? -1 : x }
+public func jsFround(_ x: Double) -> Double { Double(Float(x)) }
+public func jsImul(_ a: Double, _ b: Double) -> Double { Double(jsToInt32(a) &* jsToInt32(b)) }
+public func jsClz32(_ x: Double) -> Double { Double(UInt32(bitPattern: jsToInt32(x)).leadingZeroBitCount) }
+public func jsHypot(_ values: Double...) -> Double {
+    if values.contains(where: { $0.isInfinite }) { return .infinity }
+    if values.contains(where: { $0.isNaN }) { return .nan }
+    return values.reduce(0) { $0 + $1 * $1 }.squareRoot()
+}
+
+/// `**` and `Math.pow`: 1 ** NaN and (±1) ** ±Infinity are NaN in JavaScript.
+public func jsPow(_ base: Double, _ exponent: Double) -> Double {
+    if exponent.isNaN { return .nan }
+    if abs(base) == 1 && exponent.isInfinite { return .nan }
+    return Foundation.pow(base, exponent)
+}
+
+/// `Math.max`: NaN wins, +0 beats -0, and no arguments is -Infinity.
+public func jsMathMax(_ values: Double...) -> Double {
+    var out = -Double.infinity
+    for v in values {
+        if v.isNaN { return .nan }
+        if v > out || (v == 0 && out == 0 && out.sign == .minus) { out = v }
+    }
+    return out
+}
+
+public func jsMathMin(_ values: Double...) -> Double {
+    var out = Double.infinity
+    for v in values {
+        if v.isNaN { return .nan }
+        if v < out || (v == 0 && out == 0 && v.sign == .minus) { out = v }
+    }
+    return out
+}
+
+public func jsIsInteger(_ x: Double) -> Bool { x.isFinite && x.rounded(.towardZero) == x }
+public func jsIsSafeInteger(_ x: Double) -> Bool { jsIsInteger(x) && abs(x) <= 9007199254740991 }
+
+/// `n.toString(radix)`; nil radix is 10.
+public func jsNumberToString(_ x: Double, radix: Double?) throws -> String { try radix.map { try jsNumberToRadixString(x, $0) } ?? jsNumberToString(x) }
+
+/// An untyped value read as a dictionary-typed object: a record already, or a record of an object's keys.
+public func jsRecordOf<T>(_ value: Any?, _ element: (Any?) throws -> T) rethrows -> JSRecord<T> {
+    if let record = jsFlat(value) as? JSRecord<T> { return record }
+    guard let object = jsFlat(value) as? JSDynamic else { return JSRecord<T>() }
+    return JSRecord(try object.jsKeys.map { ($0, try element(object[jsKey: $0])) })
+}
+
+/// The RegExp match, matchAll and search make of a pattern that is not one.
+private func regExp(_ pattern: Any?, _ flags: String) throws -> JSRegExp {
+    if let re = jsFlat(pattern) as? JSRegExp { return re }
+    return try JSRegExp(jsToString(pattern), flags)
+}
+
+/// A number's methods read by name from untyped code (`handle.toString()` where `handle` is `any`).
+func jsNumberMethod(_ x: Double, _ key: String) -> JSMethod? {
+    let optional = { (args: [Any?], i: Int) -> Double? in jsLenientNumberOrUndefined(jsArg(args, i)) }
+    switch key {
+    case "toString": return { _, a in try jsNumberToString(x, radix: optional(a, 0)) }
+    case "toLocaleString": return { _, _ in jsNumberToString(x) }
+    case "valueOf": return { _, _ in x }
+    case "toFixed": return { _, a in try jsToFixed(x, optional(a, 0)) }
+    case "toPrecision": return { _, a in try jsToPrecision(x, optional(a, 0)) }
+    case "toExponential": return { _, a in try jsToExponential(x, optional(a, 0)) }
+    default: return nil
+    }
+}
+
+/// A BigInt's methods read by name from untyped code.
+func jsBigIntMethod(_ b: JSBigInt, _ key: String) -> JSMethod? {
+    switch key {
+    case "toString":
+        return { _, a in
+            let radix = (jsLenientNumberOrUndefined(jsArg(a, 0)) ?? 10).rounded(.towardZero)
+            guard radix >= 2, radix <= 36 else { throw JSException(JSRangeError("toString() radix must be between 2 and 36")) }
+            return b.toString(radix)
+        }
+    case "toLocaleString": return { _, a in try jsBigIntToLocaleString(b, jsArg(a, 0), jsArg(a, 1)) }
+    case "valueOf": return { _, _ in b }
+    default: return nil
+    }
+}
+
+/// A boolean's methods read by name from untyped code.
+func jsBooleanMethod(_ b: Bool, _ key: String) -> JSMethod? {
+    switch key {
+    case "toString", "toLocaleString": return { _, _ in b ? "true" : "false" }
+    case "valueOf": return { _, _ in b }
+    default: return nil
+    }
+}
+
+/// A string's methods read by name from untyped code (`value.split('/')` where `value` is `any`): the common ones.
+func jsStringMethod(_ s: String, _ key: String) -> JSMethod? {
+    let number = { (args: [Any?], i: Int) -> Double? in jsIsNullish(jsArg(args, i)) ? nil : jsToNumber(jsArg(args, i)) }
+    switch key {
+    case "split":
+        return { _, args in
+            if let re = jsFlat(jsArg(args, 0)) as? JSRegExp { return jsSplit(s, re, number(args, 1)) }
+            return jsSplit(s, jsIsNullish(jsArg(args, 0)) ? nil : jsToString(jsArg(args, 0)), number(args, 1))
+        }
+    case "slice": return { _, args in jsSlice(s, number(args, 0) ?? 0, number(args, 1)) }
+    case "substring": return { _, args in jsSubstring(s, number(args, 0) ?? 0, number(args, 1)) }
+    case "includes": return { _, args in jsIncludes(s, jsToString(jsArg(args, 0))) }
+    case "startsWith": return { _, args in jsStartsWith(s, jsToString(jsArg(args, 0)), number(args, 1)) }
+    case "endsWith": return { _, args in jsEndsWith(s, jsToString(jsArg(args, 0)), number(args, 1)) }
+    case "indexOf": return { _, args in jsIndexOf(s, jsToString(jsArg(args, 0)), number(args, 1)) }
+    case "trim": return { _, _ in jsTrim(s) }
+    case "trimStart": return { _, _ in jsTrimStart(s) }
+    case "trimEnd": return { _, _ in jsTrimEnd(s) }
+    case "replace", "replaceAll":
+        return { _, args in
+            let pattern = jsFlat(jsArg(args, 0)), replacement = jsArg(args, 1)
+            let all = key == "replaceAll"
+            // A function replacement receives the match, its groups, the offset and the input, as String.prototype.replace passes them.
+            if let fn = jsFlat(replacement), fn is JSFunction || fn is JSMethod || fn is JSFunctionObject {
+                let re = try (pattern as? JSRegExp) ?? JSRegExp(jsRegExpEscape(jsToString(pattern)), all ? "g" : "")
+                return try jsReplace(s, re) { m in jsToString(try jsCall(fn, spread: m.values.elements.map { $0 as Any? } + [m.index, m.input])) }
+            }
+            if all, let re = pattern as? JSRegExp { return try jsReplaceAll(s, re, jsToString(replacement)) }
+            if all { return jsReplaceAll(s, jsToString(pattern), jsToString(replacement)) }
+            return jsReplace(s, untyped: pattern, jsToString(replacement))
+        }
+    case "match":
+        return { _, args in
+            return jsMatch(s, try regExp(jsArg(args, 0), "")) as Any?
+        }
+    case "matchAll": return { _, args in try jsMatchAll(s, regExp(jsArg(args, 0), "g")) }
+    case "search": return { _, args in try jsSearch(s, regExp(jsArg(args, 0), "")) }
+    case "charAt": return { _, args in jsCharAt(s, number(args, 0) ?? 0) }
+    case "charCodeAt": return { _, args in jsCharCodeAt(s, number(args, 0) ?? 0) }
+    case "codePointAt": return { _, args in jsCodePointAt(s, number(args, 0) ?? 0) }
+    case "at": return { _, args in jsStringAt(s, number(args, 0) ?? 0) }
+    case "lastIndexOf": return { _, args in jsLastIndexOf(s, jsToString(jsArg(args, 0)), number(args, 1)) }
+    case "padEnd": return { _, args in try jsPadEnd(s, number(args, 0) ?? 0, jsIsNullish(jsArg(args, 1)) ? " " : jsToString(jsArg(args, 1))) }
+    case "padStart": return { _, args in try jsPadStart(s, number(args, 0) ?? 0, jsIsNullish(jsArg(args, 1)) ? " " : jsToString(jsArg(args, 1))) }
+    case "repeat": return { _, args in try jsRepeat(s, number(args, 0) ?? 0) }
+    case "substr": return { _, args in jsSubstr(s, number(args, 0) ?? 0, number(args, 1)) }
+    case "concat": return { _, args in s + args.map { jsToString($0) }.joined() }
+    case "localeCompare": return { _, args in jsLocaleCompare(s, jsToString(jsArg(args, 0))) }
+    case "toLowerCase", "toLocaleLowerCase": return { _, _ in s.lowercased() }
+    case "toUpperCase", "toLocaleUpperCase": return { _, _ in s.uppercased() }
+    case "toString", "valueOf": return { _, _ in s }
+    default: return nil
+    }
+}
+
+/// `String.fromCharCode.apply(_, codes)`: the codes of an array-like, as numbers.
+public func jsFromCharCodeList(_ list: Any?) throws -> String {
+    string(try jsListNumbers(list).map { UInt16(truncatingIfNeeded: Int64(jsToUint32Bits($0))) }[...])
+}
+
+/// `Math.max.apply(_, xs)`.
+public func jsMathMaxList(_ list: Any?) throws -> Double {
+    try jsListNumbers(list).reduce(-Double.infinity) { $0.isNaN || $1.isNaN ? .nan : Swift.max($0, $1) }
+}
+
+/// `Math.min.apply(_, xs)`.
+public func jsMathMinList(_ list: Any?) throws -> Double {
+    try jsListNumbers(list).reduce(Double.infinity) { $0.isNaN || $1.isNaN ? .nan : Swift.min($0, $1) }
+}
+
+/// The elements of an array-like as numbers, as `apply` spreads them.
+func jsListNumbers(_ list: Any?) throws -> [Double] {
+    if jsIsNullish(list) { return [] }
+    guard let array = jsFlat(list) as? JSArrayProtocol else { throw JSException(JSTypeError("CreateListFromArrayLike called on non-object")) }
+    return array.jsAnyElements.map(jsToNumber)
+}
+
+/// A class whose static members script names (`'tapEvent' in view.constructor`): its own and its bases'.
+public protocol JSStaticKeyed: AnyObject {
+    static var jsStaticKeys: [String] { get }
+}
+
+/// `value.constructor`: the class of the object.
+public func jsConstructor(_ value: Any?) -> Any? {
+    guard let object = jsFlat(value) else { return nil }
+    return type(of: object) as Any
+}

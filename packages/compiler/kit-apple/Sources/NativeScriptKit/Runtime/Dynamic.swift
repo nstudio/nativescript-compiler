@@ -1,0 +1,470 @@
+import Foundation
+
+// JavaScript's object operations on values translated code holds untyped:
+// what plugins written against loose types do with options bags, event
+// payloads and the views they decorate.
+
+/// Argument `index` of a dynamic call; a missing one is undefined.
+@inline(__always)
+public func jsArg(_ arguments: [Any?], _ index: Int) -> Any? {
+    index < arguments.count ? arguments[index] : nil
+}
+
+/// `delete object[key]` in strict code: a property that cannot be deleted throws a TypeError.
+@discardableResult
+public func jsDelete(_ object: Any?, _ key: String) throws -> Bool {
+    switch jsIdentity(jsFlat(object)) {
+    case let o as JSObject:
+        if !o.delete(key) { throw JSException(JSTypeError("Cannot delete property '\(key)' of #<Object>")) }
+        return true
+    case let d as JSDynamic where jsRestriction(d) >= 2 && d.jsKeys.contains(key):
+        throw JSException(JSTypeError("Cannot delete property '\(key)' of #<Object>"))
+    case let d as JSDeletable: return d.jsDeleteOwn(key)
+    case is JSArrayProtocol where key == "length":
+        throw JSException(JSTypeError("Cannot delete property 'length' of [object Array]"))
+    case let array as JSArrayProtocol where jsArrayIndex(key) == nil:
+        if jsSideProperties(array, create: false)?.delete(key) == false { throw JSException(JSTypeError("Cannot delete property '\(key)' of [object Array]")) }
+        return true
+    default: return true
+    }
+}
+
+/// A property's slot when it is an accessor or its attributes are not all true.
+struct JSPropertySlot {
+    var get: ((Any?) throws -> Any?)?
+    var set: ((Any?, Any?) throws -> Void)?
+    var isAccessor = false
+    var enumerable = true
+    var writable = true
+    var configurable = true
+
+    var isPlain: Bool { !isAccessor && enumerable && writable && configurable }
+}
+
+/// A property descriptor as `Object.defineProperty` reads it.
+public struct JSPropertyDescriptor {
+    public var value: Any??
+    public var get: ((Any?) throws -> Any?)?
+    public var set: ((Any?, Any?) throws -> Void)?
+    public var enumerable: Bool?
+    public var writable: Bool?
+    public var configurable: Bool?
+
+    public init(value: Any?? = nil, get: ((Any?) throws -> Any?)? = nil, set: ((Any?, Any?) throws -> Void)? = nil, enumerable: Bool? = nil, writable: Bool? = nil, configurable: Bool? = nil) {
+        self.value = value
+        self.get = get
+        self.set = set
+        self.enumerable = enumerable
+        self.writable = writable
+        self.configurable = configurable
+    }
+
+    /// A descriptor object script wrote (`{ value, enumerable, get() {…} }`).
+    public init(_ object: Any?) throws {
+        guard let o = jsFlat(object) as? JSDynamic else { throw JSException(JSTypeError("Property description must be an object: \(jsToString(object))")) }
+        let has = { (k: String) in jsHasKey(o, k) }
+        if has("value") { value = .some(o[jsKey: "value"]) }
+        if has("get"), let g = jsFlat(o[jsKey: "get"]) { let f = jsReceiving(g); get = { this in try f(this, []) } }
+        if has("set"), let s = jsFlat(o[jsKey: "set"]) { let f = jsReceiving(s); set = { this, v in _ = try f(this, [v]) } }
+        if has("enumerable") { enumerable = jsIsTruthy(o[jsKey: "enumerable"]) }
+        if has("writable") { writable = jsIsTruthy(o[jsKey: "writable"]) }
+        if has("configurable") { configurable = jsIsTruthy(o[jsKey: "configurable"]) }
+    }
+}
+
+/// A function value called with a receiver: a method sees it as `this`.
+private func jsReceiving(_ f: Any) -> (Any?, [Any?]) throws -> Any? {
+    if let object = f as? JSFunctionObject { return { this, args in try object.call(this, args) } }
+    if let method = f as? JSMethod { return { this, args in try method(this, args) } }
+    if let function = f as? JSFunction { return { _, args in try function(args) } }
+    return { _, _ in throw JSException(JSTypeError("Getter must be a function: \(jsInspect(f))")) }
+}
+
+/// A function that reads `this`: a method of an untyped object literal.
+public typealias JSMethod = (Any?, [Any?]) throws -> Any?
+
+/// A class whose methods and accessors script reaches by name: `key in object` finds them, though they are no own keys.
+public protocol JSMemberKeyed: AnyObject {
+    func jsHasMember(_ key: String) -> Bool
+}
+
+/// A class's method read by name: called on an object of the class (`obj[k].call(other)`), that object is its `this`,
+/// else the object it was read from. Typed callbacks drop the `thisArg` script gives them, so a call without an object
+/// of the class runs on the one the method was read from.
+public func jsMethodValue<T: AnyObject>(_ own: T, _ method: @escaping (T) -> JSFunctionObject) -> JSFunctionObject {
+    let bound = method(own)
+    return JSFunctionObject(bound.name, bound.length) { this, arguments in
+        if let other = jsFlat(this) as? T, other !== own { return try method(other).call(nil, arguments) }
+        return try bound.call(nil, arguments)
+    }
+}
+
+/// `object.method(args)` on an untyped object: a method sees the object as `this`.
+@discardableResult
+public func jsCallMethod(_ object: Any?, _ key: String, _ arguments: Any?...) throws -> Any? {
+    try callMethod(object, key, arguments)
+}
+
+/// `object?.key(…)`: undefined when the object is undefined or null.
+@discardableResult
+public func jsCallMethodIfPresent(_ object: Any?, _ key: String, _ arguments: Any?...) throws -> Any? {
+    jsIsNullish(object) ? nil : try callMethod(object, key, arguments)
+}
+
+/// `object.key(...args)` on an untyped object.
+@discardableResult
+public func jsCallMethod(_ object: Any?, _ key: String, spread arguments: [Any?]) throws -> Any? {
+    try callMethod(object, key, arguments)
+}
+
+@discardableResult
+public func jsCallMethodIfPresent(_ object: Any?, _ key: String, spread arguments: [Any?]) throws -> Any? {
+    jsIsNullish(object) ? nil : try callMethod(object, key, arguments)
+}
+
+private func callMethod(_ object: Any?, _ key: String, _ arguments: [Any?]) throws -> Any? {
+    let flat = jsFlat(object)
+    if let value = flat, let shape = jsClassShape(of: value), shape.script && !shape.function && !shape.hostObject {
+        let instance = jsClassInstance(value)
+        let raw: Any?
+        if shape.plainObject {
+            raw = try unsafeDowncast(instance, to: JSObject.self).get(key)
+        } else if shape.symbolFieldsPlain && jsIsSymbolKey(key) {
+            let expando = jsExpando(instance, as: shape.expandoType!)
+            raw = shape.symbolPlain ? jsExpandoSymbolGet(expando, key) : jsExpandoGet(expando, key)
+        } else {
+            raw = jsDynamic(instance, as: shape.dynamicType!)[jsKey: key]
+        }
+        var f = jsFlat(raw)
+        if f == nil && JSPrototypes.objectPrototype.has(key) { f = jsFlat(JSPrototypes.objectPrototype[key]) }
+        if let function = f as? JSFunctionObject { return try function.call(object, arguments) }
+        if let method = f as? JSMethod { return try method(object, arguments) }
+        if let function = f as? JSFunction { return try function(arguments) }
+        if let moot = f as? JSMootValue { throw moot.unavailable() }
+        throw JSException(JSTypeError("\(jsInspect(raw)) is not a function"))
+    }
+    if let f = flat as? JSFunctionObject, jsFlat(f[jsKey: key]) == nil {
+        let this = arguments.first ?? nil
+        switch key {
+        case "call": return try f.call(this, Array(arguments.dropFirst()))
+        case "apply": return try f.call(this, try jsArgumentList(arguments.count > 1 ? arguments[1] : nil))
+        case "bind":
+            let bound = Array(arguments.dropFirst())
+            return JSFunctionObject("bound \(f.name)", max(0, f.length - bound.count)) { _, rest in try f.call(this, bound + rest) }
+        default: break
+        }
+    }
+    // `f.call(thisArg, …)` and `f.apply(thisArg, args)` on a function value.
+    if key == "call" || key == "apply", let f = jsFlat(object), f is JSMethod || f is JSFunction {
+        let this = arguments.first ?? nil
+        let rest = key == "call" ? Array(arguments.dropFirst()) : (jsFlat(arguments.count > 1 ? arguments[1] : nil) as? JSArrayProtocol)?.jsAnyElements ?? []
+        if let method = f as? JSMethod { return try method(this, rest) }
+        if let function = f as? JSFunction { return try function(rest) }
+    }
+    // `f.bind(thisArg, …)`: a function of the rest of the arguments.
+    if key == "bind", let f = jsFlat(object), f is JSMethod || f is JSFunction {
+        let this = arguments.first ?? nil
+        let bound = Array(arguments.dropFirst())
+        if let method = f as? JSMethod { return { (rest: [Any?]) throws -> Any? in try method(this, bound + rest) } as JSFunction }
+        if let function = f as? JSFunction { return { (rest: [Any?]) throws -> Any? in try function(bound + rest) } as JSFunction }
+    }
+    // `cls.new()` of a native class object: an instance of its plain initializer, as `[cls new]`.
+    if key == "new", arguments.isEmpty, let cls = jsFlat(object) as? NSObject.Type { return cls.init() }
+    if key == "toString", let cls = jsFlat(object) as? Any.Type { return jsClassString(cls) }
+    if let host = jsFlat(object) as? JSHostObject, let result = try host.jsInvoke(key, arguments) { return result }
+    if let native = jsFlat(object).flatMap(jsAsNSObject) {
+        if let result = try JSNativeDispatch.call?(native, key, arguments) { return result }
+        if key == "alloc", arguments.isEmpty, let cls = native as? NSObject.Type { return JSNativeAllocation(cls) }
+    }
+    if let extended = jsFlat(object) as? JSExtendedClass, key == "new" { return extended.make() }
+    if let allocation = jsFlat(object) as? JSNativeAllocation {
+        if let result = try JSNativeDispatch.call?(allocation, key, arguments) { return result }
+        if key == "init", arguments.isEmpty, let cls = allocation.cls as? NSObject.Type { return cls.init() }
+        throw JSException(JSTypeError("\(allocation.cls).alloc().\(key) is not a function"))
+    }
+    var f = try jsGet(object, key)
+    // What every object inherits (`hasOwnProperty`), where the object has nothing of that name.
+    if jsFlat(f) == nil, jsFlat(object) is JSDynamic, JSPrototypes.objectPrototype.has(key) { f = JSPrototypes.objectPrototype[key] }
+    if let function = jsFlat(f) as? JSFunctionObject { return try function.call(object, arguments) }
+    if let method = jsFlat(f) as? JSMethod { return try method(object, arguments) }
+    if let function = jsFlat(f) as? JSFunction { return try function(arguments) }
+    if let moot = jsFlat(f) as? JSMootValue { throw moot.unavailable() }
+    throw JSException(JSTypeError("\(jsInspect(f)) is not a function"))
+}
+
+/// `String(cls)`: a class the program declares as its source begins, any other as the runtime prints a native one
+/// (`function WeakRef() { [native code] }`).
+func jsClassString(_ cls: Any.Type) -> String {
+    let name = String(describing: cls).components(separatedBy: "<")[0]
+    return cls is JSStaticKeyed.Type ? "class \(name) { }" : "function \(name.replacingOccurrences(of: "JS", with: "", options: .anchored))() { [native code] }"
+}
+
+/// An object a native binding implements, as an engine's host objects are: a method call
+/// reaches it by name, without the method first read as a function value.
+public protocol JSHostObject: JSDynamic {
+    /// The named method's result, or nil when the object has no method of that name.
+    func jsInvoke(_ key: String, _ arguments: [Any?]) throws -> Any??
+}
+
+/// An object whose accessor properties print as `[Getter]`, `[Setter]` or `[Getter/Setter]`.
+public protocol JSAccessorKeyed: AnyObject {
+    func jsAccessorKind(_ key: String) -> String?
+}
+
+/// `Object.defineProperty(object, key, descriptor)`.
+@discardableResult
+public func jsDefineProperty(_ object: Any?, _ key: String, _ descriptor: Any?) throws -> Any? {
+    let d = try JSPropertyDescriptor(descriptor)
+    switch jsFlat(object) {
+    case let o as JSObject: try o.defineProperty(key, d)
+    case let definable as JSDefinable where definable.jsDefinable(key):
+        let own = jsSideProperties(definable, create: true)!
+        if !own.has(key) { own[key] = definable[jsKey: key] }
+        try own.defineProperty(key, d)
+    case let expando as JSExpando where expando.jsExpando?.has(key) == true || jsIsSymbolKey(key) || !expando.jsKeys.contains(key):
+        if expando.jsExpando == nil { expando.jsExpando = JSObject() }
+        let made = !expando.jsExpando!.has(key)
+        try expando.jsExpando!.defineProperty(key, d)
+        if made, let ordered = expando as? JSKeyOrdered, ordered.jsOrder != nil, !jsIsSymbolKey(key) { ordered.jsKeyMade(key) }
+        if made, let record = expando as? JSKeysMade, record.jsMade != nil, !jsIsSymbolKey(key) { jsMadeAgain(&record.jsMade, key) }
+    case let function as JSFunctionObject: try function.defineOwn(key, d)
+    case let dynamic as JSDynamic:
+        // A field the class declares is a Swift stored property: it can take a value, not become an accessor.
+        if d.get != nil || d.set != nil { throw JSException(JSTypeError("Cannot define an accessor on a typed object: \(key)")) }
+        // A symbol key is in no key listing, enumerable or not.
+        if d.writable == false || (d.enumerable == false && !jsIsSymbolKey(key)) || d.configurable == false { throw JSException(JSTypeError("Cannot restrict a typed object's field: \(key)")) }
+        if case .some(let v) = d.value { dynamic[jsKey: key] = v }
+    case let array as JSArrayProtocol:
+        if key == "length" || jsArrayIndex(key) != nil {
+            if d.get != nil || d.set != nil { throw JSException(JSTypeError("Cannot define an accessor on an array element: \(key)")) }
+            if case .some(let v) = d.value { try jsSet(array, key, v) }
+        } else {
+            try jsSideProperties(array, create: true)!.defineProperty(key, d)
+        }
+    default: throw JSException(JSTypeError("Object.defineProperty called on non-object"))
+    }
+    return object
+}
+
+/// An object of a program class whose declared fields `Object.defineProperty` may give a descriptor (an accessor, read-only,
+/// hidden): such a field's reads and writes go through `subscript(jsKey:)`, which defers to the descriptor kept beside the object.
+public protocol JSDefinable: JSDynamic {
+    func jsDefinable(_ key: String) -> Bool
+}
+
+/// A definable field's value where it was given a descriptor (its getter's, run with the object as `this`), else nil.
+public func jsDefinedGet(_ object: JSDefinable, _ key: String) -> Any?? {
+    guard let own = jsSideProperties(object, create: false), own.has(key) else { return nil }
+    do { return .some(try own.get(key, receiver: object)) } catch { jsReportUncaught(jsCaught(error)); return .some(nil) }
+}
+
+/// A write of a definable field given a descriptor: its setter, or its value where writable; what that throws, `jsSet` throws.
+/// False where the field has no descriptor.
+public func jsDefinedSet(_ object: JSDefinable, _ key: String, _ value: Any?) -> Bool {
+    guard let own = jsSideProperties(object, create: false), own.has(key) else { return false }
+    do {
+        if let setter = own.setter(key) { try setter(object, value) } else { try own.put(key, value) }
+    } catch { jsRefusedWrite = JSException(jsCaught(error)) }
+    return true
+}
+
+/// A definable field's key as `Object.keys` lists it: per its descriptor where it has one, else `declared`.
+public func jsDefinedKeys(_ object: JSDefinable, _ key: String, _ declared: [String]) -> [String] {
+    guard let own = jsSideProperties(object, create: false), own.has(key) else { return declared }
+    return own.jsKeys.contains(key) ? [key] : []
+}
+
+/// What script gives an object that has no room for it (an array's `Object.defineProperty(list, 'total', …)`, `list.tag = …`):
+/// held beside the object while it lives. Weak keys compared by identity, so an object's entry goes with it.
+private let jsSideTable = NSMapTable<AnyObject, JSObject>(keyOptions: [.weakMemory, .objectPointerPersonality], valueOptions: .strongMemory)
+
+func jsSideProperties(_ object: AnyObject, create: Bool) -> JSObject? {
+    if let array = object as? JSArrayProtocol, let source = array.jsViewSource { return jsSideProperties(source, create: create) }
+    if let existing = jsSideTable.object(forKey: object) { return existing }
+    guard create else { return nil }
+    let made = JSObject()
+    jsSideTable.setObject(made, forKey: object)
+    return made
+}
+
+/// `Object.getOwnPropertyDescriptor(object, key)`.
+public func jsOwnPropertyDescriptor(_ object: Any?, _ key: String) -> Any? {
+    switch jsFlat(object) {
+    case let o as JSObject: return o.descriptor(key)
+    case let expando as JSExpando where expando.jsExpando?.has(key) == true: return expando.jsExpando!.descriptor(key)
+    case let function as JSFunctionObject: return function.ownDescriptor(key)
+    case let array as JSArrayProtocol where key != "length" && jsArrayIndex(key) == nil: return jsSideProperties(array, create: false)?.descriptor(key)
+    case let definable as JSDefinable where jsSideProperties(definable, create: false)?.has(key) == true:
+        return jsSideProperties(definable, create: false)!.descriptor(key)
+    case let dynamic as JSDynamic:
+        guard dynamic.jsKeys.contains(key) else { return nil }
+        let level = jsRestriction(dynamic)
+        return JSObject([("value", dynamic[jsKey: key]), ("writable", level < 3), ("enumerable", true), ("configurable", level < 2)])
+    default: return nil
+    }
+}
+
+/// `Object.getOwnPropertyNames(value)`.
+public func jsOwnPropertyNames(_ value: Any?) -> JSArray<String> {
+    switch jsFlat(value) {
+    case let o as JSObject: return JSArray(o.ownPropertyNames)
+    case let array as JSArrayProtocol: return JSArray((0..<array.jsLength).filter(array.jsHasElement).map { String($0) } + ["length"] + (jsSideProperties(array, create: false)?.ownPropertyNames ?? []))
+    case let string as String: return JSArray((0..<string.utf16.count).map { String($0) } + ["length"])
+    default: return JSArray(jsKeysOf(value))
+    }
+}
+
+private var jsRestricted: [ObjectIdentifier: JSRestriction] = [:]
+
+/// How far `Object.preventExtensions`, `seal` or `freeze` closed an object other than a plain one.
+private final class JSRestriction {
+    nonisolated deinit {}
+    weak var object: AnyObject?
+    var level: Int
+    init(_ object: AnyObject, _ level: Int) { self.object = object; self.level = level }
+}
+
+/// 0: open; 1: not extensible; 2: sealed; 3: frozen.
+func jsRestriction(_ object: AnyObject) -> Int {
+    guard !jsRestricted.isEmpty, let r = jsRestricted[ObjectIdentifier(object)], r.object === object else { return 0 }
+    return r.level
+}
+
+private func jsRestrict(object v: Any?, level: Int) {
+    switch jsFlat(v) {
+    case let o as JSObject: o.restrict(sealed: level >= 2, frozen: level >= 3)
+    case let v? where jsIsObject(v) && !(v is JSNull):
+        let object = v as AnyObject
+        jsRestricted[ObjectIdentifier(object)] = JSRestriction(object, max(level, jsRestriction(object)))
+    default: break
+    }
+}
+
+/// `Object.freeze(value)`.
+@discardableResult
+public func jsFreeze<T>(_ value: T) -> T {
+    jsRestrict(object: value, level: 3)
+    return value
+}
+
+/// `Object.seal(value)` and `Object.preventExtensions(value)`.
+@discardableResult
+public func jsRestrict<T>(_ value: T, sealed: Bool) -> T {
+    jsRestrict(object: value, level: sealed ? 2 : 1)
+    return value
+}
+
+private func jsLevel(_ value: Any?) -> Int? {
+    switch jsFlat(value) {
+    case let o as JSObject: return o.isFrozen ? 3 : o.isSealed ? 2 : o.extensible ? 0 : 1
+    case let v? where jsIsObject(v) && !(v is JSNull): return jsRestriction(v as AnyObject)
+    default: return nil
+    }
+}
+
+/// `Object.isFrozen(value)`: primitives are.
+public func jsIsFrozen(_ value: Any?) -> Bool { (jsLevel(value) ?? 3) == 3 }
+
+/// `Object.isSealed(value)`.
+public func jsIsSealed(_ value: Any?) -> Bool { (jsLevel(value) ?? 3) >= 2 }
+
+/// `Object.isExtensible(value)`.
+public func jsIsExtensible(_ value: Any?) -> Bool { (jsLevel(value) ?? 1) == 0 }
+
+/// `Object.fromEntries(entries)`.
+public func jsObjectFromEntries<S: Sequence, V>(_ entries: S) -> JSRecord<V> where S.Element == (String, V) {
+    let record = JSRecord<V>()
+    for (k, v) in entries { record[k] = v }
+    return record
+}
+
+/// `Object.fromEntries(entries)` of untyped entries: each one's `0` the key, its `1` the value.
+public func jsObjectFromEntries<S: Sequence>(_ entries: S) throws -> JSRecord<Any?> {
+    let record = JSRecord<Any?>()
+    for entry in entries {
+        guard jsFlat(entry) != nil, !(jsFlat(entry) is JSNull) else { throw JSException(JSTypeError("Iterator value \(jsToString(entry)) is not an entry object")) }
+        record[jsToString(try jsGet(entry, "0"))] = try jsGet(entry, "1")
+    }
+    return record
+}
+
+/// An object that can lose an own property (`delete o.x`).
+public protocol JSDeletable: AnyObject {
+    func jsDeleteOwn(_ key: String) -> Bool
+}
+
+/// `Object.assign(target, ...sources)`: each source's own enumerable keys written to the target in order.
+@discardableResult
+public func jsObjectAssign(_ target: Any?, _ sources: Any?...) throws -> Any? {
+    try jsObjectAssign(target, spread: sources)
+}
+
+/// `Object.assign(target, ...sources)` with the sources spread from an array.
+@discardableResult
+public func jsObjectAssign(_ target: Any?, spread sources: [Any?]) throws -> Any? {
+    for source in sources {
+        if let dynamic = jsFlat(source) as? JSDynamic {
+            for key in dynamic.jsKeys { try jsSet(target, key, dynamic[jsKey: key]) }
+        } else if let indexed = jsIndexedSource(source) {
+            for key in jsKeysOf(indexed) { try jsSet(target, key, jsField(indexed, key)) }
+        }
+    }
+    return target
+}
+
+/// An array or a string, whose own enumerable keys are its indexes (and an array's named keys) when it is spread or assigned from.
+private func jsIndexedSource(_ value: Any?) -> Any? {
+    let flat = jsFlat(value)
+    return flat is JSArrayProtocol || flat is String ? flat : nil
+}
+
+/// `{ ...source }` into an object literal being built: the source's own enumerable keys, in order.
+public func jsObjectSpread(_ target: JSObject, _ source: Any?) {
+    if let indexed = jsIndexedSource(source) {
+        for key in jsKeysOf(indexed) { target[key] = jsField(indexed, key) }
+        return
+    }
+    guard let dynamic = jsFlat(source) as? JSDynamic else { return }
+    for key in dynamic.jsKeys { target[key] = dynamic[jsKey: key] }
+    for key in (dynamic as? JSSymbolKeyed)?.jsSymbolKeys ?? [] { target[key] = dynamic[jsKey: key] }
+}
+
+/// `const { a, b, ...rest } = source`: the source's own enumerable properties but those the pattern names.
+public func jsObjectRest(_ source: Any?, _ excluded: Set<String>) -> JSObject {
+    let target = JSObject([])
+    guard let dynamic = jsFlat(source) as? JSDynamic else { return target }
+    for key in dynamic.jsKeys where !excluded.contains(key) { target[key] = dynamic[jsKey: key] }
+    for key in (dynamic as? JSSymbolKeyed)?.jsSymbolKeys ?? [] where !excluded.contains(key) { target[key] = dynamic[jsKey: key] }
+    return target
+}
+
+/// `key in object`, for any dynamic value.
+public func jsIn(_ key: String, _ object: Any?) -> Bool {
+    switch jsIdentity(jsFlat(object)) {
+    case let o as JSObject: return o.has(key)
+    case let d as JSDynamic: return d.jsKeys.contains(key) || d[jsKey: key] != nil
+    default: return false
+    }
+}
+
+/// A tagged template's strings array; translated code makes one per call site.
+public func jsTemplateObject(_ cooked: [String], raw: [String]) -> JSArray<String> {
+    let strings = JSArray(cooked)
+    jsTemplateRaws[ObjectIdentifier(strings)] = JSArray(raw)
+    return strings
+}
+
+/// `strings.raw`.
+public func jsTemplateRaw(_ strings: JSArray<String>) -> JSArray<String> {
+    jsTemplateRaws[ObjectIdentifier(strings)] ?? strings
+}
+private var jsTemplateRaws: [ObjectIdentifier: JSArray<String>] = [:]
+
+/// The key order of an object literal with spreads (`{ ...a, b: 1 }`): each spread source's keys as it holds
+/// them, then the literal's own, a key keeping its first position; integer keys first; only the `fields` it has.
+public func jsLiteralKeyOrder(_ parts: [[String]], fields: [String]) -> [String] {
+    var seen = Set<String>(), keys: [String] = []
+    for key in parts.joined() where fields.contains(key) && seen.insert(key).inserted { keys.append(key) }
+    let index = { (k: String) -> Bool in k.count <= 10 && (k == "0" || (k.first != "0" && k.allSatisfy(\.isNumber))) && (UInt64(k) ?? .max) < 4294967295 }
+    return keys.filter(index).sorted { UInt64($0)! < UInt64($1)! } + keys.filter { !index($0) }
+}

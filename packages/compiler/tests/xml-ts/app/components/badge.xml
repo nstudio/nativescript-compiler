@@ -1,0 +1,3 @@
+<StackLayout class="badge">
+  <Label text="{{ badge }}" class="badge-text" />
+</StackLayout>

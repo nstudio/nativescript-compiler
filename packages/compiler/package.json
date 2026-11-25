@@ -1,0 +1,96 @@
+{
+  "name": "@nstudio/nativescript-compiler",
+  "version": "9.2.0-alpha.9",
+  "description": "NativeScript CLI plugin (`ns compile`) and compiler turning a NativeScript app into native Swift (iOS) or Kotlin (Android) with no JavaScript runtime; framework adapters (`@nstudio/nativescript-compiler-<framework>`) compile each framework.",
+  "type": "module",
+  "keywords": [
+    "nativescript",
+    "nativescript:extension",
+    "compiler",
+    "swift",
+    "kotlin",
+    "ios",
+    "android"
+  ],
+  "nativescript": {
+    "commands": {
+      "compile|ios": "./dist/cli/commands/compile-ios.cjs",
+      "compile|android": "./dist/cli/commands/compile-android.cjs",
+      "compile|verify": "./dist/cli/commands/compile-verify.cjs",
+      "compile|retrace": "./dist/cli/commands/compile-retrace.cjs",
+      "compile|doctor": "./dist/cli/commands/compile-doctor.cjs"
+    },
+    "docs": "./docs/cli"
+  },
+  "bin": {
+    "ns-compiled": "bin/ns-compiled.js",
+    "ns-compiled-doctor": "bin/ns-compiled-doctor.js",
+    "ns-compiled-retrace": "bin/ns-compiled-retrace.js",
+    "ns-compiled-verify": "bin/ns-compiled-verify.js",
+    "ns-compiled-adapter": "bin/ns-compiled-adapter.js"
+  },
+  "exports": {
+    "./adapter-api": {
+      "types": "./dist/types/adapter-api.d.ts",
+      "default": "./dist/api/adapter-api.js"
+    },
+    "./binding-api": {
+      "types": "./dist/types/binding-api.d.ts",
+      "default": "./dist/api/binding-api.js"
+    },
+    "./config": {
+      "types": "./config.d.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "bin/",
+    "config.d.ts",
+    "dist/",
+    "verify/",
+    "kit-apple/Package.swift",
+    "kit-apple/Sources/",
+    "kit-apple/Overlays/",
+    "kit-android/build.gradle.kts",
+    "kit-android/consumer-rules.pro",
+    "kit-android/gradlew",
+    "kit-android/gradle/",
+    "kit-android/src/",
+    "kit-android/generated/",
+    "kit-android/overlays/",
+    "docs/CLI.md",
+    "docs/cli/",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20.17.0"
+  },
+  "dependencies": {
+    "typescript": "~5.9.0"
+  },
+  "peerDependencies": {
+    "@nativescript/core": "*",
+    "nativescript": ">=9.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@nativescript/core": {
+      "optional": true
+    },
+    "nativescript": {
+      "optional": true
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nstudio/nativescript-compiler.git",
+    "directory": "packages/compiler"
+  },
+  "scripts": {
+    "prepack": "node tests/kits-present.ts && node bin/build-dist.mjs",
+    "postpack": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\""
+  }
+}

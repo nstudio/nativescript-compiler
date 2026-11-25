@@ -1,0 +1,996 @@
+#!/usr/bin/env node
+// Type-violation fuzzing: each of the suite's diff cases (tests/suite.ts: diff/cases) and fuzz cases (fuzz/cases) is instrumented so that
+// one typed value at a boundary (an argument, a callback's argument, a field, an object literal's field, a return, an `as`
+// operand, an optional chain's operand, a typed variable) can be replaced by undefined, null, a wrong primitive or a wrong
+// object, through `any`, keeping the site's static type. The instrumented case is built once per backend; each run picks
+// one site and one value. Node is the referee: the native run must print what Node prints and fail as Node fails, with the
+// same error text when an error is uncaught.
+//   node tests/fuzz/run.ts [case…] [--swift | --kotlin] [--set merge|nightly] [--seed n] [--jobs n] [--keep]
+//                          [--json <file>] [--update-baseline] [--variant <line:col:kind>/<value>]
+// --set merge (the default) is the per-merge subset: the cases and sites `--seed` draws, about two minutes per backend on a 16-core Mac.
+// --set nightly runs every reached site of every case with four values each.
+// A case argument is a case's number or whole name, or `<prefix>*` (tests/diff/case-options.ts selects). A case refused
+// on a backend (`// @refused`) is not fuzzed there: it translates nothing.
+// Known failures are reported and don't fail the run; anything else does (tests/fuzz/baseline.ts: the per-merge set reads
+// those known-fuzz-failures.json lists, any other run the full list it summarizes). The per-merge set draws only from the
+// cases listed there, so a new case is gated once the nightly set has listed it. A whole nightly run with no full list at
+// hand passes only when it fails on exactly the variants the summary's digest names.
+// A build (`<case>-g<n>`, one site group) whose instrumented program differs from Node with no wrong value chosen runs
+// none of its variants; it fails the run too unless `baselineDiffers` lists it. A native run that times out runs again with
+// twice the time; timing out again, it is reported flaky (a build's variants not run), never a failure.
+// --update-baseline rewrites the entries of the variants and builds that ran: those now matching Node leave, new failures
+// join, and entries of an edited or deleted case's sites go. After a fix, run it with `--set nightly` (whole, or some
+// cases). It needs the full list, which it writes again with known-fuzz-failures.json.
+// Build products go to $NS_FUZZ_BUILD (default: a new <tmp>/ns-compiled-fuzz-* of the run's own, deleted at its end unless
+// --keep), one case at a time, deleted after it unless --keep.
+import { spawn } from 'node:child_process';
+import { Worker } from 'node:worker_threads';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
+import { cpus, tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
+import { createProgram } from '../../src/program/program.ts';
+import { compareText } from '../../src/program/order.ts';
+import { PluginSources } from '../../src/plugins/source.ts';
+import { buildKotlinRuntime, buildSwiftRuntime, caseModules, kotlinc, kotlinMain, kotlinStdlib, modulesDir, nodeImportRoot, root, SWIFT_HEADER, swiftMain } from '../native-build.ts';
+import { appLenient, lenient, nodeImports, packagesOf, pluginCase, refusedWith, runsOn, selected } from '../diff/case-options.ts';
+import { diffCases, knownFailuresFile, knownFuzzFailuresFile, suiteBuild, suiteConfig, suiteDir } from '../suite.ts';
+import type { TranslateJob, TranslateResult } from './translate-worker.ts';
+import { BAD_VALUES, findSites, groups, hookSource, HOOK, instrument, nodeHookSource, standalone, valueKind, valuesFor, type Site } from './instrument.ts';
+import { caseOf, keysDigest, loadFull, saveFull, summarize, TARGETS, type Entries, type Stored } from './baseline.ts';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const ownCases = join(suiteDir, 'fuzz/cases');
+const argv = process.argv.slice(2);
+const flag = (name: string) => { const k = argv.indexOf(name); return k >= 0 ? argv[k + 1] : undefined; };
+const valued = new Set(['--set', '--seed', '--jobs', '--json', '--variant']);
+const prefixes = argv.filter((a, k) => !a.startsWith('--') && !valued.has(argv[k - 1]));
+const targets = argv.includes('--swift') ? ['swift'] : argv.includes('--kotlin') ? ['kotlin'] : ['swift', 'kotlin'];
+const set = flag('--set') ?? 'merge';
+const jobs = Number(flag('--jobs') ?? Math.max(2, Math.min(8, cpus().length >> 1)));
+const keep = argv.includes('--keep');
+const only = flag('--variant');
+const build = process.env.NS_FUZZ_BUILD ?? mkdtempSync(join(tmpdir(), 'ns-compiled-fuzz-'));
+if (!process.env.NS_FUZZ_BUILD) process.on('exit', () => (keep ? console.log(`fuzz: build products kept in ${build}`) : rmSync(build, { recursive: true, force: true })));
+const baselineFile = knownFuzzFailuresFile;
+const baseline: Stored = existsSync(baselineFile) ? JSON.parse(readFileSync(baselineFile, 'utf8')) : {};
+// The wrong values each site gets are drawn from the seed: the baseline's, unless another is asked for.
+const seed = Number(flag('--seed') ?? baseline.seed ?? 1);
+const packageModules = caseModules(build);
+const modulesOf = (file: string) => (packagesOf(file) ? packageModules : undefined);
+nodeImportRoot(join(build, 'node'), packageModules);
+if (set !== 'merge' && set !== 'nightly') throw new Error(`--set is merge or nightly, not ${set}`);
+process.env.NS_COMPILED_DIAGNOSTICS = '1000';
+
+/**
+ * The per-merge subset: this many cases (less those slower than slowMs under Node; a suite's own `mergeCases`), and per case one of the builds the
+ * nightly set makes, with this many of its sites and two values of each.
+ */
+const MERGE = { cases: suiteConfig.mergeCases ?? 98, sites: 6, values: 2, slowMs: 1500 };
+const TIMEOUT = { node: 10_000, swift: 10_000, kotlin: 30_000, translate: 30_000 };
+
+// ---- Seeded choice ---------------------------------------------------------------------------------
+
+function hash(s: string): number {
+  let h = 0x811c9dc5;
+  for (let k = 0; k < s.length; k++) h = Math.imul(h ^ s.charCodeAt(k), 0x01000193);
+  return h >>> 0;
+}
+/** A generator seeded by `key`, so one site's draw doesn't depend on which other sites exist. */
+function random(key: string): () => number {
+  let a = hash(`${seed}/${key}`);
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+/** `n` of `list`, each ranked by a draw of its own: adding or removing an item changes at most one pick. */
+function sample<T>(list: T[], n: number, key: string, id: (x: T) => string): T[] {
+  return list.map((x) => [random(`${key}/${id(x)}`)(), x] as const).sort((a, b) => a[0] - b[0]).slice(0, n).map((p) => p[1]);
+}
+
+// ---- Processes ---------------------------------------------------------------------------------------
+
+interface Run { stdout: string; stderr: string; status: number | null; signal: string | null; timedOut: boolean }
+
+function exec(cmd: string, args: string[], timeout: number, env?: Record<string, string>): Promise<Run> {
+  return new Promise((done) => {
+    const p = spawn(cmd, args, { env: env ? { ...process.env, ...env } : process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '', timedOut = false;
+    p.stdout.on('data', (d) => { if (stdout.length < 1 << 20) stdout += d; });
+    p.stderr.on('data', (d) => { if (stderr.length < 1 << 16) stderr += d; });
+    const timer = setTimeout(() => { timedOut = true; p.kill('SIGKILL'); }, timeout);
+    p.on('close', (status, signal) => { clearTimeout(timer); done({ stdout, stderr, status, signal, timedOut }); });
+  });
+}
+
+async function pool<T, R>(items: T[], n: number, f: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => {
+    while (next < items.length) { const k = next++; out[k] = await f(items[k]); }
+  }));
+  return out;
+}
+
+/**
+ * Translations run in workers, each building its own program; a worker holds a few hundred MB, so there are fewer of
+ * them than jobs. One that takes longer than TIMEOUT.translate is a translator hang: its worker is replaced.
+ */
+const translators: { worker: Worker | null; busy: boolean }[] = [];
+const translateQueue: (() => void)[] = [];
+const replies = new Map<number, (r: TranslateResult) => void>();
+let nextJob = 0;
+function translatorWorker(): Worker {
+  const worker = new Worker(new URL('./translate-worker.ts', import.meta.url));
+  worker.on('message', ({ id, result }: { id: number; result: TranslateResult }) => { replies.get(id)?.(result); replies.delete(id); });
+  return worker;
+}
+async function translateIn(job: TranslateJob): Promise<TranslateResult> {
+  if (!translators.length) for (let k = 0; k < Math.max(1, Math.min(jobs, 6)); k++) translators.push({ worker: null, busy: false });
+  let t = translators.find((x) => !x.busy);
+  while (!t) { await new Promise<void>((r) => translateQueue.push(r)); t = translators.find((x) => !x.busy); }
+  t.busy = true;
+  const worker = (t.worker ??= translatorWorker());
+  const id = nextJob++;
+  try {
+    return await new Promise<TranslateResult>((r) => {
+      const timer = setTimeout(() => {
+        replies.delete(id);
+        void worker.terminate();
+        t!.worker = null;
+        r({ error: `the translator did not finish in ${TIMEOUT.translate / 1000} s` });
+      }, TIMEOUT.translate);
+      replies.set(id, (x) => { clearTimeout(timer); r(x); });
+      worker.postMessage({ id, job: { ...job, modules: modulesOf(job.file) } });
+    });
+  } finally {
+    t.busy = false;
+    translateQueue.shift()?.();
+  }
+}
+
+/** The diff run's entry point (its handling of uncaught errors is Node's), reading the variant to run from its argument first. */
+function withSelection(main: string, at: string, replacement: string): string {
+  if (!main.includes(at)) throw new Error(`the entry point no longer contains ${JSON.stringify(at)}: tests/native-build.ts changed it`);
+  return main.replace(at, replacement);
+}
+
+// ---- Comparing -----------------------------------------------------------------------------------------
+
+/** The uncaught error's `Name: message` as either side prints it. */
+function errorText(stderr: string): string | null {
+  const m = /(?:^|\s)([A-Z][A-Za-z]*Error): (.*)$/m.exec(stderr);
+  return m ? `${m[1]}: ${m[2].trim()}` : null;
+}
+
+/** A trap: a signal, or on the JVM an exception the runtime never turns into a JS error. */
+function trapText(target: string, r: Run): string | null {
+  if (r.signal && !r.timedOut) {
+    const fatal = /Fatal error: ([^\n]*)/.exec(r.stderr)?.[1] ?? /(\S+: )?(error|precondition failure|assertion failure)[^\n]*/i.exec(r.stderr)?.[0] ?? '';
+    return `${r.signal}${fatal ? ': ' + fatal : ''}`;
+  }
+  if (target === 'kotlin' && r.status !== 0) {
+    const m = /Exception in thread "main" ((?:java|kotlin)\.[\w.$]+(?:Exception|Error))(?:: ([^\n]*))?/.exec(r.stderr);
+    if (m && !/JSException/.test(m[1])) return `${m[1]}${m[2] ? ': ' + m[2] : ''}`;
+  }
+  return null;
+}
+
+/** The error names a printed line holds (`TypeError` in `caught TypeError: …`). */
+const errorNames = (s: string | undefined) => new Set(s?.match(/\b[A-Z][A-Za-z]*Error\b/g) ?? []);
+/** What a message says with the program's own names and numbers taken out, to group failures by cause. */
+const normalize = (s: string) => s.replace(/\/[^\s:]+/g, '<path>').replace(/'[^']*'|"[^"]*"/g, "'…'").replace(/\b\d+(\.\d+)?\b/g, 'N').slice(0, 140);
+
+/** From a printed line, the part from its first error name on. */
+const errorAt = (s: string) => /\b[A-Z][A-Za-z]*Error\b.*/.exec(s)?.[0] ?? s;
+
+/** A native program reports an uncaught error and goes on, as an app does: the run failed all the same. */
+const succeeded = (r: Run) => r.status === 0 && !/^Uncaught /m.test(r.stderr);
+
+/** A compiler's message without the code it quotes, which kotlinc appends after the message's first sentence. */
+const compileCause = (s: string) => normalize(s.replace(/^\S*: (error: )?/, '').split(/\.\s|\s{2,}/)[0]);
+
+interface Outcome { pass: boolean; cause?: string; detail?: string; node?: string; native?: string }
+
+/** What the first differing word of a line became, by shape: `null → undefined`, `N → NaN`. */
+function valueChange(node: string | undefined, native: string | undefined): string {
+  if (native === undefined) return 'output stops early';
+  if (node === undefined) return 'output Node does not print';
+  const words = (s: string) => s.split(/(\s+|[|,;()[\]{}])/).filter((w) => w && !/^\s+$/.test(w));
+  const a = words(node), b = words(native);
+  let k = 0;
+  while (k < a.length && k < b.length && a[k] === b[k]) k++;
+  const shape = (w: string | undefined) => (w === undefined ? '(nothing)' : /^-?\d+(\.\d+)?(e[+-]?\d+)?$/.test(w) ? 'N' : /^(null|undefined|NaN|true|false|object|Object]|\[object|Infinity)$/.test(w) ? w : w.length <= 1 ? JSON.stringify(w) : 'text');
+  return `${shape(a[k])} → ${shape(b[k])}`;
+}
+
+/** V8 names the callee as written in its "is not a function" messages; the guards around a site change how it is written. */
+const calleeFree = (s: string) => s.replace(/\(intermediate value\)/g, 'IV').replace(/(TypeError: )[^\n]*? is not (a function|iterable|a constructor)/g, '$1… is not $2').replace(/\S+ is not (a function|iterable|a constructor)/g, '… is not $1');
+
+function compare(target: string, wantRaw: Run, gotRaw: Run): Outcome {
+  const want = { ...wantRaw, stdout: calleeFree(wantRaw.stdout), stderr: calleeFree(wantRaw.stderr) };
+  const got = { ...gotRaw, stdout: calleeFree(gotRaw.stdout), stderr: calleeFree(gotRaw.stderr) };
+  const wantOk = succeeded(want), gotOk = succeeded(got);
+  const wantErr = wantOk ? null : errorText(want.stderr), gotErr = gotOk ? null : errorText(got.stderr);
+  if (got.stdout === want.stdout && wantOk === gotOk && (wantOk || !wantErr || wantErr === gotErr)) return { pass: true };
+  const e = want.stdout.split('\n'), a = got.stdout.split('\n');
+  let k = 0;
+  while (k < Math.max(e.length, a.length) && e[k] === a[k]) k++;
+  const first = { node: e[k], native: a[k] };
+  if (got.timedOut) return { pass: false, cause: 'timeout', detail: 'timed out', ...first };
+  const trap = trapText(target, got);
+  if (trap) return { pass: false, cause: 'trap', detail: normalize(trap), ...first };
+  // Output up to where one side stopped matches: the difference is whether, or with what, it threw.
+  const prefixSame = k >= Math.min(e.length, a.length) - 1;
+  if (wantOk && !gotOk && prefixSame) return { pass: false, cause: 'throws (Node does not)', detail: normalize(gotErr ?? got.stderr.split('\n')[0] ?? ''), node: e[k], native: gotErr ?? '' };
+  if (!wantOk && gotOk && prefixSame) return { pass: false, cause: 'no throw (Node throws)', detail: normalize(wantErr ?? ''), node: wantErr ?? '', native: a[k] };
+  if (!wantOk && !gotOk && prefixSame) return { pass: false, cause: 'other error text', detail: `${normalize(gotErr ?? '?')}  (Node: ${normalize(wantErr ?? '?')})`, node: wantErr ?? '', native: gotErr ?? '' };
+  const nodeNames = errorNames(first.node), nativeNames = errorNames(first.native);
+  const extra = [...nativeNames].some((n) => !nodeNames.has(n)), missing = [...nodeNames].some((n) => !nativeNames.has(n));
+  if (extra && !missing) return { pass: false, cause: 'throws (Node does not)', detail: normalize(errorAt(first.native!)), ...first };
+  if (missing && !extra) return { pass: false, cause: 'no throw (Node throws)', detail: normalize(errorAt(first.node!)), ...first };
+  if (extra && missing) return { pass: false, cause: 'other error text', detail: `${normalize(errorAt(first.native!))}  (Node: ${normalize(errorAt(first.node!))})`, ...first };
+  if (nativeNames.size && first.native !== undefined && first.node !== undefined && errorAt(first.native) !== errorAt(first.node)) return { pass: false, cause: 'other error text', detail: `${normalize(errorAt(first.native))}  (Node: ${normalize(errorAt(first.node))})`, ...first };
+  return { pass: false, cause: 'other value', detail: valueChange(first.node, first.native), ...first };
+}
+
+// ---- Cases -----------------------------------------------------------------------------------------
+
+interface Prepared {
+  name: string;
+  file: string;
+  text: string;
+  sites: Site[];
+  dir: string;
+  instrumented: string;
+  /** Sites the instrumented case doesn't type-check with, each with the diagnostic. */
+  dropped: Map<number, string>;
+}
+
+/** One build of a case: its sites in one group (instrument.ts `groups`), in a directory of their own. */
+interface Unit extends Prepared {
+  caseName: string;
+  group: Site[];
+}
+
+function unitOf(p: Prepared, k: number, group: Site[]): Unit {
+  const dir = join(p.dir, `g${k}`);
+  mkdirSync(dir, { recursive: true });
+  linkHelpers(dir, dirname(p.file));
+  writeFileSync(join(dir, HOOK + '.ts'), hookSource());
+  const instrumented = join(dir, basename(p.instrumented));
+  writeFileSync(instrumented, instrument(p.text, group).text);
+  return { ...p, name: `${p.name}-g${k}`, caseName: p.name, dir, instrumented, group };
+}
+
+function overrides(file: string): ts.CompilerOptions {
+  return lenient(file) ? { strict: false, useDefineForClassFields: false } : pluginCase(file) || appLenient(file) ? { strict: false, useUnknownInCatchVariables: false } : {};
+}
+
+function linkHelpers(dir: string, from: string) {
+  const helpers = join(from, 'helpers');
+  if (existsSync(helpers) && !existsSync(join(dir, 'helpers'))) symlinkSync(helpers, join(dir, 'helpers'));
+}
+
+/** The case's sites, and its instrumented text in `<build>/src/<name>/`, without the sites it doesn't type-check with. */
+function prepare(file: string): Prepared | { name: string; error: string } {
+  const name = basename(file, '.ts');
+  const text = readFileSync(file, 'utf8');
+  let sites: Site[];
+  try {
+    const { checker, program } = createProgram([file], new Map(), 'ios', modulesOf(file) ?? modulesDir, new PluginSources({ app: join(root, 'tests'), platform: 'ios' }), [], {}, overrides(file), undefined, undefined, suiteBuild());
+    sites = findSites(checker, program.getSourceFile(file)!);
+  } catch (e) {
+    return { name, error: `does not type-check: ${(e as Error).message.split('\n').slice(0, 3).join(' ')}` };
+  }
+  const dir = join(build, 'src', name);
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  linkHelpers(dir, dirname(file));
+  writeFileSync(join(dir, HOOK + '.ts'), hookSource());
+  const target = join(dir, name + '.ts');
+  writeFileSync(target, instrument(text, sites).text);
+  return { name, file, text, sites, dir, instrumented: target, dropped: new Map() };
+}
+
+/**
+ * The sites a build's type-check error is in: the innermost site holding each diagnostic, whose replacement doesn't fit
+ * there. They are left out on every backend, as not a variant at all.
+ */
+function untypable(p: Prepared, kept: Site[], message: string): Site[] {
+  if (!/does not type-check/.test(message)) return [];
+  const { text: out, spans } = instrument(p.text, kept);
+  const lines = out.split('\n');
+  const starts = lines.reduce<number[]>((acc, _, k) => (acc.push(k ? acc[k - 1] + lines[k - 1].length + 1 : 0), acc), []);
+  const found: Site[] = [];
+  for (const m of message.matchAll(/^(\S+)\((\d+),(\d+)\): (error [^\n]*)/gm)) {
+    if (m[1] !== p.instrumented) continue;
+    const at = starts[Number(m[2]) - 1] + Number(m[3]) - 1;
+    const site = kept.filter((s) => spans.get(s.id)![0] <= at && at < spans.get(s.id)![1]).sort((x, y) => spans.get(y.id)![0] - spans.get(x.id)![0])[0];
+    if (site && !found.includes(site)) { found.push(site); p.dropped.set(site.id, m[4]); }
+  }
+  return found;
+}
+
+// ---- Node, the referee ------------------------------------------------------------------------------
+
+const nodeShim = join(here, '../diff/native-shim.js');
+
+function toNode(p: Prepared): string {
+  const dir = join(build, 'node', p.name);
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  const js = (file: string, text: string, depth: number) => ts.transpileModule(nodeImports(file, text, depth), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, rewriteRelativeImportExtensions: true, ...(text.startsWith('// @lenient') || /^\/\/ @assign-fields$/m.test(text) ? { useDefineForClassFields: false } : {}), ...(/^\/\/ @experimental-decorators$/m.test(text) ? { experimentalDecorators: true, useDefineForClassFields: false } : {}) } }).outputText;
+  writeFileSync(join(dir, p.name + '.js'), js(p.file, readFileSync(p.instrumented, 'utf8'), 1));
+  writeFileSync(join(dir, HOOK + '.js'), nodeHookSource());
+  const helpers = join(dirname(p.file), 'helpers');
+  if (existsSync(helpers)) {
+    const out = join(build, 'node', '__helpers', basename(dirname(p.file)));
+    if (!existsSync(out)) {
+      for (const f of readdirSync(helpers, { recursive: true }) as string[]) {
+        if (!f.endsWith('.ts')) continue;
+        mkdirSync(dirname(join(out, f)), { recursive: true });
+        writeFileSync(join(out, f.replace(/\.ts$/, '.js')), js(join(helpers, f), readFileSync(join(helpers, f), 'utf8'), 2 + f.split('/').length - 1));
+      }
+    }
+    symlinkSync(out, join(dir, 'helpers'));
+  }
+  return join(dir, p.name + '.js');
+}
+
+const runNode = (entry: string, env: Record<string, string>) => exec('node', ['--expose-gc', '--import', nodeShim, entry], TIMEOUT.node, env);
+
+// ---- Native builds -----------------------------------------------------------------------------------
+
+interface Native { run: (variant: string, timeout?: number) => Promise<Run>; cleanup: () => void }
+
+/**
+ * Each guard's extent in generated source: `(__fz(7) ? … : …)` (Swift) or `(if (__fz(7.0)) … else …)` (Kotlin), widened
+ * over parentheses that wrap only it (nested guards give nested spans); and where each bracket closes.
+ */
+function guardSpans(text: string): { spans: { id: number; from: number; to: number }[]; close: Map<number, number> } {
+  const close = new Map<number, number>();
+  const open: number[] = [];
+  // Strings, and the code of their interpolations (Swift `\(…)`, Kotlin `${…}`) with the bracket depth it began at.
+  const modes: { end: string; depth?: number }[] = [];
+  for (let k = 0; k < text.length; k++) {
+    const c = text[k];
+    const mode = modes[modes.length - 1];
+    if (mode && mode.depth === undefined) {
+      if (text.startsWith(mode.end, k) || (mode.end === '"' && c === '\n')) { modes.pop(); k += mode.end.length - 1; }
+      else if (c === '\\' && text[k + 1] === '(') { modes.push({ end: ')', depth: open.length }); k++; }
+      else if (c === '$' && text[k + 1] === '{') { modes.push({ end: '}', depth: open.length }); k++; }
+      else if (c === '\\') k++;
+      continue;
+    }
+    if (mode && c === mode.end && open.length === mode.depth) { modes.pop(); continue; }
+    if (c === '"') { const end = text.startsWith('"""', k) ? '"""' : '"'; modes.push({ end }); k += end.length - 1; }
+    else if (c === "'" && /^'(\\.[^']*|[^'\\])'/.test(text.slice(k, k + 12))) k = text.indexOf("'", k + 2);
+    else if (c === '/' && text[k + 1] === '/') { const nl = text.indexOf('\n', k); k = nl < 0 ? text.length : nl - 1; }
+    else if (c === '(' || c === '[' || c === '{') open.push(k);
+    else if ((c === ')' || c === ']' || c === '}') && open.length) close.set(open.pop()!, k + 1);
+  }
+  const spans: { id: number; from: number; to: number }[] = [];
+  for (const m of text.matchAll(/__fz\((\d+)/g)) {
+    let from = text.endsWith('(if (', m.index) ? m.index - 5 : text[m.index - 1] === '(' ? m.index - 1 : -1;
+    if (from < 0 || !close.has(from)) continue;
+    let to = close.get(from)!;
+    while (text[from - 1] === '(' && close.get(from - 1) === to + 1) { from--; to++; }
+    spans.push({ id: Number(m[1]), from, to });
+  }
+  return { spans, close };
+}
+
+/** How compile errors were blamed, per backend: `column` in a guard, `call` the guards in the call at it, or `line`. */
+const blameCounts: Record<string, { column: number; call: number; line: number }> = { swift: { column: 0, call: 0, line: 0 }, kotlin: { column: 0, call: 0, line: 0 } };
+
+/**
+ * The sites a compiler's errors are in, from each error's line and column in the generated file: the innermost guard
+ * (`__fz(<id>)`) whose span holds it or ends there (its value called); else, for an error at a callee, the outermost
+ * guards inside the first bracket after it on its line (the call's arguments); else the guards on or just above that
+ * line. An error naming the case's own line gives the sites on that line. swiftc counts columns in UTF-8 bytes, kotlinc
+ * in UTF-16 units.
+ */
+function blame(target: 'swift' | 'kotlin', p: Prepared, errors: string[], sites: Site[], seen: Set<string>, history: string[]): Site[] {
+  const ids = new Set<number>();
+  const lines = new Set<number>();
+  const kept = new Set(sites.map((s) => s.id));
+  const parsed = new Map<string, ReturnType<typeof guardSpans>>();
+  for (const e of errors) {
+    const m = /^(\/[^:]+):(\d+):(?:(\d+):)?/.exec(e);
+    if (!m) continue;
+    if (m[1] === p.instrumented) { lines.add(Number(m[2])); blameCounts[target].line++; continue; }
+    if (!existsSync(m[1])) continue;
+    const text = readFileSync(m[1], 'utf8');
+    const generated = text.split('\n');
+    const k = Number(m[2]) - 1;
+    // An error dropping a guard did not clear, or one about a whole expression, says nothing of its column.
+    const again = `${m[1]}:${m[2]}: ${e.replace(/^.*?error: /, '').split(/\.\s/)[0].slice(0, 120)}`;
+    const whole = seen.has(again) || /failed to produce diagnostic|unable to type-check this expression/.test(e);
+    seen.add(again);
+    if (m[3] && k < generated.length && !whole) {
+      const col = Number(m[3]) - 1;
+      const lineStart = generated.slice(0, k).reduce((n, l) => n + l.length + 1, 0);
+      const at = lineStart + (target === 'swift' ? Buffer.from(generated[k]).subarray(0, col).toString().length : col);
+      const { spans, close } = parsed.get(m[1]) ?? parsed.set(m[1], guardSpans(text)).get(m[1])!;
+      // A guard is not blamed for an error in a closure or block inside it.
+      const blocked = (from: number, to: number) => [...close].some(([o, c]) => text[o] === '{' && from < o && o < to && c > to);
+      const guards = spans.filter((s) => kept.has(s.id));
+      const holding = guards.filter((s) => s.from <= at && at <= s.to && !blocked(s.from, at)).sort((x, y) => y.from - x.from)[0];
+      if (holding) { ids.add(holding.id); blameCounts[target].column++; continue; }
+      let bracket = at;
+      while (bracket < lineStart + generated[k].length && !close.has(bracket)) bracket++;
+      const inside = close.has(bracket) ? guards.filter((s) => bracket < s.from && s.to <= close.get(bracket)! && !blocked(bracket, s.from)) : [];
+      const outermost = inside.filter((s) => !inside.some((o) => o !== s && o.from <= s.from && s.to <= o.to));
+      if (outermost.length) { outermost.forEach((s) => ids.add(s.id)); blameCounts[target].call++; continue; }
+    }
+    for (let j = k; j >= Math.max(0, k - 3); j--) {
+      const found = [...(generated[j] ?? '').matchAll(/__fz\((\d+)/g)].map((x) => Number(x[1]));
+      if (found.length) { found.forEach((id) => ids.add(id)); blameCounts[target].line++; break; }
+    }
+  }
+  // Errors no guard is near can come from a guard elsewhere (one typing a lenient parameter): every line an error of this
+  // build has named gives up its guards.
+  if (!ids.size && !lines.size) for (const e of history) {
+    const m = /^(\/[^:]+):(\d+):/.exec(e);
+    if (!m || !existsSync(m[1])) continue;
+    const generated = readFileSync(m[1], 'utf8').split('\n');
+    for (let j = Number(m[2]) - 1; j >= Math.max(0, Number(m[2]) - 4); j--) {
+      const found = [...(generated[j] ?? '').matchAll(/__fz\((\d+)/g)].map((x) => Number(x[1])).filter((id) => kept.has(id));
+      if (found.length) { found.forEach((id) => ids.add(id)); blameCounts[target].line++; break; }
+    }
+  }
+  history.push(...errors);
+  return sites.filter((s) => ids.has(s.id) || lines.has(s.line));
+}
+
+type Built = { native: Native | null; failed: Map<number, string>; error?: string };
+
+/** A native run, rerun once with twice the time when it times out: a machine under load runs slowly, not wrongly. */
+async function runPatiently(native: Native, target: string, variant: string): Promise<Run> {
+  const r = await native.run(variant);
+  return r.timedOut ? native.run(variant, 2 * TIMEOUT[target as 'swift' | 'kotlin']) : r;
+}
+
+/** The case translated and compiled with guards at `sites`: null when it builds, else what stopped it. */
+async function swiftOnce(p: Prepared, sites: Site[], dir: string): Promise<{ refused?: string; errors?: string[] } | null> {
+  writeFileSync(p.instrumented, instrument(p.text, sites).text);
+  const t = await translateIn({ target: 'swift', root: p.instrumented, file: p.file, out: join(dir, 'Sources'), pkg: '' });
+  if ('error' in t) return { refused: t.error };
+  writeFileSync(join(dir, 'Sources', 'main.swift'), withSelection(swiftMain(t.inits as Parameters<typeof swiftMain>[0]), SWIFT_HEADER, `${SWIFT_HEADER}try! jsSet(jsGlobalThis, "__fuzz", CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "")\n`));
+  // Without the case's line directives, swiftc's errors name generated lines, where the guards' ids are.
+  for (const f of readdirSync(join(dir, 'Sources'))) writeFileSync(join(dir, 'Sources', f), readFileSync(join(dir, 'Sources', f), 'utf8').replace(/^[ \t]*#sourceLocation\(.*\)[ \t]*$/gm, ''));
+  const errors = await swiftcAsync(readdirSync(join(dir, 'Sources')).map((f) => join(dir, 'Sources', f)), join(dir, p.name));
+  return errors ? { errors } : null;
+}
+
+async function buildSwift(p: Prepared, sites: Site[]): Promise<Built> {
+  const failed = new Map<number, string>();
+  const seen = new Set<string>(), history: string[] = [];
+  const dir = join(build, 'swift', p.name);
+  // swiftc stops at about one error per statement: a round per failing statement. Each round drops a site or returns.
+  for (;;) {
+    const kept = sites.filter((s) => !failed.has(s.id) && !p.dropped.has(s.id));
+    const r = await swiftOnce(p, kept, dir);
+    if (!r) {
+      const exe = join(dir, p.name);
+      return { native: { run: (v, t = TIMEOUT.swift) => exec(exe, v ? [v] : [], t), cleanup: () => rmSync(dir, { recursive: true, force: true }) }, failed };
+    }
+    if (r.refused !== undefined && untypable(p, kept, r.refused).length) continue;
+    const why = r.refused !== undefined ? `refused: ${r.refused.split('\n')[0].slice(0, 160)}` : `swiftc: ${r.errors![0].replace(/^.*?error: /, '')}`;
+    let bad = r.errors ? blame('swift', p, r.errors, kept, seen, history) : [];
+    // An error no guard is on (the translator's, or swiftc's in the shapes file): the sites causing it, by halves.
+    if (!bad.length) bad = (await bisect(kept, async (subset) => !(await swiftOnce(p, subset, dir)))) ?? [];
+    if (!bad.length) return { native: null, failed, error: why };
+    for (const s of bad) failed.set(s.id, why);
+  }
+}
+
+function swiftcAsync(sources: string[], exe: string): Promise<string[] | null> {
+  // swiftc blocks: run it in a child so several compile at once.
+  const script = `import { swiftc } from ${JSON.stringify(join(here, '../native-build.ts'))};\nconst e = swiftc(${JSON.stringify(sources)}, ${JSON.stringify(exe)}, ${JSON.stringify(build)}, '-Onone');\nprocess.stdout.write(JSON.stringify(e));\n`;
+  return exec('node', ['--input-type=module', '-e', script], 600_000).then((r) => (r.status === 0 ? JSON.parse(r.stdout || 'null') : [r.stderr.slice(0, 500)]));
+}
+
+/** The sites without which `ok` holds, found by halving; null when even none of them holds. */
+async function bisect(sites: Site[], ok: (subset: Site[]) => boolean | Promise<boolean>): Promise<Site[] | null> {
+  if (!(await ok([]))) return null;
+  const bad: Site[] = [];
+  const search = async (list: Site[], others: Site[]) => {
+    if (!list.length || (await ok([...others, ...list]))) return;
+    if (list.length === 1) { bad.push(list[0]); return; }
+    const half = list.length >> 1;
+    await search(list.slice(0, half), others);
+    await search(list.slice(half), others.concat(list.slice(0, half).filter((s) => !bad.includes(s))));
+  };
+  await search(sites, []);
+  return bad;
+}
+
+/**
+ * Every case's Kotlin compiled in one kotlinc run, as the diff run does; a case that breaks it is compiled alone. Builds
+ * made together share their classes directory, which kotlinc empties first: another set of builds alive at the same time
+ * needs a `tag` of its own.
+ */
+async function buildKotlin(ps: { p: Prepared; sites: Site[] }[], tag = ''): Promise<Map<string, Built>> {
+  const out = new Map<string, Built>();
+  const runtime = buildKotlinRuntime(build);
+  const pkg = (name: string) => 'fz_' + name.replace(/\W/g, '_');
+  const sourcesDir = (name: string) => join(build, 'kotlin', tag, name);
+  const translate = async (p: Prepared, all: Site[]): Promise<string | null> => {
+    // Each round drops a site or returns.
+    for (;;) {
+      const kept = all.filter((s) => !p.dropped.has(s.id));
+      const error = await translateOnce(p, kept);
+      if (!error || !untypable(p, kept, error).length) return error && error.split('\n')[0];
+    }
+  };
+  const translateOnce = async (p: Prepared, kept: Site[]): Promise<string | null> => {
+    writeFileSync(p.instrumented, instrument(p.text, kept).text);
+    const t = await translateIn({ target: 'kotlin', root: p.instrumented, file: p.file, out: sourcesDir(p.name), pkg: pkg(p.name) });
+    if ('error' in t) return t.error;
+    const main = kotlinMain(t.inits as Parameters<typeof kotlinMain>[0], pkg(p.name));
+    writeFileSync(join(sourcesDir(p.name), '__Main.kt'), withSelection(main, 'fun main() {\n', 'fun main(args: Array<String>) {\n    jsGlobalThis.jsSet("__fuzz", args.firstOrNull() ?: "")\n'));
+    return null;
+  };
+  const ready: { p: Prepared; kept: Site[]; failed: Map<number, string>; seen: Set<string>; history: string[] }[] = [];
+  await pool(ps, jobs, async ({ p, sites }) => {
+    const failed = new Map<number, string>();
+    let error = await translate(p, sites);
+    if (error) {
+      const refused = await bisect(sites, async (subset) => (await translate(p, subset)) === null);
+      if (refused === null) { out.set(p.name, { native: null, failed, error: `translator: ${error}` }); return; }
+      for (const s of refused) failed.set(s.id, `refused: ${error.slice(0, 160)}`);
+      error = await translate(p, sites.filter((s) => !failed.has(s.id)));
+      if (error) { out.set(p.name, { native: null, failed, error: `translator: ${error}` }); return; }
+    }
+    ready.push({ p, kept: sites.filter((s) => !failed.has(s.id)), failed, seen: new Set(), history: [] });
+  });
+  ready.sort((a, b) => compareText(a.p.name, b.p.name));
+  const sourcesOf = (name: string) => readdirSync(sourcesDir(name)).map((f) => join(sourcesDir(name), f));
+  const classes = join(build, tag ? `kotlin-classes-${tag}` : 'kotlin-classes');
+  const runner = (name: string): Native => ({
+    run: (v, t = TIMEOUT.kotlin) => exec('java', ['-Xss16m', '-XX:TieredStopAtLevel=1', '-cp', [classes, runtime, kotlinStdlib()].join(':'), `${pkg(name)}.entry.__MainKt`, ...(v ? [v] : [])], t),
+    cleanup: () => rmSync(sourcesDir(name), { recursive: true, force: true }),
+  });
+  // One kotlinc run for every case; the cases its errors are in lose the sites the errors are at, and it runs again.
+  let compiled = false;
+  // Each round drops a site of, or gives up on, every case its errors are in.
+  while (ready.length) {
+    const errors = kotlinc(ready.flatMap((r) => sourcesOf(r.p.name)), classes, [runtime]);
+    if (!errors) { compiled = true; break; }
+    const byCase = new Map<string, string[]>();
+    for (const e of errors) {
+      const r = ready.find((x) => e.startsWith(sourcesDir(x.p.name) + '/'));
+      if (r) byCase.set(r.p.name, [...(byCase.get(r.p.name) ?? []), e]);
+    }
+    if (!byCase.size) {
+      for (const r of ready) out.set(r.p.name, { native: null, failed: r.failed, error: `kotlinc: ${errors[0]}` });
+      ready.length = 0;
+      break;
+    }
+    await pool([...byCase], jobs, async ([name, errs]) => {
+      const r = ready.find((x) => x.p.name === name)!;
+      const blamed = blame('kotlin', r.p, errs, r.kept.filter((s) => !r.failed.has(s.id)), r.seen, r.history);
+      const error = blamed.length ? (blamed.forEach((s) => r.failed.set(s.id, `kotlinc: ${errs[0].replace(/^.*?error: /, '')}`)), await translate(r.p, r.kept.filter((s) => !r.failed.has(s.id)))) : `kotlinc: ${errs[0]}`;
+      if (error) {
+        out.set(name, { native: null, failed: r.failed, error: error.startsWith('kotlinc') ? error : `translator: ${error}` });
+        rmSync(sourcesDir(name), { recursive: true, force: true });
+        ready.splice(ready.indexOf(r), 1);
+      }
+    });
+  }
+  for (const r of ready) out.set(r.p.name, compiled ? { native: runner(r.p.name), failed: r.failed } : { native: null, failed: r.failed, error: 'kotlinc: still failing after dropping sites' });
+  return out;
+}
+
+/**
+ * Kotlin's guard-alone search: the guards that change a build's result while no wrong value is chosen. A set of guards
+ * that does is halved, each half built with only its guards; a single guard left is a culprit. Unlike Swift's `bisect`
+ * the halves are probed at once, and every build's probes of a round are compiled in one kotlinc run (as `buildKotlin`
+ * builds), so the kotlinc runs number the depth of the halving, about log2 of the most guards a build has. Guards that
+ * change the result only together are not found: the build still differs once the culprits are dropped.
+ */
+async function guardsAloneKotlin(searches: { u: Unit; kept: Site[]; want: Run }[]): Promise<{ culprits: Map<string, Site[] | null>; rounds: number; probes: number }> {
+  // null: the build differs with no guard at all.
+  const culprits = new Map<string, Site[] | null>(searches.map(({ u }) => [u.name, []]));
+  let next: { k: number; sites: Site[] }[] = [];
+  const differs = (k: number, list: Site[]) => {
+    const found = culprits.get(searches[k].u.name);
+    if (!found) return;
+    if (list.length === 1) { found.push(list[0]); return; }
+    const half = list.length >> 1;
+    next.push({ k, sites: list.slice(0, half) }, { k, sites: list.slice(half) });
+  };
+  searches.forEach(({ kept }, k) => { next.push({ k, sites: [] }); if (kept.length) differs(k, kept); });
+  let rounds = 0, probes = 0;
+  while (next.length) {
+    const batch = next.filter((x) => culprits.get(searches[x.k].u.name));
+    next = [];
+    const tag = `alone${rounds++}`;
+    probes += batch.length;
+    try {
+      const units = batch.map((x, n) => ({ x, p: probeOf(searches[x.k].u, `${tag}-${n}`) }));
+      const built = await buildKotlin(units.map(({ x, p }) => ({ p, sites: x.sites })), tag);
+      const oks = await pool(units, Math.max(2, jobs >> 1), async ({ x, p }) => {
+        const t = built.get(p.name)!;
+        if (!t.native) return false;
+        const ok = compare('kotlin', searches[x.k].want, await runPatiently(t.native, 'kotlin', '')).pass;
+        t.native.cleanup();
+        return ok;
+      });
+      for (const [n, x] of batch.entries()) if (!x.sites.length && !oks[n]) culprits.set(searches[x.k].u.name, null);
+      for (const [n, x] of batch.entries()) if (x.sites.length && !oks[n]) differs(x.k, x.sites);
+    } catch (e) {
+      console.log(`  ! guard-alone probes ${tag} (kotlin): ${(e as Error).message.slice(0, 200)}`);
+      for (const x of batch) culprits.set(searches[x.k].u.name, null);
+    } finally {
+      rmSync(join(build, `kotlin-classes-${tag}`), { recursive: true, force: true });
+    }
+  }
+  return { culprits, rounds, probes };
+}
+
+/** A copy of a build in a directory of its own, so that several probes of it translate at once. */
+function probeOf(u: Unit, tag: string): Unit {
+  const dir = join(u.dir, tag);
+  mkdirSync(dir, { recursive: true });
+  linkHelpers(dir, dirname(u.file));
+  writeFileSync(join(dir, HOOK + '.ts'), hookSource());
+  return { ...u, name: `${u.name}-${tag}`, dir, instrumented: join(dir, basename(u.instrumented)) };
+}
+
+// ---- The run -----------------------------------------------------------------------------------------
+
+interface Variant { p: Prepared; site: Site; value: number; key: string; want?: Run }
+interface Failure { key: string; target: string; case: string; site: string; kind: string; value: string; cause: string; detail: string; node?: string; native?: string; repro: string; known: boolean }
+
+const variantKey = (p: Prepared, s: Site, v: number) => `${p.name}|${s.key}|${BAD_VALUES[v]}`;
+
+/** The statement holding the site, with the site replaced: what a failure's report shows to reproduce it. */
+function snippet(p: Prepared, s: Site, v: number): string {
+  const text = standalone(p.text, s, v);
+  const lineStart = p.text.lastIndexOf('\n', s.start) + 1;
+  let lineEnd = text.indexOf('\n', s.start + (text.length - p.text.length));
+  if (lineEnd < 0) lineEnd = text.length;
+  return text.slice(lineStart, lineEnd).trim().slice(0, 220);
+}
+
+const everyCase = [
+  ...readdirSync(diffCases).filter((f) => f.endsWith('.ts')).map((f) => join(diffCases, f)),
+  ...(existsSync(ownCases) ? readdirSync(ownCases).filter((f) => f.endsWith('.ts')).map((f) => join(ownCases, f)) : []),
+];
+const chosenNames = new Set(selected(prefixes, everyCase.map((f) => basename(f, '.ts'))));
+const caseFiles = everyCase.filter((f) => chosenNames.has(basename(f, '.ts'))).sort((a, b) => compareText(basename(a), basename(b)));
+const knownDiff = JSON.parse(readFileSync(knownFailuresFile, 'utf8'));
+
+mkdirSync(build, { recursive: true });
+const started = Date.now();
+const report: Record<string, unknown> = { seed, set, targets, started: new Date().toISOString() };
+const allFailures: Failure[] = [];
+let regressions = 0;
+/** Builds whose instrumented baseline newly differs, over every backend. */
+let unlistedDiffers = 0;
+const nowPassing: string[] = [];
+const ranKeys: Record<string, Set<string>> = {};
+/** Per backend, the variants this run counted (ran and compared with Node). */
+const countedBy: Record<string, number> = {};
+const differs: Record<string, Record<string, string>> = {};
+const ranBuilds: Record<string, Set<string>> = {};
+const flakyKeys: Record<string, Map<string, string>> = {};
+
+// The merge subset's cases: a seeded draw, the same for both backends.
+// Only cases the baseline was made with: a new case's failures are found by the nightly set, not by an unrelated merge.
+const baselineCases = new Set<string>(baseline.cases ?? []);
+const fuzzed = (f: string) => !baseline.cases || baselineCases.has(basename(f, '.ts'));
+const mergeDraw = (names: string[]) => new Set(sample(names, MERGE.cases, 'cases', (n) => n));
+const chosenCases = set === 'merge' && !prefixes.length ? mergeDraw(caseFiles.filter(fuzzed).map((f) => basename(f, '.ts'))) : null;
+if (chosenCases && caseFiles.some((f) => !fuzzed(f))) console.log(`fuzz: ${caseFiles.filter((f) => !fuzzed(f)).length} cases not in known-fuzz-failures.json yet (the nightly set, or --set nightly --update-baseline, adds them)`);
+const updating = argv.includes('--update-baseline');
+// The known failures: the per-merge set's lists, or each backend's full list (null when not at hand).
+const fullLists = chosenCases && baseline.full && !updating ? null : loadFull(baseline);
+const missing = fullLists ? (updating ? [...TARGETS] : targets).filter((t) => !fullLists[t]) : [];
+if (missing.length && (updating || prefixes.length || only)) {
+  console.log(`✗ fuzz: this run needs the full list of known failures (${missing.join(', ')}), which known-fuzz-failures.json summarizes and --update-baseline writes (tests/fuzz/baseline.ts): not found`);
+  process.exit(1);
+}
+const refused = (file: string, target: string) => !!refusedWith(file, target as 'swift' | 'kotlin');
+
+const prepared: Prepared[] = [];
+const skipped: Record<string, string> = {};
+for (const file of caseFiles) {
+  const name = basename(file, '.ts');
+  if (chosenCases && !chosenCases.has(name)) continue;
+  if (!targets.some((t) => runsOn(file, t as 'swift' | 'kotlin') && !knownDiff[t]?.[name] && !refused(file, t))) continue;
+  const p = prepare(file);
+  if ('error' in p) { skipped[name] = p.error; continue; }
+  prepared.push(p);
+}
+console.log(`fuzz: ${prepared.length} cases instrumented, ${Object.keys(skipped).length} skipped (${((Date.now() - started) / 1000).toFixed(0)} s)`);
+
+/** The sites and wrong values a case's run tries: every one, or the per-merge set's seeded few. */
+function draw(p: Prepared, builds: Site[][], merge: boolean): { s: Site; v: number }[] {
+  const sites = merge ? sample(sample(builds, 1, `build/${p.name}`, (g) => g[0].key).flat(), MERGE.sites, `sites/${p.name}`, (s) => s.key) : builds.flat();
+  return sites.flatMap((s) => {
+    const values = [...new Set(valuesFor(s, random(`${p.name}/${s.key}`)))];
+    return (merge ? sample(values, MERGE.values, `values/${p.name}/${s.key}`, String) : values).map((v) => ({ s, v }));
+  });
+}
+
+// Node once per case: the baseline and which sites a run reaches; then each variant.
+const variants = new Map<string, Variant[]>();
+/** Per case, the variants the per-merge set draws from it: what known-fuzz-failures.json lists known failures of. */
+const mergeKeys = new Map<string, Set<string>>();
+const nodeBaseline = new Map<string, Run>();
+const nodeEntry = new Map<string, string>();
+const units: Unit[] = [];
+const unresolved: string[] = [];
+/** The case's run under Node with no wrong value, and the groups of the sites it reaches (null when it timed out or wrote no census). */
+async function census(p: Prepared, entry: string): Promise<{ base: Run; builds: Site[][] | null }> {
+  const file = join(build, 'node', p.name, 'census.json');
+  const base = await runNode(entry, { NS_FUZZ: '', NS_FUZZ_CENSUS: file });
+  if (base.timedOut || !existsSync(file)) return { base, builds: null };
+  const reached = new Set((JSON.parse(readFileSync(file, 'utf8')) as [number, number][]).map(([id]) => id));
+  // Every set builds the same groups, as the nightly set does: a site's guard builds and runs as it does there, so the
+  // per-merge set's verdicts are the baseline's.
+  return { base, builds: groups(p.sites.filter((s) => reached.has(s.id))) };
+}
+const mergeDrawKeys = (p: Prepared, builds: Site[][]) => new Set(draw(p, builds, true).map(({ s, v }) => variantKey(p, s, v)));
+await pool(prepared, jobs, async (p) => {
+  const entry = toNode(p);
+  const t0 = Date.now();
+  const { base, builds } = await census(p, entry);
+  if (/ERR_MODULE_NOT_FOUND|ERR_UNSUPPORTED_DIR_IMPORT|Cannot find (module|package)/.test(base.stderr)) unresolved.push(`${p.name}: ${base.stderr.split('\n').find((l) => /Error/.test(l))}`);
+  if (!builds) { skipped[p.name] = 'Node baseline timed out or wrote no census'; return; }
+  mergeKeys.set(p.name, mergeDrawKeys(p, builds));
+  // Every variant runs the whole case: the per-merge subset leaves out cases that wait on timers.
+  if (chosenCases && Date.now() - t0 > MERGE.slowMs) { skipped[p.name] = `slow under Node (${Date.now() - t0} ms)`; return; }
+  nodeBaseline.set(p.name, base);
+  const list: Variant[] = [];
+  for (const { s, v } of draw(p, builds, !!chosenCases)) {
+    if (only && `${s.key}/${v}` !== only && `${s.key}/${BAD_VALUES[v]}` !== only) continue;
+    list.push({ p, site: s, value: v, key: variantKey(p, s, v) });
+  }
+  variants.set(p.name, list);
+  nodeEntry.set(p.name, entry);
+  const used = new Set(list.map((x) => x.site));
+  builds.forEach((g, k) => { if (g.some((s) => used.has(s))) units.push(unitOf(p, k, g)); });
+});
+// A case whose reference run can't import what it imports reaches no site, and would pass with no variant run.
+if (unresolved.length) {
+  for (const u of unresolved) console.log(`✗ ${u}`);
+  console.log(`fuzz: ${unresolved.length} cases' Node runs could not resolve an import`);
+  process.exit(1);
+}
+await pool([...variants.values()].flat(), jobs * 3, async (x) => { x.want = await runNode(nodeEntry.get(x.p.name)!, { NS_FUZZ: `${x.site.id}:${x.value}` }); });
+for (const [name, list] of variants) variants.set(name, list.filter((x) => !x.want!.timedOut));
+const total = [...variants.values()].reduce((n, l) => n + l.length, 0);
+console.log(`fuzz: ${total} variants over ${variants.size} cases, Node done (${((Date.now() - started) / 1000).toFixed(0)} s)`);
+
+for (const target of targets) {
+  const t0 = Date.now();
+  const failures: Failure[] = [];
+  const knownHere: Entries = fullLists?.[target] ?? baseline[target as 'swift' | 'kotlin'] ?? {};
+  const ran = (ranKeys[target] = new Set());
+  let passed = 0, counted = 0, untyped = 0, unrun = 0;
+  const flaky: string[] = [];
+  flakyKeys[target] = new Map();
+  const cases = units.filter((u) => runsOn(u.file, target as 'swift' | 'kotlin') && !knownDiff[target]?.[u.caseName] && !refused(u.file, target)).sort((a, b) => compareText(a.name, b.name));
+  // Sites at one position share a key: it matches Node only if every variant under it does.
+  const matched = new Set<string>();
+  const record = (x: Variant, o: Outcome) => {
+    ran.add(x.key);
+    counted++;
+    if (o.pass) { passed++; if (knownHere[x.key]) matched.add(x.key); return; }
+    const known = !!knownHere[x.key];
+    if (!known) regressions++;
+    failures.push({ key: x.key, target, case: x.p.name, site: x.site.key, kind: x.site.kind, value: BAD_VALUES[x.value], cause: o.cause!, detail: o.detail ?? '', node: o.node, native: o.native, repro: snippet(x.p, x.site, x.value), known });
+  };
+  const caseBaselines: Record<string, string> = {};
+  const knownDiffers: Record<string, string> = baseline.baselineDiffers?.[target] ?? {};
+  const differing = (differs[target] = {} as Record<string, string>);
+  const builtRan = (ranBuilds[target] = new Set<string>());
+  let freshDiffers = 0, notBuilt = 0;
+  const runCase = async (p: Unit, built: Built, base?: Outcome) => {
+    const list = variants.get(p.caseName)!.filter((x) => p.group.includes(x.site));
+    if (!built.native) {
+      for (const x of list) if (x.p.dropped.has(x.site.id)) untyped++; else record(x, { pass: false, cause: 'compile', detail: compileCause(built.failed.get(x.site.id) ?? built.error ?? '') });
+      caseBaselines[p.name] = built.error ?? 'did not build';
+      notBuilt++;
+      return;
+    }
+    const want = nodeBaseline.get(p.caseName)!;
+    let b = base ?? compare(target, want, await runPatiently(built.native, target, ''));
+    if (!b.pass && !knownDiffers[p.name]) b = compare(target, want, await runPatiently(built.native, target, ''));
+    if (!b.pass && b.cause === 'timeout') {
+      flaky.push(`build ${p.name} (${target}): timed out at twice the limit, ${list.length} variants not run`);
+      unrun += list.length;
+      if (!keep) built.native.cleanup();
+      return;
+    }
+    builtRan.add(p.name);
+    if (!b.pass) {
+      // The instrumented case without a wrong value already differs: its variants say nothing.
+      const why = `${b.cause}: ${b.detail}`;
+      caseBaselines[p.name] = `${why} (node ${JSON.stringify(b.node)}, native ${JSON.stringify(b.native)})`;
+      differing[p.name] = why;
+      if (!knownDiffers[p.name]) { regressions++; freshDiffers++; unlistedDiffers++; }
+      unrun += list.length;
+      if (!keep) built.native.cleanup();
+      return;
+    }
+    if (knownDiffers[p.name]) nowPassing.push(`build ${p.name} (${target}), its instrumented baseline`);
+    await pool(list, target === 'swift' ? jobs : Math.max(2, jobs >> 1), async (x) => {
+      if (x.p.dropped.has(x.site.id)) { untyped++; return; }
+      const failed = built.failed.get(x.site.id);
+      if (failed) { record(x, failed.startsWith('guard alone: ') ? { pass: false, cause: 'guard alone changes the result', detail: failed.slice(13) } : { pass: false, cause: 'compile', detail: compileCause(failed) }); return; }
+      const arg = `${x.site.id}:${x.value}`;
+      const o = compare(target, x.want!, await runPatiently(built.native!, target, arg));
+      // Without the full list every failure is unlisted, and the digest, not a repeat, tells whether it is new.
+      if (!o.pass && !knownHere[x.key] && !missing.includes(target)) {
+        if (o.cause === 'timeout') { flaky.push(`${x.key} (${target}): timed out at twice the limit`); flakyKeys[target].set(x.key, 'flaky: timed out, then again at twice the limit'); return; }
+        // A new failure counts only if both sides repeat it: timing-dependent output is flaky, not a finding.
+        const again = compare(target, await runNode(nodeEntry.get(x.p.name)!, { NS_FUZZ: arg }), await runPatiently(built.native!, target, arg));
+        if (again.pass || again.cause !== o.cause || again.detail !== o.detail) { flaky.push(`${x.key} (${target})`); flakyKeys[target].set(x.key, 'flaky: differed from Node once, then not'); return; }
+      }
+      record(x, o);
+    });
+    if (!keep) built.native.cleanup();
+  };
+  const sitesOf = (u: Unit) => u.group.filter((s) => !u.dropped.has(s.id));
+  if (target === 'swift') {
+    buildSwiftRuntime(build, '-Onone');
+    // Each case's sources are its own: one instrumented copy per case, written before each translation.
+    await pool(cases, jobs, async (u) => {
+      let built = await buildSwift(u, sitesOf(u));
+      const want = nodeBaseline.get(u.caseName)!;
+      const base = built.native && compare(target, want, await runPatiently(built.native, target, ''));
+      if (base && !base.pass && base.cause !== 'timeout') {
+        // Guards that change the result while no wrong value is chosen: found by halves, failed with all their variants.
+        const kept = sitesOf(u).filter((s) => !built.failed.has(s.id));
+        const culprits = await bisect(kept, async (subset) => { const t = await buildSwift(u, subset); return !!t.native && compare(target, want, await runPatiently(t.native, target, '')).pass; });
+        if (culprits?.length) {
+          const failed = built.failed;
+          for (const s of culprits) failed.set(s.id, `guard alone: ${base.cause}: ${base.detail}`);
+          built = await buildSwift(u, kept.filter((s) => !culprits.includes(s)));
+          for (const [id, why] of failed) built.failed.set(id, why);
+        }
+      }
+      await runCase(u, built);
+    });
+  } else {
+    const built = await buildKotlin(cases.map((p) => ({ p, sites: sitesOf(p) })));
+    const bases = new Map<string, Outcome>();
+    await pool(cases, 2, async (u) => {
+      const t = built.get(u.name)!;
+      if (t.native) bases.set(u.name, compare(target, nodeBaseline.get(u.caseName)!, await runPatiently(t.native, target, '')));
+    });
+    const searched = cases.filter((u) => bases.get(u.name)?.pass === false && bases.get(u.name)!.cause !== 'timeout');
+    if (searched.length) {
+      const t1 = Date.now();
+      const keptOf = (u: Unit) => sitesOf(u).filter((s) => !built.get(u.name)!.failed.has(s.id));
+      const { culprits, rounds, probes } = await guardsAloneKotlin(searched.map((u) => ({ u, kept: keptOf(u), want: nodeBaseline.get(u.caseName)! })));
+      const found = searched.filter((u) => culprits.get(u.name)?.length);
+      const rebuilt = await buildKotlin(found.map((u) => ({ p: u, sites: keptOf(u).filter((s) => !culprits.get(u.name)!.includes(s)) })), 'alone');
+      for (const u of found) {
+        const failed = built.get(u.name)!.failed, base = bases.get(u.name)!, next = rebuilt.get(u.name)!;
+        for (const s of culprits.get(u.name)!) failed.set(s.id, `guard alone: ${base.cause}: ${base.detail}`);
+        for (const [id, why] of failed) next.failed.set(id, why);
+        built.get(u.name)!.native?.cleanup();
+        built.set(u.name, next);
+        bases.delete(u.name);
+      }
+      console.log(`kotlin: guard-alone search of ${searched.length} builds: ${found.length} with guards that change the result alone (${found.reduce((n, u) => n + culprits.get(u.name)!.length, 0)} guards), ${rounds} kotlinc rounds, ${probes} probes (${((Date.now() - t1) / 1000).toFixed(0)} s)`);
+    }
+    await pool(cases, 2, async (p) => runCase(p, built.get(p.name)!, bases.get(p.name)));
+    if (!keep) for (const d of readdirSync(build)) if (d.startsWith('kotlin-classes') || d === 'kotlin') rmSync(join(build, d), { recursive: true, force: true });
+  }
+  const failedKeys = new Set(failures.map((f) => f.key));
+  for (const k of matched) if (!failedKeys.has(k)) nowPassing.push(`${k} (${target})`);
+  const unstable = Object.keys(differing).length;
+  const clusters = new Map<string, Failure[]>();
+  for (const f of failures) {
+    const k = `${f.cause}: ${f.detail}`;
+    clusters.set(k, [...(clusters.get(k) ?? []), f]);
+  }
+  const ranked = [...clusters].sort((a, b) => b[1].length - a[1].length);
+  console.log(`\n${target}: ${passed} of ${counted} variants match Node (${counted ? ((100 * passed) / counted).toFixed(1) : '0'}%), ${failures.filter((f) => !f.known).length} new failures, ${unstable} builds whose instrumented baseline differs (${freshDiffers} not listed, ${unrun} variants not run), ${notBuilt} builds that did not build, ${untyped} variants whose replacement doesn't type-check, ${flaky.length} flaky (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
+  for (const [k, list] of ranked.slice(0, 25)) {
+    const byKind = [...new Set(list.map((f) => f.kind))].join(',');
+    console.log(`  ${String(list.length).padStart(5)}  ${k}  [${byKind}; ${new Set(list.map((f) => f.case)).size} cases]`);
+  }
+  const fresh = failures.filter((f) => !f.known);
+  for (const f of fresh.slice(0, 40)) {
+    console.log(`✗ ${f.case} ${f.site} ← ${f.value} (${target}): ${f.cause}${f.detail ? ': ' + f.detail : ''}`);
+    console.log(`    repro:  ${f.repro}`);
+    if (f.node !== undefined || f.native !== undefined) console.log(`    node:   ${JSON.stringify(f.node)}\n    native: ${JSON.stringify(f.native)}`);
+  }
+  if (fresh.length > 40) console.log(`… ${fresh.length - 40} more new failures (--json writes them all)`);
+  const { column, call, line } = blameCounts[target];
+  console.log(`  compile errors blamed: ${column} by column in a guard, ${call} by the call at the column, ${line} by line (${column + call + line ? ((100 * line) / (column + call + line)).toFixed(1) : '0'}% by line)`);
+  for (const f of flaky) console.log(`  ~ flaky: ${f}`);
+  for (const [n, why] of Object.entries(caseBaselines)) {
+    if (n in differing && !knownDiffers[n]) console.log(`✗ build ${n} (${target}): its instrumented baseline differs from Node and baselineDiffers doesn't list it: ${why.slice(0, 200)}`);
+    else console.log(`  ! ${n} (${target}): ${why.slice(0, 200)}`);
+  }
+  countedBy[target] = counted;
+  report[target] = { passed, counted, unrun, untyped, flaky, rate: counted ? passed / counted : 0, unstable: caseBaselines, blame: blameCounts[target], clusters: ranked.map(([k, l]) => ({ cluster: k, count: l.length, cases: [...new Set(l.map((f) => f.case))].length, kinds: [...new Set(l.map((f) => f.kind))], values: [...new Set(l.map((f) => valueKind(BAD_VALUES.indexOf(f.value))))], example: l[0] })), seconds: Math.round((Date.now() - t0) / 1000) };
+  allFailures.push(...failures);
+}
+
+report.skipped = skipped;
+report.failures = allFailures;
+if (flag('--json')) writeFileSync(flag('--json')!, JSON.stringify(report, null, 1));
+for (const n of nowPassing.slice(0, 20)) console.log(`✓ ${n} now matches Node: --update-baseline removes it`);
+if (nowPassing.length > 20) console.log(`… ${nowPassing.length - 20} more now match Node`);
+
+if (missing.length) {
+  // A whole nightly run without a backend's full list: it passes on exactly the variants the summary's digest names, which
+  // are then that list.
+  regressions = unlistedDiffers;
+  for (const t of missing) {
+    const observed: Entries = Object.fromEntries([...allFailures.filter((f) => f.target === t).map((f) => [f.key, `${f.cause}${f.detail ? ': ' + f.detail : ''}`]), ...(flakyKeys[t] ?? [])]);
+    const want = baseline.full![t];
+    if (want && keysDigest(Object.keys(observed)) === want.keys) {
+      console.log(`fuzz ${t}: fails on exactly the ${want.variants} known variants; the full list is now ${saveFull(t, observed)}`);
+      continue;
+    }
+    regressions++;
+    const counts = summarize(Object.fromEntries(allFailures.filter((f) => f.target === t).map((f) => [f.key, f.cause])));
+    console.log(`✗ fuzz ${t}: ${Object.keys(observed).length} variants fail where ${want?.variants ?? 0} are known, and the full list that tells them apart is not at hand (tests/fuzz/baseline.ts)`);
+    for (const c of new Set([...Object.keys(counts.clusters), ...Object.keys(want?.clusters ?? {})])) console.log(`  ${String(counts.clusters[c] ?? 0).padStart(6)} ${String(want?.clusters[c] ?? 0).padStart(6)} known  ${c}`);
+  }
+}
+
+if (updating) {
+  const next: Record<string, unknown> = { $comment: 'Fuzz variants known not to match Node (tests/fuzz/baseline.ts). `cases`: the cases the per-merge set draws from. `baselineDiffers`: builds (`<case>-g<site group>`) whose instrumented program differs from Node with no wrong value chosen, so none of their variants run. `full`: per backend, the full list of known failures (keys `<case>|<line:col:site kind>|<wrong value>`), summarized: how many, the digest of their keys, how many per cluster. `swift`, `kotlin`: those of the variants the per-merge set draws, with their cause. tests/fuzz/run.ts fails on a failure or build not listed.', seed };
+  const existing = new Set(everyCase.map((f) => basename(f, '.ts')));
+  const fileOf = new Map(everyCase.map((f) => [basename(f, '.ts'), f]));
+  // A run without the per-merge draw builds every group of its cases, so their entries are all replaced.
+  const builtCase = (t: string, c: string) => targets.includes(t) && !chosenCases && !only && units.some((u) => u.caseName === c && runsOn(u.file, t as 'swift' | 'kotlin') && !knownDiff[t]?.[c] && !refused(u.file, t));
+  const isStale = (t: string, k: string) => { const c = k.replace(/-g\d+$/, ''); return !existing.has(c) || builtCase(t, c) || ranBuilds[t]?.has(k); };
+  next.baselineDiffers = Object.fromEntries(['swift', 'kotlin'].map((t) => {
+    const entries: Record<string, string> = Object.fromEntries(Object.entries(baseline.baselineDiffers?.[t] ?? {}).filter(([k]) => !isStale(t, k)) as [string, string][]);
+    for (const [k, why] of Object.entries(differs[t] ?? {})) entries[k] = baseline.baselineDiffers?.[t]?.[k] ?? why;
+    return [t, Object.fromEntries(Object.entries(entries).sort(([a], [b]) => compareText(a, b)))];
+  }));
+  next.cases = [...new Set([...(baseline.cases ?? []), ...prepared.map((p) => p.name)])].filter((c) => existing.has(c)).sort();
+  // An entry is stale when its case is gone or refused, or when this run found the case's sites and its site is not one of
+  // them (the case was edited).
+  const siteKeys = new Map(prepared.map((p) => [p.name, new Set(p.sites.map((x) => x.key))]));
+  const stale = (t: string, k: string) => { const [c, site] = k.split('|'); return !existing.has(c) || refused(fileOf.get(c)!, t) || (siteKeys.has(c) && !siteKeys.get(c)!.has(site)); };
+  const full: Record<string, Entries> = {};
+  for (const t of TARGETS) {
+    const entries: Entries = Object.fromEntries(Object.entries(fullLists![t] ?? {}).filter(([k]) => !stale(t, k)));
+    for (const k of ranKeys[t] ?? []) delete entries[k];
+    for (const f of allFailures.filter((x) => x.target === t)) entries[f.key] = `${f.cause}${f.detail ? ': ' + f.detail : ''}`;
+    for (const [k, why] of flakyKeys[t] ?? []) entries[k] ??= why;
+    full[t] = Object.fromEntries(Object.entries(entries).sort(([a], [b]) => compareText(a, b)));
+  }
+  const wholeRun = (t: string) => set === 'nightly' && !prefixes.length && !only && targets.includes(t);
+  next.full = Object.fromEntries(TARGETS.map((t) => {
+    const { variants, keys, clusters } = summarize(full[t]);
+    const run = wholeRun(t) ? countedBy[t] : baseline.full?.[t]?.run;
+    return [t, run === undefined ? { variants, keys, clusters } : { variants, run, keys, clusters }];
+  }));
+  // Of each case the next per-merge run draws, the known failures among the variants it draws; all of a case's when this
+  // run did not reach its sites.
+  const drawn = mergeDraw(next.cases as string[]);
+  // A drawn case this run left out: its draw from a Node census, so only its drawn variants are listed.
+  await pool([...drawn].filter((c) => !mergeKeys.has(c) && fileOf.has(c)), jobs, async (c) => {
+    const p = prepare(fileOf.get(c)!);
+    if ('error' in p) return;
+    const { builds } = await census(p, toNode(p));
+    if (builds) mergeKeys.set(c, mergeDrawKeys(p, builds));
+  });
+  for (const t of TARGETS) next[t] = Object.fromEntries(Object.entries(full[t]).filter(([k]) => drawn.has(caseOf(k)) && (mergeKeys.get(caseOf(k))?.has(k) ?? true)));
+  writeFileSync(baselineFile, JSON.stringify(next, null, '\t') + '\n');
+  console.log(`fuzz: wrote ${baselineFile}, and the full lists to ${TARGETS.map((t) => saveFull(t, full[t])).join(', ')}`);
+}
+if (!keep) rmSync(join(build, 'src'), { recursive: true, force: true });
+console.log(`fuzz: ${((Date.now() - started) / 1000).toFixed(0)} s, ${regressions} failures not in known-fuzz-failures.json`);
+process.exit(regressions && !updating ? 1 : 0);

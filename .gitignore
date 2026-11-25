@@ -1,0 +1,22 @@
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+packed/
+core/
+*.tgz
+.DS_Store
+
+# Generated kits (built from @nativescript/core via `npm run kit` and `npm run kit:android`)
+packages/compiler/kit-apple/Sources/NativeScriptKit/Core/
+packages/compiler/kit-apple/Overlays/
+packages/compiler/kit-android/generated/
+packages/compiler/kit-android/overlays/
+packages/compiler/kit-android/.gradle/
+packages/compiler/kit-android/build/
+packages/compiler/kit-android/local.properties
+packages/compiler/tests/app/platforms/
+packages/compiler/tests/app/hooks/
+packages/compiler/tests/app/App_Resources/
+packages/compiler/tests/xml-ts/platforms/
+packages/compiler/tests/xml-ts/hooks/

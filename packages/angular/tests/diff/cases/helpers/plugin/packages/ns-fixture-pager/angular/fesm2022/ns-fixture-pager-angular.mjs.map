@@ -1,0 +1,17 @@
+{
+  "version": 3,
+  "sources": [
+    "../../src/angular/params.ts",
+    "../../src/angular/pager.component.ts",
+    "../../src/angular/sheet.service.ts",
+    "../../src/angular/ns-fixture-pager-angular.ts"
+  ],
+  "sourcesContent": [
+    "export class SheetParams {\n  constructor(\n    public readonly context: any,\n    public readonly closeCallback: (...args) => void,\n  ) {}\n}\n",
+    "import { Component } from '@angular/core';\nimport { Pager } from 'ns-fixture-pager';\n\n@Component({ selector: 'FixturePager', template: '' })\nexport class PagerComponent {\n  private readonly pager = new Pager('component');\n  get nativeElement(): Pager {\n    return this.pager;\n  }\n}\n",
+    "import { SheetParams } from './params';\n\nexport class SheetService {\n  private closed: string[] = [];\n  open(context: string, done: (result: string) => void): SheetParams {\n    return new SheetParams(context, (...args: any[]) => {\n      const result = args.length ? `${context}:${args.join(',')}` : `${context}:none`;\n      this.closed.push(result);\n      done(result);\n    });\n  }\n  get history(): string {\n    return this.closed.join(' | ');\n  }\n}\n",
+    "/**\n * Generated bundle index. Do not edit.\n */\n\nexport * from './index';\n"
+  ],
+  "mappings": ";;;;;;;;;;;;AAAO,IAAM,cAAN,MAAkB;AAAA,EACvB,YACkB,SACA,eAChB;AAFgB;AACA;AAAA,EACf;AACL;;;ACLA,SAAS,iBAAiB;AAC1B,SAAS,aAAa;AAGf,IAAM,iBAAN,MAAqB;AAAA,EAArB;AACL,SAAiB,QAAQ,IAAI,MAAM,WAAW;AAAA;AAAA,EAC9C,IAAI,gBAAuB;AACzB,WAAO,KAAK;AAAA,EACd;AACF;AALa,iBAAN;AAAA,EADN,UAAU,EAAE,UAAU,gBAAgB,UAAU,GAAG,CAAC;AAAA,GACxC;;;ACFN,IAAM,eAAN,MAAmB;AAAA,EAAnB;AACL,SAAQ,SAAmB,CAAC;AAAA;AAAA,EAC5B,KAAK,SAAiB,MAA6C;AACjE,WAAO,IAAI,YAAY,SAAS,IAAI,SAAgB;AAClD,YAAM,SAAS,KAAK,SAAS,GAAG,OAAO,IAAI,KAAK,KAAK,GAAG,CAAC,KAAK,GAAG,OAAO;AACxE,WAAK,OAAO,KAAK,MAAM;AACvB,WAAK,MAAM;AAAA,IACb,CAAC;AAAA,EACH;AAAA,EACA,IAAI,UAAkB;AACpB,WAAO,KAAK,OAAO,KAAK,KAAK;AAAA,EAC/B;AACF;",
+  "names": []
+}

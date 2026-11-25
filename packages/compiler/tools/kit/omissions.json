@@ -1,0 +1,5 @@
+{
+	"$comment": "What kit generation from @nativescript/core may leave out (--partial), by platform: each omission by its signature (its line as kit generation reports it, the line and column left out) with its owner and cause (tools/kit/omissions.mts). Generation fails on an omission not listed here, and on a listed one that no longer occurs.",
+	"ios": {},
+	"android": {}
+}

@@ -1,0 +1,6 @@
+{
+  "version": 3,
+  "sources": ["../../src/legacy.ts"],
+  "mappings": "AAAO,MAAM,QAAQ;AACd,SAAS,MAAM,MAAc,IAAsB;AACxD,QAAM,MAAgB,CAAC;AACvB,WAAS,IAAI,MAAM,KAAK,IAAI,IAAK,KAAI,KAAK,IAAI,CAAC;AAC/C,SAAO;AACT;",
+  "names": []
+}
