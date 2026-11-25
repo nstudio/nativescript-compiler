@@ -19,6 +19,7 @@
     "build:adapters": "npm run build --workspaces --if-present",
     "build": "npm run build:compiler && npm run build:adapters",
     "pack": "node scripts/pack.mjs",
+    "publish:local": "node scripts/publish-local.mjs",
     "test:compiler": "node packages/compiler/tests/checks/layers.ts && node packages/compiler/tests/cli/extension.ts && node packages/compiler/tests/expression-parser-check.ts",
     "test": "node scripts/test.mjs",
     "test:diff": "node scripts/test.mjs diff",

@@ -56,14 +56,3 @@ Point `NS_CORE_REPO` at a built checkout of `NativeScript/NativeScript` (or keep
 NS_CORE_REPO=/path/to/NativeScript npm run kit
 NS_CORE_REPO=/path/to/NativeScript npm run kit:android
 ```
-
-### Packing & Publishing (npm OIDC Trusted Publishing)
-
-- Sync versions across all packages: `npm run version:sync -- 9.2.0-alpha.10`
-- Pack locally: `npm run pack`
-- Publish via GitHub Actions: run **Actions → Publish to npm (OIDC)** (`.github/workflows/publish.yml`).
-  Configure each package on npmjs.com under **Settings → Trusted Publisher → GitHub Actions**:
-  - Owner: `nstudio`
-  - Repository: `nativescript-compiler`
-  - Workflow filename: `publish.yml`
-  - Environment: `npm-publish`
