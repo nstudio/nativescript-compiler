@@ -366,7 +366,21 @@ export const functionsMethods = {
 		const ret = this.closureResult(fn).target;
 		const throws = !isAsync(fn) && this.throwsInfo.fn(fn) ? 'throws ' : '';
 		// A function expression's name is only for itself: one that never refers to itself is an anonymous function.
-		if (fn.name && refersTo(fn.body, this.checker.getSymbolAtLocation(fn.name), this.checker)) throw this.error(fn, 'a named function expression', 'named-function-expression');
+		if (fn.name && refersTo(fn.body, this.checker.getSymbolAtLocation(fn.name), this.checker)) {
+			const fnName = ident(fn.name.text);
+			const extra = this.unusedParameters(fn).map((t, k) => `_ __unused${k}: ${t}`);
+			const fnParams = [this.params(fn, false), ...extra, ...pad.map((p) => (p.startsWith('_ ') ? p : `_ ${p}`))].filter(Boolean).join(', ');
+			const pTypes = fnParams
+				? splitTopLevel(fnParams).map((d) =>
+						withoutDefault(d.slice(d.indexOf(':') + 1))
+							.trim()
+							.replace(/^@escaping /, ''),
+					)
+				: [];
+			const fnType = `(${pTypes.join(', ')}) ${throws}-> ${ret}`;
+			const body = this.functionBody(fn, ret, this.indent + '    ');
+			return `{ () -> ${fnType} in\n${this.indent}    func ${fnName}(${fnParams}) ${throws}-> ${ret} ${body}\n${this.indent}    return ${fnName}\n${this.indent}}()`;
+		}
 		if (this.takesRestArray(fn) && !pad.length) {
 			const inner = this.indent + '    ';
 			const binds = fn.parameters.map((p, k) => {

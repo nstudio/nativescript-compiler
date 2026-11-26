@@ -196,6 +196,37 @@ export function render(c: ComponentIR, components: Map<string, ComponentInfo>, o
 				}
 				return say(depth, `this.__slots[${kotlinString(s.name)}]?.invoke(${host})`);
 			}
+			case 'componentOutlet': {
+				const host = regionHost(s.host);
+				const inj = s.injector ? `, injector = { ${call(s.injector)} }` : '';
+				const inp = s.inputs ? `, inputs = { ${call(s.inputs)} }` : '';
+				return say(depth, `${s.call}(${host}, { ${call(s.component)} }${inj}${inp})`);
+			}
+			case 'templateOutlet': {
+				const host = regionHost(s.host);
+				const ctx = s.context ? `, context = { ${call(s.context)} }` : '';
+				return say(depth, `${s.call}(${host}, { ${call(s.template)} }${ctx})`);
+			}
+			case 'bindTemplate':
+			case 'structural': {
+				const open = s.kind === 'bindTemplate' ? `TemplateOutlet.bind(this.${ident(s.field)})` : `val ${s.tplName} = TemplateOutlet.make`;
+				say(depth, `${open} { __sr: Region, ${s.ctxParam}: Any? ->`);
+				const wrap = s.scope ? scope(s.scope) : null;
+				const d = wrap ? depth + 2 : depth + 1;
+				if (wrap) say(depth + 1, wrap);
+				if (s.viewMark) say(d, 'val __view = EffectOrder.current');
+				say(d, `val ${s.body.fragment} = RegionFragment(__sr)`);
+				steps(s.body.steps, d);
+				say(d, `${s.body.fragment}.fill()`);
+				if (wrap) say(depth + 1, '}');
+				say(depth, '}');
+				if (s.kind === 'structural') {
+					say(depth, `${s.call}(${s.region}, ${s.tplName}) {`);
+					steps(s.steps, depth + 1);
+					say(depth, '}');
+				}
+				return;
+			}
 			case 'choose': {
 				const host = regionHost(s.host);
 				const which = s.conds.map((k, i) => (k ? `if (${cond(k, s.caught)}) ${i} else ` : `${i}`)).join('') + (s.conds.at(-1) ? `${s.conds.length}` : '');

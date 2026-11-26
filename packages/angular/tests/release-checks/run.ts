@@ -85,7 +85,7 @@ export class People { items = [{ id: 1, name: 'Alan Turing' }]; }
   check(refused.includes("nsRouterLink's queryParams is not supported"), 'a link input the compiled router has no use for stops the build');
 
   const mixed = component(`<Label text="Hi {{ items.length > 1 ? 'all' : 'one' }}!"></Label>`);
-  check(method(mixed, (linked(mixed, 'Label').attrs as { name: string; method?: string }[]).find((a) => a.name === 'text')?.method ?? '-').includes("return (`Hi ${(this.items.length > 1 ? 'all' : 'one') ?? ''}!`);"), 'a text attribute mixing literal text and {{ }} is a template literal of both');
+  check(method(mixed, (linked(mixed, 'Label').attrs as { name: string; method?: string }[]).find((a) => a.name === 'text')?.method ?? '-').includes("return (`Hi ${(this.items.length > 1 ? 'all' : 'one')}!`);"), 'a text attribute mixing literal text and {{ }} is a template literal of both');
   const documented = componentOf('/app/pill.component.ts', `@Component({ selector: 'primary-pill', template: '' })\n/** A doc comment between the decorator and the class. */\nexport class PrimaryPill {}\n`);
   check(documented?.selector === 'primary-pill' && documented.name === 'PrimaryPill', "a component's selector is read whatever comes between its decorator and its class");
 
@@ -403,7 +403,7 @@ export class Panel {
     const pageIr = angularComponent(page, readFileSync(page, 'utf8'), new Map([['Panel', 'Panel']]))!;
     const members = ir.source.slice(ir.source.indexOf('export class Panel {'));
     check(ir.injector === '$injector' && /^export class Panel \{\s*readonly \$injector = NodeInjector\.enter\(\[Counter, /.test(members) && members.indexOf('$injector') < members.indexOf('counter: Counter = inject(Counter)'), "a component's providers make its injector in its first field, before its injected constructor parameters");
-    check(/\{ this\.\$injector\.leave\(\); return; \}[\s\S]*this\.counter\.count\+\+;\s*this\.\$injector\.leave\(\);\s*\}/.test(members), 'the injector stops being current when the constructor returns, early or at its end');
+    check(/\{ this\.\$injector\.provideSelf\(this\); this\.\$injector\.leave\(\); return; \}[\s\S]*this\.counter\.count\+\+;\s*this\.\$injector\.provideSelf\(this\); this\.\$injector\.leave\(\);\s*\}/.test(members), 'the injector stops being current when the constructor returns, early or at its end');
     const infos = new Map([['Panel', { name: 'Panel', props: [] }], ['Page', { name: 'Page', props: [] }]]);
     check(render(ir, infos, () => false, angular.behaviour).join('\n').includes('try EffectOrder.view(for: self, onPush: true, injector: self._injector) {') && renderKotlin(ir, infos, { behaviour: angular.behaviour }).join('\n').includes('EffectOrder.view(this._injector, this, true) {'), "a component's view injects from its injector (Swift, Kotlin)");
     const pageSwift = render(pageIr, infos, () => false, angular.behaviour).join('\n');
@@ -1180,7 +1180,7 @@ export class PersonView {
     translateModules(sw, program, [file]);
     const cls = program.getSourceFile(file)!.statements.filter(ts.isClassDeclaration).find((c) => c.name?.text === 'PersonView')!;
     const methods = cls.members.filter(ts.isMethodDeclaration);
-    const binding = methods.find((m) => /^\$b\d+$/.test(m.name.getText()) && /return \(\(this\.person\(\)\)\);/.test(m.getText()));
+    const binding = methods.find((m) => /^\$b\d+$/.test(m.name.getText()) && /return \(+this\.person\(\)\)+!?\)+;/.test(m.getText()));
     const current = methods.find((m) => m.name.getText() === 'current')!;
     check(!!binding && sw.returnTypeOf(binding) === 'Person' && sw.returnTypeOf(current) === 'Person?', `a template binding reading a non-strict app's signal made with null gives the type the template's codegen takes, where the app's own method gives an optional (Swift: ${binding ? sw.returnTypeOf(binding) : 'no binding'}, ${sw.returnTypeOf(current)})`);
   } finally {
@@ -1200,31 +1200,27 @@ export class Sheet {
   open(): number { return 1; }
 }
 `;
-    for (const [member, at] of [
-      ['constructor(private vcRef: ViewContainerRef) {}', 'inject(ViewContainerRef)'],
-      ['vcRef = inject(ViewContainerRef);', 'inject(ViewContainerRef)'],
-      ['vcRef = inject(Injector).get(ViewContainerRef);', 'inject(Injector).get(ViewContainerRef)'],
+    for (const member of [
+      'constructor(private vcRef: ViewContainerRef) {}',
+      'vcRef = inject(ViewContainerRef);',
+      'vcRef = inject(Injector).get(ViewContainerRef);',
     ]) {
       const ir = angularComponent(file, source(member), new Map())!;
       for (const platform of ['ios', 'android'] as const) {
         const { checker, program, files, lenient } = createProgram([file], new Map([[file, ir.source]]), platform, modulesDir);
-        let refusal = '';
-        try {
-          const cls = program.getSourceFile(file)!.statements.filter(ts.isClassDeclaration).find((c) => c.name?.text === 'Sheet')!;
-          if (platform === 'ios') {
-            const sw = new SwiftTranslator(checker, new Map([['Sheet', { props: ir.props, optional: ir.optional }]]), files, { lenientApp: lenient });
-            translateModules(sw, program, [file]);
-            sw.componentMembers(cls, ir.props);
-          } else {
-            const kt = new Translator(checker, new Map([['Sheet', { props: ir.props }]]), files, { lenientApp: lenient, appModule: 'org.example.app' });
-            translateKotlinModules(kt, program, [file]);
-            kt.componentMembers(cls, ir.props);
-          }
-        } catch (e) {
-          refusal = String((e as Error).message);
+        const cls = program.getSourceFile(file)!.statements.filter(ts.isClassDeclaration).find((c) => c.name?.text === 'Sheet')!;
+        let out = '';
+        if (platform === 'ios') {
+          const sw = new SwiftTranslator(checker, new Map([['Sheet', { props: ir.props, optional: ir.optional }]]), files, { lenientApp: lenient });
+          translateModules(sw, program, [file]);
+          out = sw.componentMembers(cls, ir.props).join('\n');
+        } else {
+          const kt = new Translator(checker, new Map([['Sheet', { props: ir.props }]]), files, { lenientApp: lenient, appModule: 'org.example.app' });
+          translateKotlinModules(kt, program, [file]);
+          out = kt.componentMembers(cls, ir.props).lines.join('\n');
         }
-        const ok = refusal.includes(`an injected ViewContainerRef is not supported in a release build yet: ${at}`);
-        check(ok, `an injected ViewContainerRef stops the build at the inject (${platform}, ${member}${ok ? '' : `: ${refusal.slice(0, 300) || 'translated'}`})`);
+        const ok = out.includes('ViewContainerRef.current()') || out.includes('Injector.root.get(') || out.includes('Injector.shared.get(');
+        check(ok, `an injected ViewContainerRef translates cleanly (${platform}, ${member}${ok ? '' : `: ${out.slice(0, 300)}`})`);
       }
     }
   } finally {
@@ -1754,13 +1750,13 @@ export function openSheet(dialogs: NativeDialogService, cmp: any, config?: Nativ
   check(!meta('standalone: true', "on = input(false, { alias: 'enabled', debugName: 'on' });"), "input()'s alias and debugName compile");
   const directive = (body: string, fields = '') => thrown(() => angularDirectives(['/app/d.directive.ts'], () => `import { Directive, input } from '@angular/core';\n@Directive({ selector: '[dim]'${fields} })\nexport class Dim { ${body} }\n`));
   check(!directive("level = input(1); tint = input<string>(); on = input(false, { alias: 'enabled' });"), "a directive's signal inputs compile, with an alias");
-  check(directive("level = input.required<number>();").includes('input.required() (level) in a directive is not supported in a release build yet'), "a directive's required signal input stops the build");
+  check(!directive("level = input.required<number>();"), "a directive's required signal input compiles");
   {
     const dirs = angularDirectives(['/app/d.directive.ts'], () => "import { Directive, input } from '@angular/core';\n@Directive({ selector: '[dim]' })\nexport class Dim { dim = input(1); on = input(false, { alias: 'enabled' }); }\n");
     const used = JSON.stringify(angularComponent('/app/c.component.ts', "import { Component } from '@angular/core';\nimport { Dim } from './d.directive';\n@Component({ selector: 'C', imports: [Dim], template: `<Label [dim]=\"n\" [enabled]=\"true\"></Label>` })\nexport class C { n = 2; }\n", new Map(), { directives: dirs }));
     check(used.includes('.dim.$assign($v)') && used.includes('.on.$assign($v)'), "a template sets a directive's signal input through the signal, by its alias");
   }
-  check(directive('', ", exportAs: 'dim'").includes('its exportAs is not supported in a release build yet'), "a directive's exportAs stops the build");
+  check(!directive('', ", exportAs: 'dim'"), "a directive's exportAs compiles");
   {
     // Angular runs a directive's ngDoCheck after its ngOnInit, then on every check of the view its element is in.
     const dirs = angularDirectives(['/app/d.directive.ts'], () => "import { Directive } from '@angular/core';\n@Directive({ selector: '[dim]' })\nexport class Dim { ngOnInit() {} ngDoCheck() {} }\n");
@@ -1804,7 +1800,6 @@ export function openSheet(dialogs: NativeDialogService, cmp: any, config?: Nativ
     check(/EffectOrder\.resume\(__scope\)[^]*Check\(\{ self\._b0\(\) \}\)[^]*\.bind\(items: /.test(swift) && /EffectOrder\.resume\(__scope\) \{[^]*Check\(\{ this\._b0\(\) \}\)[^]*\.bind\(items = /.test(kotlin), "a ListView's items are bound in the update pass, after the bindings before it (Swift, Kotlin)");
   }
   for (const [fields, members, text] of [
-    ['providers: [Store, { provide: Store, useClass: Store, multi: true }]', '', "its multi is not supported in a release build yet"],
     ['providers: SHARED', '', "@Component's providers are read as an array literal in a release build"],
     ['providers: [{ provide: Store }]', '', 'needs provide and one of useClass, useValue, useFactory or useExisting'],
     ['providers: [{ provide: Store, useFactory: (s: Store) => s, deps: [[new Optional(), Store]] }]', '', 'deps other than a list of tokens for useFactory are not supported'],
@@ -1814,9 +1809,10 @@ export function openSheet(dialogs: NativeDialogService, cmp: any, config?: Nativ
     const e = meta(fields, members);
     check(e.includes(text), `component providers: ${text.split(' is ')[0].split(' are ')[0]} stops the build${e ? '' : ': it compiled'}`);
   }
+  check(!meta('providers: [Store, { provide: Store, useClass: Store, multi: true }]'), 'component providers accept multi: true');
   check(!meta('providers: [...SHARED]') && !meta('providers: [provideStore()]'), 'component providers accept spread arrays and provider factory calls (e.g. provideIcons)');
   const extended = thrown(() => angularComponent('/app/c.component.ts', "import { Component } from '@angular/core';\nclass Base {}\n@Component({ selector: 'C', template: '<Label></Label>', providers: [Base] })\nexport class C extends Base {}\n", new Map()));
-  check(extended.includes("@Component's providers on a class that extends another are not supported in a release build yet"), 'component providers on a derived class stop the build');
+  check(!extended, `component providers on a derived class compile${extended ? `: ${extended}` : ''}`);
   const ngModule = "import { NgModule } from '@angular/core';\n@NgModule({ declarations: [], providers: [{ provide: 'API', useValue: '/api' }] })\nexport class AppModule {}\n";
   check(!thrown(() => declarablesIn('/app/app.module.ts', ngModule, true)) && !thrown(() => declarablesIn('/lib/lib.module.ts', ngModule)), "an app NgModule's providers are read with its imports, as a library's are");
 
@@ -4153,6 +4149,98 @@ fun ChooseFragment(region: Region, which: () -> Int, site: String = "", render: 
         ktGot = errors ? errors.join('\n').slice(0, 1200) : spawnSync('java', ['-cp', [join(dir, 'classes-wave2'), runtime, kotlinStdlib()].join(':'), 'org.example.wave2.MainKt'], { encoding: 'utf8' }).stdout.trim();
       } catch (e) { ktGot = String(e); }
       check(ktGot === expected, `Wave 2 (<ng-content> multi-slot + fallback + @if, contentChild/Children, hostDirectives, multi-@Component) compiles & runs natively (Kotlin${ktGot === expected ? '' : `: ${ktGot}`})`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+})();
+
+// ---- Wave 3: generic 0-param @Directive erasure on Swift, Renderer2/RendererFactory2, @angular/cdk, dynamic import('@angular/compiler') ----
+(() => {
+  const dir = mkdtempSync(join(tmpdir(), 'ns-angular-wave3-'));
+  try {
+    const dirFile = join(dir, 'cell.directive.ts');
+    const appFile = join(dir, 'app.ts');
+    writeFileSync(
+      dirFile,
+      `import { Directive } from '@angular/core';
+export const registered: CellButton<any>[] = [];
+@Directive({ selector: 'button[cellBtn]' })
+export class CellButton<T> {
+  value!: T;
+  constructor() {
+    registered.push(this);
+  }
+}
+`,
+    );
+    writeFileSync(
+      appFile,
+      `import { inject, Renderer2, RendererFactory2 } from '@angular/core';
+import { coerceBooleanProperty } from '@angular/cdk/coercion';
+import { Platform } from '@angular/cdk/platform';
+import { CellButton, registered } from './cell.directive';
+
+export async function runWave3(): Promise<string> {
+  const cell = new CellButton<string>();
+  cell.value = 'day-1';
+  const rf = inject(RendererFactory2);
+  const r2 = rf.createRenderer(null, null);
+  const directR2 = inject(Renderer2);
+  const plat = inject(Platform);
+  const jitRejected = await import('@angular/compiler').then(() => 'loaded', () => 'aot-rejected');
+  return [
+    String(registered.length),
+    String(registered[0].value),
+    String(coerceBooleanProperty('true')),
+    String(coerceBooleanProperty('false')),
+    String(Boolean(r2 && directR2)),
+    String(typeof plat.isBrowser === 'boolean'),
+    jitRejected,
+  ].join('|');
+}
+`,
+    );
+    const cleaned = declarableSource(dirFile, readFileSync(dirFile, 'utf8'));
+    check(!!cleaned && cleaned.includes('/* @ng-declarable */') && !cleaned.includes('@Directive'), 'declarableSource marks generic 0-param @Directive for Swift erasure');
+
+    const overrides = new Map<string, string>([[dirFile, cleaned!]]);
+    const expected = '1|day-1|true|false|true|true|aot-rejected';
+    {
+      let swGot = '';
+      try {
+        buildSwiftRuntime(nativeBuild, '-Onone');
+        const p = createProgram([dirFile, appFile], overrides, 'ios', modulesDir);
+        const sw = new SwiftTranslator(p.checker, new Map(), p.files, { hooks: angular.swift, pluginFiles: new Set(p.pluginFiles) });
+        const out = join(dir, 'swift');
+        mkdirSync(out, { recursive: true });
+        const mods = translateModules(sw, p.program, p.files.map((f) => f.fileName));
+        const body = mods.map((m) => sw.interfacesOf(m.file) + m.code).join('\n');
+        const swiftShapes = sw.shapesCode();
+        writeFileSync(join(out, 'app.swift'), `import Foundation\nimport NativeScriptKit\n${swiftShapes}\n${body}\n`);
+        writeFileSync(join(out, 'main.swift'), `import Foundation\nimport NativeScriptKit\n${mods.flatMap((m) => (m.init ? [`${m.initThrows ? 'try ' : ''}${m.init}()`] : [])).join('\n')}\n_ = runWave3().then({ (v: String) -> Any? in print(v); return nil }, { (e: Any?) -> Any? in print("ERR:", e ?? ""); return nil })\nMicrotasks.checkpoint()\n`);
+        const errors = swiftc(readdirSync(out).map((f) => join(out, f)), join(dir, 'main-ng-wave3'), nativeBuild, '-Onone');
+        swGot = errors ? errors.slice(0, 3).join(' ; ') : spawnSync(join(dir, 'main-ng-wave3'), { encoding: 'utf8' }).stdout.trim();
+      } catch (e) { swGot = String(e); }
+      check(swGot === expected, `Wave 3 Angular (generic @Directive erasure, Renderer2/RendererFactory2, @angular/cdk, dynamic @angular/compiler rejection) runs natively (Swift${swGot === expected ? '' : `: ${swGot.slice(0, 300)}`})`);
+    }
+    {
+      let ktGot = '';
+      try {
+        const p = createProgram([dirFile, appFile], overrides, 'android', modulesDir);
+        const kt = new Translator(p.checker, new Map(), p.files, { appModule: 'org.example.ngwave3', hooks: angular.kotlin, pluginFiles: new Set(p.pluginFiles), native: (t) => new AndroidNativeAPI(t, androidClassPath(null, { archives: [], dependencies: [] })) });
+        const out = join(dir, 'kotlin');
+        mkdirSync(out, { recursive: true });
+        const head = 'package org.example.ngwave3\nimport org.nativescript.kit.*\n';
+        const mods = translateKotlinModules(kt, p.program, p.files.map((f) => f.fileName));
+        const ktShapes = kt.shapesCode();
+        writeFileSync(join(out, 'App.kt'), head + ktShapes + '\n' + mods.map((m) => kt.interfacesOf(m.file) + m.code).join('\n') + '\n');
+        writeFileSync(join(out, 'Main.kt'), `${head}fun main() {\n${mods.flatMap((m) => (m.init ? [`  ${m.init}()`] : [])).join('\n')}\n  runWave3().then({ println(it); null }, { println("ERR: $it"); null })\n  Microtasks.checkpoint()\n}\n`);
+        const runtime = buildKotlinRuntime(nativeBuild);
+        const errors = kotlinc(readdirSync(out).map((f) => join(out, f)), join(dir, 'classes-ng-wave3'), [runtime]);
+        ktGot = errors ? errors.slice(0, 3).join(' ; ') : spawnSync('java', ['-cp', [join(dir, 'classes-ng-wave3'), runtime, kotlinStdlib()].join(':'), 'org.example.ngwave3.MainKt'], { encoding: 'utf8' }).stdout.trim();
+      } catch (e) { ktGot = String(e); }
+      check(ktGot === expected, `Wave 3 Angular (generic @Directive erasure, Renderer2/RendererFactory2, @angular/cdk, dynamic @angular/compiler rejection) runs natively (Kotlin${ktGot === expected ? '' : `: ${ktGot.slice(0, 300)}`})`);
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });

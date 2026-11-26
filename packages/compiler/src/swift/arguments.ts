@@ -103,7 +103,14 @@ export const argumentsMethods = {
 		const impl = sig?.getDeclaration() && implementationOf(sig.getDeclaration());
 		const params = impl ? impl.parameters.map((p) => this.checker.getSymbolAtLocation(p.name)!).filter(Boolean) : (sig?.getParameters() ?? []);
 		const target = impl ?? sig?.getDeclaration();
-		if (target && !ts.isJSDocSignature(target) && this.readsArguments(target)) return [this.packed(all, 'JSArray<Any?>', this.restSlot(e, 'Any?'))];
+		if (target && !ts.isJSDocSignature(target) && this.readsArguments(target)) {
+			const packed = [this.packed(all, 'JSArray<Any?>', this.restSlot(e, 'Any?'))];
+			if (ts.isFunctionDeclaration(target) && this.takesThis(target) && ts.isCallExpression(e)) {
+				if (ts.isIdentifier(e.expression)) packed.unshift('nil');
+				else if (ts.isPropertyAccessExpression(e.expression) && this.isNamespace(e.expression.expression)) packed.unshift(this.coerce(e.expression.expression, 'Any?'));
+			}
+			return packed;
+		}
 		const out: string[] = [];
 		const restAt = params.findIndex((p) => p.valueDeclaration && ts.isParameter(p.valueDeclaration) && p.valueDeclaration.dotDotDotToken);
 		// A function type's rest parameter too (`mainThreadify(fn)` gives `(...args) => void`, or `String.fromCharCode.bind(String)`): Swift's function type takes it as `JSRest`.

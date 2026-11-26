@@ -6,7 +6,7 @@ export const isStatic = (m: ts.Node): boolean => ts.canHaveModifiers(m) && !!ts.
 export const hasModifier = (n: ts.Node, kind: ts.SyntaxKind): boolean => ts.canHaveModifiers(n) && !!ts.getModifiers(n)?.some((m) => m.kind === kind);
 
 /** Tokens the kit provides an instance of (`inject(Router)`); any other is the app's service or the injector's. */
-export const KIT_TOKENS = ['RouterExtensions', 'ActivatedRoute', 'Page', 'DestroyRef', 'ChangeDetectorRef', 'ElementRef', 'NativeDialogRef', 'NativeDialogService', 'Router', 'HttpClient', 'Injector', 'EnvironmentInjector', 'NgZone', 'ErrorHandler', 'Location', 'ViewContainerRef', 'ApplicationRef'];
+export const KIT_TOKENS = ['RouterExtensions', 'ActivatedRoute', 'Page', 'DestroyRef', 'ChangeDetectorRef', 'ElementRef', 'NativeDialogRef', 'NativeDialogService', 'Router', 'HttpClient', 'Injector', 'EnvironmentInjector', 'NgZone', 'ErrorHandler', 'Location', 'ViewContainerRef', 'TemplateRef', 'ApplicationRef', 'PendingTasks', 'Renderer2', 'RendererFactory2'];
 
 /** The code giving a kit token's instance where it is not the token class's own `shared`, per back end. */
 export const INJECTION_TOKENS: Record<string, { swift: string; kotlin: string }> = {
@@ -18,7 +18,11 @@ export const INJECTION_TOKENS: Record<string, { swift: string; kotlin: string }>
   DestroyRef: { swift: 'DestroyRef.current()', kotlin: 'DestroyRef.current()' },
   ChangeDetectorRef: { swift: 'ChangeDetectorRef.current()', kotlin: 'ChangeDetectorRef.current()' },
   ElementRef: { swift: 'ElementRef.current()', kotlin: 'ElementRef.current()' },
+  TemplateRef: { swift: 'TemplateRef.current()', kotlin: 'TemplateRef.current()' },
+  ViewContainerRef: { swift: 'ViewContainerRef.current()', kotlin: 'ViewContainerRef.current()' },
   NativeDialogRef: { swift: 'NativeDialogRef.current', kotlin: 'NativeDialogRef.current' },
+  Renderer2: { swift: 'Renderer2.current', kotlin: 'Renderer2.current' },
+  RendererFactory2: { swift: 'RendererFactory2.current', kotlin: 'RendererFactory2.current' },
 };
 
 /**
@@ -76,8 +80,8 @@ export function isInjectableClass(decl: ts.Declaration | undefined, pluginFiles:
   if (!decl || !ts.isClassDeclaration(decl) || decl.getSourceFile().isDeclarationFile) return false;
   const fn = decl.getSourceFile().fileName;
   if (core.adapterRuntimeFile(fn) === 'runtime/angular-rx.ts' || core.adapterRuntimeFile(fn) === 'runtime/angular.ts') return true;
-  // @angular/forms' builders: services whose root instance is their static `shared`.
-  if (core.adapterRuntimeFile(fn) === 'runtime/angular-forms.ts') return decl.members.some((m) => (ts.isPropertyDeclaration(m) || ts.isGetAccessorDeclaration(m)) && isStatic(m) && m.name.getText() === 'shared');
+  // @angular/forms' and @angular/cdk's services: root instances via static `shared`.
+  if (core.adapterRuntimeFile(fn) === 'runtime/angular-forms.ts' || core.adapterRuntimeFile(fn) === 'runtime/angular-cdk.ts') return decl.members.some((m) => (ts.isPropertyDeclaration(m) || ts.isGetAccessorDeclaration(m)) && isStatic(m) && m.name.getText() === 'shared');
   if (pluginFiles.has(fn)) return injectableRole(decl, pluginFiles) === 'root';
   return (ts.getDecorators(decl) ?? []).some((d) => /^Injectable\b/.test(d.expression.getText()));
 }
@@ -176,7 +180,7 @@ const NG0952 = 'NG0952: Model is required but no value is available yet.';
 export const model: FrameworkModel = {
   plainFields: true,
   wrapsRootViews: true,
-  signalTypes: { InputSignal: 'input', ModelSignal: 'model', Signal: 'computed' },
+  signalTypes: { InputSignal: 'input', InputSignalWithTransform: 'input', ModelSignal: 'model', Signal: 'computed' },
   // `input()` outside a component (a directive's): a signal the template sets.
   signalConstructors: { signal: { equality: 'identity', options: 1 }, model: 'identity', input: { equality: 'identity', typed: true }, linkedSignal: { equality: 'identity', linked: true } },
   memos: { computed: '@angular/core' },
@@ -211,6 +215,12 @@ export const model: FrameworkModel = {
     return LIFECYCLE_HOOKS.has(m.name.getText()) || !(ts.isPrivateIdentifier(m.name) || ts.getCombinedModifierFlags(m) & ts.ModifierFlags.Private);
   },
   unsetMembers: isLinkedSignalPreviousSource,
+  erasesGenericClass(cls) {
+    if (!cls.typeParameters?.length) return false;
+    if (ts.getDecorators(cls)?.some((d) => /^(Component|Directive|Injectable|Pipe)\b/.test(d.expression.getText()))) return true;
+    const sf = cls.getSourceFile();
+    return sf.text.slice(cls.pos, cls.getStart(sf)).includes('@ng-declarable');
+  },
 };
 
 /** Whether `d` is `previous.source` of Angular's `linkedSignal({ source, computation })` (shim, package typings, or inline callback annotation). */

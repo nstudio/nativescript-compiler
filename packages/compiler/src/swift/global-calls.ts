@@ -121,6 +121,7 @@ export const globalCallsMethods = {
 			if (fn?.args) return runtimeCall(this, fn, e);
 			// `Error('x')` constructs as `new Error('x')` does.
 			if (ERRORS[name]) return this.errorValue(name, e.arguments);
+			if (name === 'getComputedStyle') return `({ (_: Any?) -> Any? in JSObject([("getPropertyValue", { (_: [Any?]) -> Any? in "" } as JSFunction)]) }(${arg(0) ? this.coerce(arg(0), 'Any?') : 'nil'}))`;
 			if (decl && /[\\/]lib\.[\w.]*\.d\.ts$/.test(decl.getSourceFile().fileName)) throw this.error(e, `${name}()`, name === 'Object' ? 'object-call' : 'library-member');
 		}
 		// A function the program only declares (`declare function __startCPUProfiler(name)`, which the runtime may provide): the global object's.

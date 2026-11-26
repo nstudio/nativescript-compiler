@@ -4,6 +4,15 @@ import Foundation
 
 public typealias EffectRef = Effect
 
+/// `inject(PendingTasks)`: tracks pending async tasks (no-op in compiled native apps).
+public final class PendingTasks {
+    nonisolated deinit {}
+    public static let shared = PendingTasks()
+    public init() {}
+    public func add() -> () -> Void { {} }
+    public func run<T>(_ task: () throws -> T) rethrows -> T { try task() }
+}
+
 /// `inject(DestroyRef)`: callbacks run when the injecting component's scope ends.
 public final class DestroyRef {
     nonisolated deinit {}
@@ -63,6 +72,10 @@ public final class SimpleChange {
 public protocol JSInjectableType: AnyObject {
     static var jsSharedInstance: Any? { get throws }
     static func jsConstruct() throws -> Any?
+}
+
+public protocol JSTokenKeyed: AnyObject {
+    var jsTokenKey: Any.Type? { get }
 }
 
 public func forwardRef(_ fn: @escaping () throws -> Any?) -> Any? { fn }
@@ -159,6 +172,12 @@ public final class Injector {
         node.entered = current
         current = node
         return node
+    }
+
+    public func provideSelf(_ instance: Any?) {
+        guard let flat = jsFlat(instance) else { return }
+        let obj = flat as AnyObject
+        instanceValues[ObjectIdentifier(type(of: obj))] = obj
     }
 
     public func leave() { Injector.current = entered }
@@ -284,6 +303,7 @@ public final class Injector {
 
     private static func tokenKey(_ token: Any?) -> ObjectIdentifier? {
         guard let token = jsFlat(resolveForwardRef(token)) else { return nil }
+        if let keyed = token as? JSTokenKeyed, let t = keyed.jsTokenKey { return ObjectIdentifier(t) }
         if let type = token as? Any.Type { return ObjectIdentifier(type) }
         return ObjectIdentifier(token as AnyObject)
     }
@@ -504,6 +524,7 @@ public final class Injector {
         if flat is DestroyRef.Type { return DestroyRef.current() }
         if flat is ElementRef.Type { return ElementRef.current() }
         if flat is ApplicationRef.Type { return ApplicationRef.shared }
+        if flat is PendingTasks.Type { return PendingTasks.shared }
         if flat is Location.Type { return Location.shared }
         if flat is ViewContainerRef.Type { return ViewContainerRef() }
         return notFoundValue
@@ -643,8 +664,21 @@ public final class NgZone {
 public final class TemplateRef {
     nonisolated deinit {}
     public let elementRef: ElementRef
+    public var _render: ((Any, Any?) throws -> Void)?
+    public var _detached: ((Any?, Any?) -> EmbeddedViewRef)?
+    private static var stack: [TemplateRef] = []
     public init(_ elementRef: ElementRef = ElementRef()) {
         self.elementRef = elementRef
+    }
+    public func createEmbeddedView(_ context: Any? = nil, _ injector: Any? = nil) -> EmbeddedViewRef {
+        if let detached = _detached { return detached(context, injector) }
+        return EmbeddedViewRef(context)
+    }
+    public static func current() -> TemplateRef { stack.last ?? TemplateRef() }
+    public static func with<T>(_ ref: TemplateRef, _ body: () throws -> T) rethrows -> T {
+        stack.append(ref)
+        defer { stack.removeLast() }
+        return try body()
     }
 }
 
@@ -653,8 +687,17 @@ public final class EmbeddedViewRef {
     public var context: Any?
     public var rootNodes: JSArray<Any?> = JSArray()
     public private(set) var destroyed = false
-    public init(_ context: Any? = nil) { self.context = context }
-    public func destroy() { destroyed = true }
+    private var onDestroyFn: (() -> Void)?
+    public init(_ context: Any? = nil, onDestroy: (() -> Void)? = nil) {
+        self.context = context
+        self.onDestroyFn = onDestroy
+    }
+    public func destroy() {
+        if destroyed { return }
+        destroyed = true
+        onDestroyFn?()
+        onDestroyFn = nil
+    }
     public func detectChanges() {}
     public func markForCheck() {}
 }
@@ -684,17 +727,30 @@ public final class ComponentRef {
 public final class ViewContainerRef {
     nonisolated deinit {}
     public let element = ElementRef()
-    public let injector = Injector.shared
+    public let injector: Injector
     private var views: [EmbeddedViewRef] = []
-    public init() {}
+    public var _mount: ((TemplateRef, Any?) -> EmbeddedViewRef)?
+    public var _clear: (() -> Void)?
+    private static var stack: [ViewContainerRef] = []
+    public init(injector: Injector? = nil) {
+        self.injector = injector ?? Injector.current ?? Injector.shared
+    }
     public var length: Double { Double(views.count) }
     public func clear() {
         for v in views { v.destroy() }
         views.removeAll()
+        _clear?()
     }
     @discardableResult
     public func createEmbeddedView(_ templateRef: Any?, _ context: Any? = nil, _ options: Any? = nil) -> EmbeddedViewRef {
-        let view = EmbeddedViewRef(context)
+        let view: EmbeddedViewRef
+        if let tpl = jsFlat(templateRef) as? TemplateRef, let mount = _mount {
+            view = mount(tpl, context)
+        } else if let tpl = jsFlat(templateRef) as? TemplateRef {
+            view = tpl.createEmbeddedView(context)
+        } else {
+            view = EmbeddedViewRef(context)
+        }
         views.append(view)
         return view
     }
@@ -721,6 +777,12 @@ public final class ViewContainerRef {
             views.remove(at: idx)
         }
     }
+    public static func current() -> ViewContainerRef { stack.last ?? ViewContainerRef() }
+    public static func with<T>(_ ref: ViewContainerRef, _ body: () throws -> T) rethrows -> T {
+        stack.append(ref)
+        defer { stack.removeLast() }
+        return try body()
+    }
 }
 
 public final class ApplicationRef {
@@ -729,7 +791,44 @@ public final class ApplicationRef {
     public let isStable = Emitter<Bool>()
     public init() {}
     public func tick() {}
+    public func attachView(_ view: Any?) {}
+    public func detachView(_ view: Any?) {}
     public func destroy() {}
+}
+
+open class Renderer2 {
+    nonisolated deinit {}
+    public static let shared = Renderer2()
+    public static var current: Renderer2 { Injector.inject(Renderer2.self, JSObject([("optional", true)])) as? Renderer2 ?? shared }
+    public var data: JSObject = JSObject()
+    public init() {}
+    open func destroy() {}
+    open func createElement(_ name: String, _ namespace: String? = nil) -> Any? { JSObject([("tagName", name)]) }
+    open func createComment(_ value: String) -> Any? { JSObject([("comment", value)]) }
+    open func createText(_ value: String) -> Any? { JSObject([("text", value)]) }
+    open func appendChild(_ parent: Any?, _ newChild: Any?) {}
+    open func insertBefore(_ parent: Any?, _ newChild: Any?, _ refChild: Any?, _ isMove: Bool? = nil) {}
+    open func removeChild(_ parent: Any?, _ oldChild: Any?, _ isHostElement: Bool? = nil) {}
+    open func selectRootElement(_ selectorOrNode: Any?, _ preserveContent: Bool? = nil) -> Any? { selectorOrNode }
+    open func parentNode(_ node: Any?) -> Any? { (try? jsGet(node, "parent")) ?? nil }
+    open func nextSibling(_ node: Any?) -> Any? { nil }
+    open func setAttribute(_ el: Any?, _ name: String, _ value: String, _ namespace: String? = nil) { _ = try? jsSet(el, name, value) }
+    open func removeAttribute(_ el: Any?, _ name: String, _ namespace: String? = nil) { _ = try? jsSet(el, name, nil) }
+    open func addClass(_ el: Any?, _ name: String) {}
+    open func removeClass(_ el: Any?, _ name: String) {}
+    open func setStyle(_ el: Any?, _ style: String, _ value: Any?, _ flags: Any? = nil) {}
+    open func removeStyle(_ el: Any?, _ style: String, _ flags: Any? = nil) {}
+    open func setProperty(_ el: Any?, _ name: String, _ value: Any?) { _ = try? jsSet(el, name, value) }
+    open func setValue(_ node: Any?, _ value: String) { _ = try? jsSet(node, "text", value) }
+    open func listen(_ target: Any?, _ eventName: String, _ callback: @escaping (Any?) throws -> Any?) -> () -> Void { {} }
+}
+
+open class RendererFactory2 {
+    nonisolated deinit {}
+    public static let shared = RendererFactory2()
+    public static var current: RendererFactory2 { Injector.inject(RendererFactory2.self, JSObject([("optional", true)])) as? RendererFactory2 ?? shared }
+    public init() {}
+    open func createRenderer(_ hostElement: Any?, _ type: Any? = nil) -> Renderer2 { Renderer2.current }
 }
 
 public final class Location {

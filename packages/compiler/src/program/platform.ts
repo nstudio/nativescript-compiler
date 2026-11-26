@@ -15,7 +15,7 @@ export type { Platform };
 export function foldPlatform(text: string, fileName: string, platform: Platform, modulesDir?: string, defines: readonly (readonly [string, string])[] = []): string {
 	text = applyDefines(text, fileName, defines);
 	// A defined string compared with a literal (`'nativescript' === 'css-tree'`) folds as well.
-	if (!/\b(isIOS|isAndroid|__IOS__|__ANDROID__|__APPLE__|__VISIONOS__|__WINDOWS__|__LINUX__|__DEV__)\b|\bApplication\.(android|ios)\b|import\.meta\.hot|(['"])[^'"\n]*\2\)?\s*[!=]==?\s*\(?['"]/.test(text)) return text;
+	if (!/\b(isIOS|isAndroid|__IOS__|__ANDROID__|__APPLE__|__VISIONOS__|__CATALYST__|__WINDOWS__|__LINUX__|__DEV__)\b|\bApplication\.(android|ios)\b|import\.meta\.hot|(['"])[^'"\n]*\2\)?\s*[!=]==?\s*\(?['"]/.test(text)) return text;
 	// Core's `Application.android` and `Application.ios`, the platform's object or undefined: where the file imports core's Application.
 	const application = /import\s*\{[^}]*\bApplication\b[^}]*\}\s*from\s*['"]@nativescript\/core['"]/.test(text);
 	// A release build: `__DEV__` is false, as the bundlers define it for one.
@@ -26,6 +26,7 @@ export function foldPlatform(text: string, fileName: string, platform: Platform,
 		isAndroid: platform === 'android',
 		__ANDROID__: platform === 'android',
 		__VISIONOS__: false,
+		__CATALYST__: false,
 		__WINDOWS__: false,
 		__LINUX__: false,
 		__DEV__: false,
@@ -80,7 +81,29 @@ function dropUnreferenced(text: string, fileName: string, kind: ts.ScriptKind, m
 			const d = st.declarationList.declarations[0];
 			return ts.isIdentifier(d.name) && (!d.initializer || inert(d.initializer)) && unused(d.name, st);
 		});
-		if (!dead) return text;
+		if (!dead) {
+			// Also drop individual unused non-type named specifiers from a live import (e.g. an Android-only function
+			// guarded by `if (__ANDROID__)` that shares an import declaration with cross-platform symbols).
+			let specEdit: { start: number; end: number } | null = null;
+			for (const st of sf.statements) {
+				if (!ts.isImportDeclaration(st) || !st.importClause || st.importClause.isTypeOnly) continue;
+				const nb = st.importClause.namedBindings;
+				if (!nb || !ts.isNamedImports(nb) || nb.elements.length <= 1) continue;
+				const usedCount = nb.elements.filter((e) => e.isTypeOnly || !unused(e.name, st)).length;
+				if (usedCount === 0 || usedCount === nb.elements.length) continue;
+				const deadEl = nb.elements.find((e) => !e.isTypeOnly && unused(e.name, st));
+				if (deadEl) {
+					const idx = nb.elements.indexOf(deadEl);
+					const start = idx > 0 ? nb.elements[idx - 1].getEnd() : deadEl.getStart(sf);
+					const end = idx > 0 ? deadEl.getEnd() : nb.elements[idx + 1].getStart(sf);
+					specEdit = { start, end };
+					break;
+				}
+			}
+			if (!specEdit) return text;
+			text = apply(text, { span: [specEdit.start, specEdit.end], keep: null });
+			continue;
+		}
 		text = apply(text, { span: [dead.getStart(sf), dead.getEnd()], keep: null });
 	}
 }
@@ -313,7 +336,7 @@ function declaredAround(id: ts.Identifier): boolean {
 		if (ts.isCatchClause(scope) && scope.variableDeclaration && binds(scope.variableDeclaration.name)) return true;
 		if (!(ts.isBlock(scope) || ts.isSourceFile(scope) || ts.isModuleBlock(scope))) continue;
 		for (const st of scope.statements) {
-			if (ts.isVariableStatement(st) && st.declarationList.declarations.some((d) => binds(d.name))) return true;
+			if (ts.isVariableStatement(st) && !st.modifiers?.some((m) => m.kind === ts.SyntaxKind.DeclareKeyword) && st.declarationList.declarations.some((d) => binds(d.name))) return true;
 			if ((ts.isFunctionDeclaration(st) || ts.isClassDeclaration(st)) && st.name?.text === name) return true;
 			if (ts.isImportDeclaration(st) && !(st.moduleSpecifier as ts.StringLiteral).text.startsWith('@nativescript/core')) {
 				const clause = st.importClause;

@@ -1,6 +1,16 @@
 // Syntax-tree questions both backends ask, answered the same way for each.
 import ts from 'typescript';
 
+/** A constructor body's statements excluding any bare `super(...)` call expression statement. */
+export function nonSuperStatements(ctor: ts.ConstructorDeclaration | undefined): ts.Statement[] {
+	return (ctor?.body?.statements ?? []).filter((s) => !(ts.isExpressionStatement(s) && ts.isCallExpression(s.expression) && s.expression.expression.kind === ts.SyntaxKind.SuperKeyword));
+}
+
+/** The `extends` heritage entry of a class, if any. */
+export function extendsHeritage(cls: ts.ClassLikeDeclaration): ts.ExpressionWithTypeArguments | undefined {
+	return cls.heritageClauses?.find((h) => h.token === ts.SyntaxKind.ExtendsKeyword)?.types[0];
+}
+
 /**
  * `o.k = (o = other)`, `o.k += (o = other).k`: an assignment to a member of the variable `o` whose value assigns `o`.
  * Script evaluates the target's object before the value, so the member is written on the object `o` held first.
@@ -263,9 +273,9 @@ export function declaresThis(fn: ts.SignatureDeclaration): boolean {
 	return !!first && ts.isIdentifier(first.name) && first.name.text === 'this' && first.type?.kind !== ts.SyntaxKind.VoidKeyword;
 }
 
-/** A function type or function expression declaring its `this` with a type other than void. */
+/** A function type, function expression or method signature declaring its `this` with a type other than void. */
 export function takesOwnThis(d: ts.Declaration | undefined): boolean {
-	return !!d && (ts.isFunctionTypeNode(d) || ts.isFunctionExpression(d)) && d.parameters.some((q) => ts.isIdentifier(q.name) && q.name.text === 'this' && !!q.type && q.type.kind !== ts.SyntaxKind.VoidKeyword);
+	return !!d && (ts.isFunctionTypeNode(d) || ts.isFunctionExpression(d) || ts.isMethodSignature(d)) && d.parameters.some((q) => ts.isIdentifier(q.name) && q.name.text === 'this' && !!q.type && q.type.kind !== ts.SyntaxKind.VoidKeyword);
 }
 
 /** Whether `this` appears in `e` outside nested functions, methods and classes, which bind their own. */
@@ -306,4 +316,16 @@ export function v8Text(e: ts.Expression): string {
 export function notIterable(e: ts.Expression): string {
 	const x = ts.skipOuterExpressions(e);
 	return ts.isCallExpression(x) ? `${v8Text(x.expression)} is not a function or its return value is not iterable` : `${v8Text(x)} is not iterable`;
+}
+
+/** The `length` property's value expression in `Array.from({ length }, fn)` / `Array.from({ length: n }, fn)`, if present. */
+export function arrayFromLengthInit(obj: ts.ObjectLiteralExpression): ts.Expression | undefined {
+	const length = obj.properties.find((p) => p.name?.getText() === 'length');
+	return length && (ts.isPropertyAssignment(length) ? length.initializer : ts.isShorthandPropertyAssignment(length) ? length.name : undefined);
+}
+
+/** The element types of a spread expression `...x` when `x` is a fixed tuple type; null otherwise. */
+export function tupleSpreadTypes(x: ts.SpreadElement, checker: ts.TypeChecker): readonly ts.Type[] | null {
+	const st = checker.getNonNullableType(checker.getTypeAtLocation(x.expression));
+	return checker.isTupleType(st) ? checker.getTypeArguments(st as ts.TypeReference) : null;
 }

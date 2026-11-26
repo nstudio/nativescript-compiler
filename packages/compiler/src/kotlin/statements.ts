@@ -228,7 +228,16 @@ export const statementsMethods = {
 			});
 		}
 		if (ts.isForInStatement(s)) {
-			const list = s.initializer as ts.VariableDeclarationList;
+			if (!ts.isVariableDeclarationList(s.initializer)) {
+				const k = this.fresh('__key');
+				const assigns = this.assignIterated(s.initializer, k, this.checker.getStringType(), s.expression);
+				return this.loopBody(() => {
+					const label = this.takeLabel();
+					const body = this.block(s.statement);
+					return `${i}${label}for (${k} in ${RT.jsKeysOf}(${this.expr(s.expression)})) {\n${assigns.map((a) => `${i}    ${a}`).join('\n')}\n${body.slice(2)}`;
+				});
+			}
+			const list = s.initializer;
 			const name = ident((list.declarations[0].name as ts.Identifier).text);
 			if (!assignsTo(s.statement, this.checker.getSymbolAtLocation(list.declarations[0].name), this.checker)) return this.loopBody(() => `${i}${this.takeLabel()}for (${name} in ${RT.jsKeysOf}(${this.expr(s.expression)})) ${this.block(s.statement)}`);
 			// A key the body reassigns: a variable of each key (Kotlin's loop variable is a val).

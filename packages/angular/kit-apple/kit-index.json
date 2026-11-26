@@ -64,7 +64,9 @@
 			"kind": "class",
 			"origin": "runtime",
 			"members": {
+				"attachView": [{"kind":"func","type":"Void","params":[{"label":"_","name":"view","type":"Any?"}]}],
 				"destroy": [{"kind":"func","type":"Void","params":[]}],
+				"detachView": [{"kind":"func","type":"Void","params":[{"label":"_","name":"view","type":"Any?"}]}],
 				"init": [{"kind":"init","static":true,"type":"ApplicationRef","params":[]}],
 				"isStable": [{"kind":"var","type":"Emitter<Bool>"}],
 				"shared": [{"kind":"var","static":true,"type":"ApplicationRef"}],
@@ -95,7 +97,16 @@
 			"kind": "class",
 			"origin": "runtime",
 			"members": {
-				"init": [{"kind":"init","static":true,"type":"ComponentFactory","params":[{"label":"_","name":"make","type":"@escaping () throws -> View"}]}]
+				"init": [{"kind":"init","static":true,"type":"ComponentFactory","params":[{"label":"_","name":"componentType","type":"Any.Type?","default":"nil"},{"label":"_","name":"make","type":"@escaping () throws -> View"}]}],
+				"jsTokenKey": [{"kind":"var","type":"Any.Type?"}]
+			}
+		},
+		"ComponentOutlet": {
+			"kind": "enum",
+			"origin": "runtime",
+			"members": {
+				"mount": [{"kind":"func","static":true,"type":"Void","params":[{"label":"_","name":"region","type":"Region"},{"label":"component","name":"component","type":"@escaping () throws -> Any?"},{"label":"injector","name":"injector","type":"(() throws -> Any?)?","default":"nil"},{"label":"inputs","name":"inputs","type":"(() throws -> Any?)?","default":"nil"}]}],
+				"register": [{"kind":"func","static":true,"type":"Void","params":[{"label":"_","name":"type","type":"Any.Type"},{"label":"_","name":"render","type":"@escaping (Region, Any?) throws -> Void"}]}]
 			}
 		},
 		"ComponentRef": {
@@ -170,7 +181,7 @@
 				"destroy": [{"kind":"func","type":"Void","params":[]}],
 				"destroyed": [{"kind":"var","type":"Bool"}],
 				"detectChanges": [{"kind":"func","type":"Void","params":[]}],
-				"init": [{"kind":"init","static":true,"type":"EmbeddedViewRef","params":[{"label":"_","name":"context","type":"Any?","default":"nil"}]}],
+				"init": [{"kind":"init","static":true,"type":"EmbeddedViewRef","params":[{"label":"_","name":"context","type":"Any?","default":"nil"},{"label":"onDestroy","name":"onDestroy","type":"(() -> Void)?","default":"nil"}]}],
 				"markForCheck": [{"kind":"func","type":"Void","params":[]}],
 				"rootNodes": [{"kind":"var","type":"JSArray<Any?>"}]
 			}
@@ -354,6 +365,7 @@
 				"inject": [{"kind":"func","static":true,"type":"Any?","params":[{"label":"_","name":"token","type":"Any?"},{"label":"_","name":"options","type":"Any?","default":"nil"},{"label":"notFoundValue","name":"notFoundValue","type":"Any?","default":"nil"}]}],
 				"leave": [{"kind":"func","type":"Void","params":[]}],
 				"provide": [{"kind":"func","static":true,"type":"Void","params":[{"label":"_","name":"token","type":"Any?"},{"label":"useValue","name":"useValue","type":"Any?","default":"nil"},{"label":"useFactory","name":"useFactory","type":"(() throws -> Any?)?","default":"nil"}]}],
+				"provideSelf": [{"kind":"func","type":"Void","params":[{"label":"_","name":"instance","type":"Any?"}]}],
 				"register": [{"kind":"func","static":true,"type":"Void","params":[{"label":"_","name":"providers","type":"Any?"}]}],
 				"reset": [{"kind":"func","static":true,"type":"Void","params":[]}],
 				"root": [{"kind":"var","static":true,"type":"Injector"}, {"kind":"func","static":true,"type":"T","params":[{"label":"_","name":"make","type":"() throws -> T"}]}, {"kind":"func","static":true,"type":"T","params":[{"label":"_","name":"type","type":"T.Type"},{"label":"_","name":"make","type":"() throws -> T"}],"throws":true}, {"kind":"func","static":true,"type":"T","params":[{"label":"_","name":"type","type":"T.Type"},{"label":"making","name":"make","type":"() -> T"}]}],
@@ -377,6 +389,13 @@
 				"jsNgConstruct": [{"kind":"func","static":true,"type":"Any?","params":[],"throws":true}],
 				"jsNgImports": [{"kind":"var","static":true,"type":"Any?"}],
 				"jsNgProviders": [{"kind":"var","static":true,"type":"Any?"}]
+			}
+		},
+		"JSTokenKeyed": {
+			"kind": "protocol",
+			"origin": "runtime",
+			"members": {
+				"jsTokenKey": [{"kind":"var","type":"Any.Type?"}]
 			}
 		},
 		"LetSlot": {
@@ -498,6 +517,16 @@
 				"keys": [{"kind":"var","type":"JSArray<String>"}]
 			}
 		},
+		"PendingTasks": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"add": [{"kind":"func","type":"() -> Void","params":[]}],
+				"init": [{"kind":"init","static":true,"type":"PendingTasks","params":[]}],
+				"run": [{"kind":"func","type":"T","params":[{"label":"_","name":"task","type":"() throws -> T"}]}],
+				"shared": [{"kind":"var","static":true,"type":"PendingTasks"}]
+			}
+		},
 		"PurePipeCache": {
 			"kind": "class",
 			"origin": "runtime",
@@ -516,6 +545,47 @@
 			"members": {
 				"event": [{"kind":"func","static":true,"type":"Void","params":[{"label":"dirty","name":"view","type":"AngularView?"},{"label":"_","name":"handler","type":"() -> Void"}]}]
 			}
+		},
+		"Renderer2": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"addClass": [{"kind":"func","type":"Void","params":[{"label":"_","name":"el","type":"Any?"},{"label":"_","name":"name","type":"String"}]}],
+				"appendChild": [{"kind":"func","type":"Void","params":[{"label":"_","name":"parent","type":"Any?"},{"label":"_","name":"newChild","type":"Any?"}]}],
+				"createComment": [{"kind":"func","type":"Any?","params":[{"label":"_","name":"value","type":"String"}]}],
+				"createElement": [{"kind":"func","type":"Any?","params":[{"label":"_","name":"name","type":"String"},{"label":"_","name":"namespace","type":"String?","default":"nil"}]}],
+				"createText": [{"kind":"func","type":"Any?","params":[{"label":"_","name":"value","type":"String"}]}],
+				"current": [{"kind":"var","static":true,"type":"Renderer2"}],
+				"data": [{"kind":"var","type":"JSObject"}],
+				"destroy": [{"kind":"func","type":"Void","params":[]}],
+				"init": [{"kind":"init","static":true,"type":"Renderer2","params":[]}],
+				"insertBefore": [{"kind":"func","type":"Void","params":[{"label":"_","name":"parent","type":"Any?"},{"label":"_","name":"newChild","type":"Any?"},{"label":"_","name":"refChild","type":"Any?"},{"label":"_","name":"isMove","type":"Bool?","default":"nil"}]}],
+				"listen": [{"kind":"func","type":"() -> Void","params":[{"label":"_","name":"target","type":"Any?"},{"label":"_","name":"eventName","type":"String"},{"label":"_","name":"callback","type":"@escaping (Any?) throws -> Any?"}]}],
+				"nextSibling": [{"kind":"func","type":"Any?","params":[{"label":"_","name":"node","type":"Any?"}]}],
+				"parentNode": [{"kind":"func","type":"Any?","params":[{"label":"_","name":"node","type":"Any?"}]}],
+				"removeAttribute": [{"kind":"func","type":"Void","params":[{"label":"_","name":"el","type":"Any?"},{"label":"_","name":"name","type":"String"},{"label":"_","name":"namespace","type":"String?","default":"nil"}]}],
+				"removeChild": [{"kind":"func","type":"Void","params":[{"label":"_","name":"parent","type":"Any?"},{"label":"_","name":"oldChild","type":"Any?"},{"label":"_","name":"isHostElement","type":"Bool?","default":"nil"}]}],
+				"removeClass": [{"kind":"func","type":"Void","params":[{"label":"_","name":"el","type":"Any?"},{"label":"_","name":"name","type":"String"}]}],
+				"removeStyle": [{"kind":"func","type":"Void","params":[{"label":"_","name":"el","type":"Any?"},{"label":"_","name":"style","type":"String"},{"label":"_","name":"flags","type":"Any?","default":"nil"}]}],
+				"selectRootElement": [{"kind":"func","type":"Any?","params":[{"label":"_","name":"selectorOrNode","type":"Any?"},{"label":"_","name":"preserveContent","type":"Bool?","default":"nil"}]}],
+				"setAttribute": [{"kind":"func","type":"Void","params":[{"label":"_","name":"el","type":"Any?"},{"label":"_","name":"name","type":"String"},{"label":"_","name":"value","type":"String"},{"label":"_","name":"namespace","type":"String?","default":"nil"}]}],
+				"setProperty": [{"kind":"func","type":"Void","params":[{"label":"_","name":"el","type":"Any?"},{"label":"_","name":"name","type":"String"},{"label":"_","name":"value","type":"Any?"}]}],
+				"setStyle": [{"kind":"func","type":"Void","params":[{"label":"_","name":"el","type":"Any?"},{"label":"_","name":"style","type":"String"},{"label":"_","name":"value","type":"Any?"},{"label":"_","name":"flags","type":"Any?","default":"nil"}]}],
+				"setValue": [{"kind":"func","type":"Void","params":[{"label":"_","name":"node","type":"Any?"},{"label":"_","name":"value","type":"String"}]}],
+				"shared": [{"kind":"var","static":true,"type":"Renderer2"}]
+			},
+			"open": true
+		},
+		"RendererFactory2": {
+			"kind": "class",
+			"origin": "runtime",
+			"members": {
+				"createRenderer": [{"kind":"func","type":"Renderer2","params":[{"label":"_","name":"hostElement","type":"Any?"},{"label":"_","name":"type","type":"Any?","default":"nil"}]}],
+				"current": [{"kind":"var","static":true,"type":"RendererFactory2"}],
+				"init": [{"kind":"init","static":true,"type":"RendererFactory2","params":[]}],
+				"shared": [{"kind":"var","static":true,"type":"RendererFactory2"}]
+			},
+			"open": true
 		},
 		"ResolveEnd": {
 			"kind": "class",
@@ -643,6 +713,7 @@
 			"origin": "runtime",
 			"members": {
 				"asObservable": [{"kind":"func","type":"RxObservable<T>","params":[]}],
+				"complete": [{"kind":"func","type":"Void","params":[]}],
 				"init": [{"kind":"init","static":true,"type":"RxSubject","params":[]}],
 				"next": [{"kind":"func","type":"Void","params":[{"label":"_","name":"value","type":"T"}]}, {"kind":"func","type":"Void","params":[]}],
 				"subscribe": [{"kind":"func","type":"TeardownHandle","params":[{"label":"_","name":"next","type":"@escaping (T) -> Void"}]}]
@@ -667,12 +738,33 @@
 				"init": [{"kind":"init","static":true,"type":"SkipSelf","params":[]}]
 			}
 		},
+		"StructuralDirective": {
+			"kind": "enum",
+			"origin": "runtime",
+			"members": {
+				"scope": [{"kind":"func","static":true,"type":"T","params":[{"label":"_","name":"region","type":"Region"},{"label":"_","name":"template","type":"TemplateRef"},{"label":"_","name":"body","type":"() throws -> T"}]}]
+			}
+		},
+		"TemplateOutlet": {
+			"kind": "enum",
+			"origin": "runtime",
+			"members": {
+				"bind": [{"kind":"func","static":true,"type":"Void","params":[{"label":"_","name":"ref","type":"TemplateRef"},{"label":"_","name":"render","type":"@escaping (Region, Any?) throws -> Void"}]}],
+				"make": [{"kind":"func","static":true,"type":"TemplateRef","params":[{"label":"_","name":"render","type":"@escaping (Region, Any?) throws -> Void"}]}],
+				"mount": [{"kind":"func","static":true,"type":"Void","params":[{"label":"_","name":"region","type":"Region"},{"label":"template","name":"template","type":"@escaping () throws -> Any?"},{"label":"context","name":"context","type":"(() throws -> Any?)?","default":"nil"}]}]
+			}
+		},
 		"TemplateRef": {
 			"kind": "class",
 			"origin": "runtime",
 			"members": {
+				"_detached": [{"kind":"var","type":"((Any?, Any?) -> EmbeddedViewRef)?"}],
+				"_render": [{"kind":"var","type":"((Any, Any?) throws -> Void)?"}],
+				"createEmbeddedView": [{"kind":"func","type":"EmbeddedViewRef","params":[{"label":"_","name":"context","type":"Any?","default":"nil"},{"label":"_","name":"injector","type":"Any?","default":"nil"}]}],
+				"current": [{"kind":"func","static":true,"type":"TemplateRef","params":[]}],
 				"elementRef": [{"kind":"var","type":"ElementRef"}],
-				"init": [{"kind":"init","static":true,"type":"TemplateRef","params":[{"label":"_","name":"elementRef","type":"ElementRef","default":"ElementRef()"}]}]
+				"init": [{"kind":"init","static":true,"type":"TemplateRef","params":[{"label":"_","name":"elementRef","type":"ElementRef","default":"ElementRef()"}]}],
+				"with": [{"kind":"func","static":true,"type":"T","params":[{"label":"_","name":"ref","type":"TemplateRef"},{"label":"_","name":"body","type":"() throws -> T"}]}]
 			}
 		},
 		"UrlSegment": {
@@ -701,14 +793,18 @@
 			"kind": "class",
 			"origin": "runtime",
 			"members": {
+				"_clear": [{"kind":"var","type":"(() -> Void)?"}],
+				"_mount": [{"kind":"var","type":"((TemplateRef, Any?) -> EmbeddedViewRef)?"}],
 				"clear": [{"kind":"func","type":"Void","params":[]}],
 				"createComponent": [{"kind":"func","type":"ComponentRef","params":[{"label":"_","name":"componentType","type":"Any?"},{"label":"_","name":"options","type":"Any?","default":"nil"}]}],
 				"createEmbeddedView": [{"kind":"func","type":"EmbeddedViewRef","params":[{"label":"_","name":"templateRef","type":"Any?"},{"label":"_","name":"context","type":"Any?","default":"nil"},{"label":"_","name":"options","type":"Any?","default":"nil"}]}],
+				"current": [{"kind":"func","static":true,"type":"ViewContainerRef","params":[]}],
 				"element": [{"kind":"var","type":"ElementRef"}],
-				"init": [{"kind":"init","static":true,"type":"ViewContainerRef","params":[]}],
+				"init": [{"kind":"init","static":true,"type":"ViewContainerRef","params":[{"label":"injector","name":"injector","type":"Injector?","default":"nil"}]}],
 				"injector": [{"kind":"var","type":"Injector"}],
 				"length": [{"kind":"var","type":"Double"}],
-				"remove": [{"kind":"func","type":"Void","params":[{"label":"_","name":"index","type":"Double?","default":"nil"}]}]
+				"remove": [{"kind":"func","type":"Void","params":[{"label":"_","name":"index","type":"Double?","default":"nil"}]}],
+				"with": [{"kind":"func","static":true,"type":"T","params":[{"label":"_","name":"ref","type":"ViewContainerRef"},{"label":"_","name":"body","type":"() throws -> T"}]}]
 			}
 		},
 		"Zone": {
@@ -733,6 +829,7 @@
 		"HttpStatusCode": [{"kind":"var","static":true,"type":"JSObject","origin":"runtime"}],
 		"PLATFORM_ID": [{"kind":"var","static":true,"type":"InjectionToken","origin":"runtime"}],
 		"ViewChecked": [{"kind":"func","static":true,"type":"Void","params":[{"label":"_","name":"hook","type":"@escaping () -> Void"}],"origin":"runtime"}],
+		"booleanAttribute": [{"kind":"func","static":true,"type":"Bool","params":[{"label":"_","name":"value","type":"Any?"}],"origin":"runtime"}],
 		"bootstrapApplication": [{"kind":"func","static":true,"type":"JSPromise<Any?>","params":[{"label":"_","name":"rootComponent","type":"Any?"},{"label":"_","name":"options","type":"Any?","default":"nil"}],"origin":"runtime"}],
 		"convertToParamMap": [{"kind":"func","static":true,"type":"ParamMap","params":[{"label":"_","name":"params","type":"Any?"}],"origin":"runtime"}],
 		"createRouterStateSnapshot": [{"kind":"func","static":true,"type":"JSObject","params":[{"label":"_","name":"url","type":"String","default":"\"/\""}],"origin":"runtime"}],
@@ -743,6 +840,7 @@
 		"isPlatformServer": [{"kind":"func","static":true,"type":"Bool","params":[{"label":"_","name":"platformId","type":"Any?"}],"origin":"runtime"}],
 		"makeEnvironmentProviders": [{"kind":"func","static":true,"type":"Any?","params":[{"label":"_","name":"providers","type":"Any?"}],"origin":"runtime"}],
 		"map": [{"kind":"func","static":true,"type":"RxOperatorFunction<T, R>","params":[{"label":"_","name":"project","type":"@escaping (T, Double) throws -> R"}],"origin":"runtime"}, {"kind":"func","static":true,"type":"RxOperatorFunction<T, R>","params":[{"label":"_","name":"project","type":"@escaping (T) throws -> R"}],"origin":"runtime"}],
+		"numberAttribute": [{"kind":"func","static":true,"type":"Double","params":[{"label":"_","name":"value","type":"Any?"},{"label":"_","name":"fallbackValue","type":"Double","default":".nan"}],"origin":"runtime"}],
 		"provideAppInitializer": [{"kind":"func","static":true,"type":"Any?","params":[{"label":"_","name":"fn","type":"@escaping () throws -> Any?"}],"origin":"runtime"}],
 		"provideEnvironmentInitializer": [{"kind":"func","static":true,"type":"Any?","params":[{"label":"_","name":"fn","type":"@escaping () throws -> Any?"}],"origin":"runtime"}],
 		"provideHttpClient": [{"kind":"func","static":true,"type":"Any?","params":[{"label":"_","name":"features","type":"Any?..."}],"origin":"runtime"}],

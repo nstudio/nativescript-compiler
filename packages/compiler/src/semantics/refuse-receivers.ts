@@ -3,7 +3,7 @@
 // prototype the runtimes have no object for. Each decision is made here once; both backends throw what it returns.
 import ts from 'typescript';
 import type { RefusalId } from './refusals.ts';
-import { isLibDeclaration, isWriteTarget } from './ast.ts';
+import { declaresThis, isLibDeclaration, isWriteTarget } from './ast.ts';
 import { aliasedPrototypeMember } from './lang.ts';
 import { programBase } from './classes.ts';
 import { BUFFER_TYPES, TYPED_ARRAYS } from './globals.ts';
@@ -74,7 +74,7 @@ export function builtinMethodReceiver(e: ts.CallExpression, checker: ts.TypeChec
 	if ((ts.isObjectLiteralExpression(value) && !value.properties.length) || (ts.isArrayLiteralExpression(value) && !value.elements.length)) return undefined;
 	const member = checker.getSymbolAtLocation(target.name);
 	if (!libDeclared(member) || !member!.declarations!.every((d) => ts.isMethodSignature(d) || ts.isMethodDeclaration(d))) return undefined;
-	if (member!.declarations!.some((d) => ts.isInterfaceDeclaration(d.parent) && ['Function', 'CallableFunction', 'NewableFunction'].includes(d.parent.name.text))) return undefined;
+	if (member!.declarations!.some((d) => ts.isInterfaceDeclaration(d.parent) && ['Function', 'CallableFunction', 'NewableFunction', 'PropertyDescriptor'].includes(d.parent.name.text))) return undefined;
 	let root: ts.Expression = value;
 	while (ts.isPropertyAccessExpression(root) || ts.isElementAccessExpression(root)) root = unwrap(root.expression);
 	if (ts.isIdentifier(root) && libDeclared(checker.getSymbolAtLocation(root))) return undefined;
@@ -108,7 +108,7 @@ export function programMethodReceiver(e: ts.CallExpression, checker: ts.TypeChec
 	const member = checker.getSymbolAtLocation(access.name);
 	if (!member || libDeclared(member)) return undefined;
 	const decl = member.declarations?.find((d) => ts.isMethodDeclaration(d) && !!d.body) ?? member.valueDeclaration;
-	if (!decl || !(ts.isMethodDeclaration(decl) || ts.isMethodSignature(decl))) return undefined;
+	if (!decl || !(ts.isMethodDeclaration(decl) || (ts.isMethodSignature(decl) && !declaresThis(decl)))) return undefined;
 	const receiver = e.arguments[0];
 	const plain = (x: ts.Expression): boolean => x.kind === ts.SyntaxKind.ThisKeyword || ts.isIdentifier(x) || ts.isLiteralExpression(x) || (ts.isPropertyAccessExpression(x) && plain(x.expression));
 	if (receiver && !ts.isSpreadElement(receiver) && plain(receiver) && receiver.getText() === value.getText()) return undefined;

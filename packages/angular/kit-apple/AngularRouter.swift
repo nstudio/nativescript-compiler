@@ -653,3 +653,108 @@ private func field(_ object: Any?, _ key: String) -> Any? { object == nil ? nil 
 
 public typealias KitRouter = Router
 public typealias KitActivatedRoute = ActivatedRoute
+
+/// Runtime registry and mount helper for Angular's `[ngComponentOutlet]` / `*ngComponentOutlet`.
+public enum ComponentOutlet {
+    private static var factories: [ObjectIdentifier: (Region, Any?) throws -> Void] = [:]
+
+    public static func register(_ type: Any.Type, _ render: @escaping (Region, Any?) throws -> Void) {
+        factories[ObjectIdentifier(type)] = render
+    }
+
+    public static func mount(_ region: Region, component: @escaping () throws -> Any?, injector: (() throws -> Any?)? = nil, inputs: (() throws -> Any?)? = nil) {
+        var currentType: ObjectIdentifier? = nil
+        var branchOwner: Owner? = nil
+        Owner.current?.onCleanup { branchOwner?.dispose() }
+        Effect {
+            let raw = (try? component()) ?? nil
+            let flat = jsFlat(raw)
+            let metatype = flat as? Any.Type
+            let id = metatype.map { ObjectIdentifier($0) }
+            if id == currentType { return }
+            currentType = id
+            let inj = ((try? injector?()) ?? nil).flatMap { jsFlat($0) as? Injector }
+            let inp = (try? inputs?()) ?? nil
+            untrack {
+                branchOwner?.dispose()
+                branchOwner = nil
+                guard let id, let factory = factories[id] else {
+                    region.set([])
+                    return
+                }
+                let owner = Owner(parent: nil)
+                branchOwner = owner
+                let run: () throws -> Void = { try owner.run { try factory(region, inp) } }
+                jsReport {
+                    if let inj { try Injector.runInContext(inj, run) }
+                    else { try run() }
+                }
+            }
+        }
+    }
+}
+
+/// Runtime helper for dynamic/recursive `[ngTemplateOutlet]` / `*ngTemplateOutlet` and `TemplateRef` closures.
+public enum TemplateOutlet {
+    public static func bind(_ ref: TemplateRef, _ render: @escaping (Region, Any?) throws -> Void) {
+        ref._render = { anyRegion, ctx in
+            if let region = anyRegion as? Region { try render(region, ctx) }
+        }
+        ref._detached = { ctx, injector in
+            let owner = Owner(parent: nil)
+            let region = Region(host: nil)
+            let run: () throws -> Void = { try owner.run { try render(region, ctx) } }
+            jsReport {
+                if let inj = jsFlat(injector) as? Injector { try Injector.runInContext(inj, run) }
+                else { try run() }
+            }
+            let view = EmbeddedViewRef(ctx) { owner.dispose() }
+            return view
+        }
+    }
+
+    public static func make(_ render: @escaping (Region, Any?) throws -> Void) -> TemplateRef {
+        let ref = TemplateRef()
+        bind(ref, render)
+        return ref
+    }
+
+    public static func mount(_ region: Region, template: @escaping () throws -> Any?, context: (() throws -> Any?)? = nil) {
+        var branchOwner: Owner? = nil
+        Owner.current?.onCleanup { branchOwner?.dispose() }
+        Effect {
+            let tpl = jsFlat((try? template()) ?? nil) as? TemplateRef
+            let ctx = (try? context?()) ?? nil
+            untrack {
+                branchOwner?.dispose()
+                branchOwner = nil
+                guard let tpl, let render = tpl._render else {
+                    region.set([])
+                    return
+                }
+                let owner = Owner(parent: nil)
+                branchOwner = owner
+                jsReport { try owner.run { try render(region, ctx) } }
+            }
+        }
+    }
+}
+
+/// Scopes `TemplateRef.current()` and `ViewContainerRef.current()` for custom structural directives (`*myDir`).
+public enum StructuralDirective {
+    public static func scope<T>(_ region: Region, _ template: TemplateRef, _ body: () throws -> T) rethrows -> T {
+        let vcr = ViewContainerRef()
+        vcr._clear = { region.set([]) }
+        vcr._mount = { tpl, ctx in
+            let owner = Owner(parent: nil)
+            jsReport { try owner.run { try tpl._render?(region, ctx) } }
+            return EmbeddedViewRef(ctx) {
+                owner.dispose()
+                region.set([])
+            }
+        }
+        return try TemplateRef.with(template) {
+            try ViewContainerRef.with(vcr, body)
+        }
+    }
+}

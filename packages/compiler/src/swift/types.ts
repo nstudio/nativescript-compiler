@@ -9,7 +9,7 @@ import { ambientAddedMemberOf, ambientBase, augmentedPropertyRead, evolvingArray
 import { nullishSignalType } from '../semantics/signals.ts';
 import { hasModifier, isLibDeclaration, isSymbolIterator, isWriteTarget, implementationOf, declaresThis } from '../semantics/ast.ts';
 import { isCoreDeclaration } from '../program/core-facts.ts';
-import { coreTypeKind, eventDataTypeLiteral, isJsDocConstructorFunction, isKit, isLibObjectType, isUntyped, libraryNativeType, libraryType, mappedOrErasedType, nonNullableInner, nonOptionalSpelling, parseNativeType, spelledType } from '../semantics/types.ts';
+import { coreTypeKind, eventDataTypeLiteral, hasMappedIntersection, isJsDocConstructorFunction, isKit, isLibObjectType, isUntyped, libraryNativeType, libraryType, mappedOrErasedType, nonNullableInner, nonOptionalSpelling, parseNativeType, spelledType, valueModuleKind } from '../semantics/types.ts';
 import { keepsIdentity } from '../semantics/conversion.ts';
 import { extendedClass, isEventData } from '../semantics/classes.ts';
 import { otherPlatformTypings } from '../semantics/platform-globals.ts';
@@ -52,9 +52,9 @@ export const typesMethods = {
 			const native = present !== t && present.flags & F.EnumLike ? this.native.type(present) : null;
 			if (native) return optionalType(native);
 		}
-		// A namespace as a value (`{ Accuracy: CoreTypes.Accuracy }`): its enum's metatype.
-		const nsDecl = t.flags & F.Object && t.getSymbol()?.flags! & ts.SymbolFlags.ValueModule ? t.getSymbol()!.valueDeclaration : undefined;
-		if (nsDecl && ts.isModuleDeclaration(nsDecl) && !nsDecl.getSourceFile().isDeclarationFile) return `${this.namespacePath(nsDecl)}.Type`;
+		// A namespace as a value (`{ Accuracy: CoreTypes.Accuracy }`) or an ES module namespace (`typeof import('...')`).
+		const ns = valueModuleKind(t);
+		if (ns) return ns === 'module' ? 'Any?' : `${this.namespacePath(ns)}.Type`;
 		// An enum as a value (`typeof AccessibilityRole`): the object JavaScript makes of it.
 		// Not the enum's own name, through which its members are read (`Status.Denied`).
 		const enumObject = t.flags & F.Object && (t.getSymbol()?.flags ?? 0) & ts.SymbolFlags.RegularEnum ? t.getSymbol()!.valueDeclaration : undefined;
@@ -71,10 +71,10 @@ export const typesMethods = {
 		const constraint = (t as ts.TypeParameter & { isThisType?: boolean }).isThisType ? t.getConstraint() : undefined;
 		if (constraint) return this.type(constraint, where);
 		const decl = t.symbol?.declarations?.[0];
+		if (decl && ts.isTypeParameterDeclaration(decl) && (this.erasesGenerics(decl.parent) || this.erasesTypeParameter(decl))) return 'Any?';
 		if (decl && this.pluginFiles.has(decl.getSourceFile().fileName) && !(ts.isTypeParameterDeclaration(decl) && this.keepsGenerics(decl.parent))) return 'Any?';
 		// A library's generic signature (`ClassDecorator`'s `TFunction`) in library mode: erased as the program's own are.
 		if (decl && this.library && decl.getSourceFile().isDeclarationFile) return 'Any?';
-		if (decl && ts.isTypeParameterDeclaration(decl) && this.erasesTypeParameter(decl)) return 'Any?';
 		// Inside an object shape, a class of its own outside every generic scope: any value.
 		if (this.shaping.size) return 'Any?';
 		return t.symbol?.name ?? 'Any?';
@@ -105,7 +105,7 @@ export const typesMethods = {
 		const param = t.types.find((u) => u.flags & F.TypeParameter);
 		const inNarrowing = (u: ts.Type) => !!(u.flags & F.Object) && !u.getCallSignatures().length && u.getProperties().every((p) => c.getTypeOfSymbol(p).flags & F.Unknown);
 		if (param && (isUntyped(spelledType(this.type(param, where))) || t.types.every((u) => u === param || inNarrowing(u)))) return this.type(param, where);
-		if (membersOverTypeParameter(t, c)) return 'Any?';
+		if (membersOverTypeParameter(t, c) || hasMappedIntersection(t)) return 'Any?';
 		// A function carrying properties (`((p: P) => R) & { type: string }`): an untyped value, called as script calls it.
 		if (t.types.some((u) => u.getCallSignatures().length) && t.types.some((u) => !u.getCallSignatures().length && u.getProperties().length) && !t.types.some((u) => isLibDeclaration(u.getSymbol()?.declarations?.[0]))) return 'Any?';
 		// Interfaces each held untyped (core's `BackstackEntry & ExpandedEntry`): untyped too. A shape would be a copy, so
@@ -213,7 +213,7 @@ export const typesMethods = {
 			// A function type reading the receiver it is called with (`(this: Action, state) => void`): a script function, as
 			// `call`/`apply` pass that receiver and a Swift closure has none.
 			const sd = s.getDeclaration() as ts.SignatureDeclaration | undefined;
-			if (sd && (ts.isFunctionTypeNode(sd) || ts.isFunctionExpression(sd) || ts.isFunctionDeclaration(sd)) && declaresThis(sd)) return 'Any?';
+			if (sd && (ts.isFunctionTypeNode(sd) || ts.isFunctionExpression(sd) || ts.isFunctionDeclaration(sd) || ts.isMethodSignature(sd)) && declaresThis(sd)) return 'Any?';
 			if (sd && ts.isFunctionExpression(sd) && this.readsArguments(sd)) {
 				const ret = this.widenedResultType(sd, this.type(s.getReturnType(), where));
 				return `(JSArray<Any?>) throws -> ${ret}`;

@@ -22,7 +22,7 @@ export const namesMethods = {
 		if (thisFn) {
 			const declared = declaresThis(thisFn);
 			const params = declared ? thisFn.parameters.slice(1) : [...thisFn.parameters];
-			const args = params.map((p, k) => this.fromAnyCode(`${RT.jsArg}(__a, ${k})`, this.paramType(p), true));
+			const args = this.readsArguments(thisFn) ? ['JSArray<Any?>(__a)'] : params.map((p, k) => this.fromAnyCode(`${RT.jsArg}(__a, ${k})`, this.paramType(p), true));
 			const self = declared ? this.paramType(thisFn.parameters[0]) : 'Any?';
 			const call = this.marks.tryIf(this.throwsInfo.fn(thisFn), `${this.refName(e)}(${[isUntyped(spelledType(self)) ? '__this' : this.fromAnyCode('__this', self, true), ...args].join(', ')})`);
 			const ret = this.returnTypeOf(thisFn);

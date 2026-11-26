@@ -6,6 +6,16 @@ import java.util.IdentityHashMap
 
 typealias EffectRef = Effect
 
+/** `inject(PendingTasks)`: tracks pending async tasks (no-op in compiled native apps). */
+class PendingTasks {
+    fun add(): () -> Unit = {}
+    fun <T> run(task: () -> T): T = task()
+
+    companion object {
+        val shared = PendingTasks()
+    }
+}
+
 /** `inject(DestroyRef)`: callbacks run when the injecting component's scope ends. */
 class DestroyRef internal constructor(owner: Owner?) {
     private val owner = java.lang.ref.WeakReference(owner)
@@ -121,6 +131,10 @@ object AppInjector {
     }
 }
 
+interface JSTokenKeyed {
+    val jsTokenKey: Class<*>?
+}
+
 typealias NodeInjector = Injector
 
 class Injector(providers: Any? = null, private val parent: Injector? = null) {
@@ -217,6 +231,11 @@ class Injector(providers: Any? = null, private val parent: Injector? = null) {
         walk(providers)
     }
 
+    fun provideSelf(instance: Any?) {
+        val obj = jsBox(instance) ?: return
+        instanceValues[obj::class.java] = obj
+    }
+
     fun leave() {
         current = entered
     }
@@ -239,7 +258,10 @@ class Injector(providers: Any? = null, private val parent: Injector? = null) {
         private val tokenFactories = IdentityHashMap<Any, () -> Any?>()
         private val multiFactories = IdentityHashMap<Any, MutableList<() -> Any?>>()
 
-        private fun tokenKey(token: Any?): Any? = jsBox(resolveForwardRef(token))
+        private fun tokenKey(token: Any?): Any? {
+            val unwrapped = jsBox(resolveForwardRef(token))
+            return (unwrapped as? JSTokenKeyed)?.jsTokenKey ?: unwrapped
+        }
 
         /** The `ErrorHandler` the app provides, which hears what no script code caught, as Angular's zone hands it over. */
         /** `inject(ErrorHandler)`: the one provided, else Angular's own. */
@@ -481,6 +503,7 @@ class Injector(providers: Any? = null, private val parent: Injector? = null) {
                     DestroyRef::class.java -> return DestroyRef.current()
                     ElementRef::class.java -> return ElementRef.current()
                     ApplicationRef::class.java -> return ApplicationRef.shared
+                    PendingTasks::class.java -> return PendingTasks.shared
                     Location::class.java -> return Location.shared
                     ViewContainerRef::class.java -> return ViewContainerRef()
                 }
@@ -594,13 +617,33 @@ class NgZone {
     }
 }
 
-class TemplateRef(val elementRef: ElementRef = ElementRef())
+class TemplateRef(val elementRef: ElementRef = ElementRef()) {
+    var _render: ((Any, Any?) -> Unit)? = null
+    var _detached: ((Any?, Any?) -> EmbeddedViewRef)? = null
 
-class EmbeddedViewRef(var context: Any? = null) {
+    fun createEmbeddedView(context: Any? = null, injector: Any? = null): EmbeddedViewRef =
+        _detached?.invoke(context, injector) ?: EmbeddedViewRef(context)
+
+    companion object {
+        private val stack = mutableListOf<TemplateRef>()
+        fun current(): TemplateRef = stack.lastOrNull() ?: TemplateRef()
+        fun <T> with(ref: TemplateRef, body: () -> T): T {
+            stack.add(ref)
+            try { return body() } finally { stack.removeAt(stack.lastIndex) }
+        }
+    }
+}
+
+class EmbeddedViewRef(var context: Any? = null, private var onDestroyFn: (() -> Unit)? = null) {
     var rootNodes: JSArray<Any?> = JSArray()
     var destroyed: Boolean = false
         private set
-    fun destroy() { destroyed = true }
+    fun destroy() {
+        if (destroyed) return
+        destroyed = true
+        onDestroyFn?.invoke()
+        onDestroyFn = null
+    }
     fun detectChanges() {}
     fun markForCheck() {}
 }
@@ -618,17 +661,24 @@ class ComponentRef(
     fun destroy() { hostView.destroy() }
 }
 
-class ViewContainerRef {
+class ViewContainerRef(val injector: Injector = Injector.current ?: Injector.shared) {
     val element = ElementRef()
-    val injector = Injector.shared
     private val views = mutableListOf<EmbeddedViewRef>()
+    var _mount: ((TemplateRef, Any?) -> EmbeddedViewRef)? = null
+    var _clear: (() -> Unit)? = null
     val length: Double get() = views.size.toDouble()
     fun clear() {
         for (v in views) v.destroy()
         views.clear()
+        _clear?.invoke()
     }
-    fun createEmbeddedView(@Suppress("UNUSED_PARAMETER") templateRef: Any?, context: Any? = null, @Suppress("UNUSED_PARAMETER") options: Any? = null): EmbeddedViewRef {
-        val view = EmbeddedViewRef(context)
+    fun createEmbeddedView(templateRef: Any?, context: Any? = null, @Suppress("UNUSED_PARAMETER") options: Any? = null): EmbeddedViewRef {
+        val tpl = jsBox(templateRef) as? TemplateRef
+        val view = when {
+            tpl != null && _mount != null -> _mount!!.invoke(tpl, context)
+            tpl != null -> tpl.createEmbeddedView(context)
+            else -> EmbeddedViewRef(context)
+        }
         views.add(view)
         return view
     }
@@ -655,14 +705,60 @@ class ViewContainerRef {
             views.removeAt(idx)
         }
     }
+
+    companion object {
+        private val stack = mutableListOf<ViewContainerRef>()
+        fun current(): ViewContainerRef = stack.lastOrNull() ?: ViewContainerRef()
+        fun <T> with(ref: ViewContainerRef, body: () -> T): T {
+            stack.add(ref)
+            try { return body() } finally { stack.removeAt(stack.lastIndex) }
+        }
+    }
 }
 
 class ApplicationRef {
     val isStable = Emitter<Boolean>()
     fun tick() {}
+    fun attachView(@Suppress("UNUSED_PARAMETER") view: Any?) {}
+    fun detachView(@Suppress("UNUSED_PARAMETER") view: Any?) {}
     fun destroy() {}
     companion object {
         val shared = ApplicationRef()
+    }
+}
+
+open class Renderer2 {
+    val data: JSObject = JSObject()
+    open fun destroy() {}
+    open fun createElement(name: String, @Suppress("UNUSED_PARAMETER") namespace: String? = null): Any? = JSObject("tagName" to name)
+    open fun createComment(value: String): Any? = JSObject("comment" to value)
+    open fun createText(value: String): Any? = JSObject("text" to value)
+    open fun appendChild(@Suppress("UNUSED_PARAMETER") parent: Any?, @Suppress("UNUSED_PARAMETER") newChild: Any?) {}
+    open fun insertBefore(@Suppress("UNUSED_PARAMETER") parent: Any?, @Suppress("UNUSED_PARAMETER") newChild: Any?, @Suppress("UNUSED_PARAMETER") refChild: Any?, @Suppress("UNUSED_PARAMETER") isMove: Boolean? = null) {}
+    open fun removeChild(@Suppress("UNUSED_PARAMETER") parent: Any?, @Suppress("UNUSED_PARAMETER") oldChild: Any?, @Suppress("UNUSED_PARAMETER") isHostElement: Boolean? = null) {}
+    open fun selectRootElement(selectorOrNode: Any?, @Suppress("UNUSED_PARAMETER") preserveContent: Boolean? = null): Any? = selectorOrNode
+    open fun parentNode(node: Any?): Any? = jsGetOptional(node, "parent")
+    open fun nextSibling(@Suppress("UNUSED_PARAMETER") node: Any?): Any? = null
+    open fun setAttribute(el: Any?, name: String, value: String, @Suppress("UNUSED_PARAMETER") namespace: String? = null) { jsSet(el, name, value) }
+    open fun removeAttribute(el: Any?, name: String, @Suppress("UNUSED_PARAMETER") namespace: String? = null) { jsSet(el, name, null) }
+    open fun addClass(@Suppress("UNUSED_PARAMETER") el: Any?, @Suppress("UNUSED_PARAMETER") name: String) {}
+    open fun removeClass(@Suppress("UNUSED_PARAMETER") el: Any?, @Suppress("UNUSED_PARAMETER") name: String) {}
+    open fun setStyle(@Suppress("UNUSED_PARAMETER") el: Any?, @Suppress("UNUSED_PARAMETER") style: String, @Suppress("UNUSED_PARAMETER") value: Any?, @Suppress("UNUSED_PARAMETER") flags: Any? = null) {}
+    open fun removeStyle(@Suppress("UNUSED_PARAMETER") el: Any?, @Suppress("UNUSED_PARAMETER") style: String, @Suppress("UNUSED_PARAMETER") flags: Any? = null) {}
+    open fun setProperty(el: Any?, name: String, value: Any?) { jsSet(el, name, value) }
+    open fun setValue(node: Any?, value: String) { jsSet(node, "text", value) }
+    open fun listen(@Suppress("UNUSED_PARAMETER") target: Any?, @Suppress("UNUSED_PARAMETER") eventName: String, @Suppress("UNUSED_PARAMETER") callback: (Any?) -> Any?): () -> Unit = {}
+    companion object {
+        val shared = Renderer2()
+        val current: Renderer2 get() = Injector.inject(Renderer2::class.java, JSObject("optional" to true)) as? Renderer2 ?: shared
+    }
+}
+
+open class RendererFactory2 {
+    open fun createRenderer(@Suppress("UNUSED_PARAMETER") hostElement: Any?, @Suppress("UNUSED_PARAMETER") type: Any? = null): Renderer2 = Renderer2.current
+    companion object {
+        val shared = RendererFactory2()
+        val current: RendererFactory2 get() = Injector.inject(RendererFactory2::class.java, JSObject("optional" to true)) as? RendererFactory2 ?: shared
     }
 }
 

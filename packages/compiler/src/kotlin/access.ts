@@ -2,7 +2,9 @@
 import { heldLoss } from '../semantics/losses.ts';
 import ts from 'typescript';
 import { propSignal } from '../semantics/signals.ts';
-import { LIB_CONSTANTS, MATH } from './library.ts';
+import { KIT_NAMES_ANDROID, LIB_CONSTANTS, MATH } from './library.ts';
+import { prototypeClassSymbol } from '../semantics/classes.ts';
+import { isCoreDeclaration } from '../program/core-facts.ts';
 import { mathFunctionValue } from '../semantics/apis/math.ts';
 import { CONSOLE } from '../semantics/apis/console.ts';
 import { libFunctionValueKind } from '../semantics/apis/statics.ts';
@@ -76,8 +78,13 @@ export const accessMethods = {
 		if (name === 'prototype') this.refuseClassPrototype(e);
 		// `Function.prototype`: a function doing nothing.
 		if (name === 'prototype' && ts.isIdentifier(target) && target.text === 'Function' && this.resolve(target)?.declarations?.every((d) => d.getSourceFile().isDeclarationFile)) return 'JSFunction { null }';
-		// Library mode: a class's prototype, the registry's object for it.
-		if (name === 'prototype' && this.resolve(target)?.flags! & ts.SymbolFlags.Class && !this.resolve(target)?.declarations?.every((d) => d.getSourceFile().isDeclarationFile)) return `JSPrototypes.of(${this.expr(target)}::class.java)`;
+		// A class's prototype, the registry's object for it.
+		const protoSym = prototypeClassSymbol(target, name, this);
+		if (protoSym) {
+			const declOnly = protoSym.declarations?.every((d) => d.getSourceFile().isDeclarationFile);
+			const clsName = declOnly ? (isCoreDeclaration(protoSym.declarations?.[0]) ? (KIT_NAMES_ANDROID[protoSym.name] ?? protoSym.name) : null) : this.expr(target);
+			if (clsName) return `JSPrototypes.of(${clsName}::class.java)`;
+		}
 		if (ts.isIdentifier(target) && isLibGlobal(this, target)) {
 			const constant = LIB_CONSTANTS[`${target.text}.${name}`];
 			if (constant) return constant;
@@ -91,6 +98,9 @@ export const accessMethods = {
 				return this.convert(`{ __args: JSArray<Any?> -> ${fn}(*__args.storage.toTypedArray()) }`, '(JSArray<Any?>) -> Unit', this.typeOf(e));
 			}
 			if (libFn === 'fromCharCode') return this.convert(`{ __args: JSArray<Double> -> ${RT.jsFromCharCode}(*__args.storage.toDoubleArray()) }`, '(JSArray<Double>) -> String', this.typeOf(e));
+			if (libFn === 'fromCodePoint') return this.convert(`{ __args: JSArray<Double> -> ${RT.jsFromCodePoint}(*__args.storage.toDoubleArray()) }`, '(JSArray<Double>) -> String', this.typeOf(e));
+			if (libFn === 'mathRandom') return this.convert('{ Math.random() }', '() -> Double', this.typeOf(e));
+			if (libFn === 'mathVariadic') return this.convert(`{ __args: JSArray<Double> -> ${name === 'min' ? RT.jsMathMin : RT.jsMathMax}(*__args.storage.toDoubleArray()) }`, '(JSArray<Double>) -> Double', this.typeOf(e));
 			if (libFn === 'typedArrayFrom') return this.convert(`{ __v: Any? -> JS${target.text}.from(__v) }`, `(Any?) -> JS${target.text}`, this.typeOf(e));
 			if (libFn === 'isArray') return this.convert(`{ __v: Any? -> JSArray.isArray(__v) }`, '(Any?) -> Boolean', this.typeOf(e));
 			if (libFn === 'numberCheck') {
@@ -516,6 +526,11 @@ export const accessMethods = {
 		if (this.isObjectRef(e.expression)) {
 			// Library mode: the object as it is, whatever shape its type gives it (a generic `owner: T`).
 			const code = `${RT.jsGet}(${this.library && !isWriteTarget(e) ? this.coerce(e.expression, 'Any?') : target}, ${this.propertyKey(key)})`;
+			const rt = this.typeOf(e);
+			return isUntyped(spelledType(rt)) || isWriteTarget(e) ? code : this.fromAnyCode(code, rt, true);
+		}
+		if (this.typeOf(e.expression) === 'Nothing') {
+			const code = `${RT.jsGet}(${this.coerce(e.expression, 'Any?')}, ${this.propertyKey(key)})`;
 			const rt = this.typeOf(e);
 			return isUntyped(spelledType(rt)) || isWriteTarget(e) ? code : this.fromAnyCode(code, rt, true);
 		}

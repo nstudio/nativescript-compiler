@@ -5,7 +5,7 @@ import { LIB_CONSTANTS, MATH, isTypedArrayType } from './library.ts';
 import { mathFunctionValue } from '../semantics/apis/math.ts';
 import { CONSOLE } from '../semantics/apis/console.ts';
 import { libFunctionValueKind } from '../semantics/apis/statics.ts';
-import { ERRORS, TYPED_ARRAYS, isLibGlobal } from '../semantics/globals.ts';
+import { ERRORS, isLibGlobal } from '../semantics/globals.ts';
 import { spell, escapingFunction, functionParts, hasTopLevelArrow, ident, identPath, isFunctionType, isOptional, openSwiftChain, optionalType, splitTopLevel, swiftString, RT, lenientReader } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { elementReceiverCell, keyName, observerSlot, place, receiverCell, receiverSlot, isEnumObject, nullishField, type ReceiverCell } from '../semantics/placement.ts';
@@ -19,7 +19,7 @@ import { tested } from './native/bridging.ts';
 import { rethrowUnlessRefused } from '../semantics/refusals.ts';
 import { byKey, symbolField } from '../semantics/spelled.ts';
 import { definedField } from '../semantics/shapes.ts';
-import { baseMethod, declaredClassName, heldClassName } from '../semantics/classes.ts';
+import { baseMethod, declaredClassName, heldClassName, prototypeClassSymbol } from '../semantics/classes.ts';
 import { MODELLED_BUFFER_PROTOTYPES } from '../semantics/refuse-receivers.ts';
 
 export const accessMethods = {
@@ -125,8 +125,14 @@ export const accessMethods = {
 		}
 		// `ArrayBuffer.prototype`: an object of the class's tag, all a program reads of it.
 		if (name === 'prototype' && ts.isIdentifier(target) && MODELLED_BUFFER_PROTOTYPES.has(target.text) && isLibGlobal(this, target)) return `JS${target.text}.jsPrototype`;
-		// `Cls.prototype` (library mode): what script defines there, which the class's instances read.
-		if (name === 'prototype' && (this.library || this.definedOn(e)) && this.resolve(target)?.flags! & ts.SymbolFlags.Class) return `JSPrototypes.of(${this.expr(target).replace(/(\.self)?$/, '.self')})`;
+		// `Function.prototype`: a function that does nothing.
+		if (name === 'prototype' && ts.isIdentifier(target) && target.text === 'Function' && isLibDeclaration(this.resolve(target)?.declarations?.[0])) return '({ (_: [Any?]) throws -> Any? in nil } as JSFunction)';
+		// `Cls.prototype`: what script defines there, which the class's instances read.
+		const protoSym = prototypeClassSymbol(target, name, this);
+		if (protoSym) {
+			const cls = this.type(this.checker.getDeclaredTypeOfSymbol(protoSym), e).replace(/<.*$/, '');
+			return `JSPrototypes.of(${cls}.self)`;
+		}
 		if (name === 'prototype' && this.library && this.typeOf(target).endsWith('.Type')) return `JSPrototypes.of(${this.expr(target)})`;
 		// `value.constructor`: its class, which script tests for static members.
 		if (name === 'constructor' && (this.library || this.checker.getSymbolAtLocation(e.name)?.declarations?.every((d) => isLibDeclaration(d))) && !isWriteTarget(e) && !(ts.isPropertyAccessExpression(e.parent) && e.parent.expression === e && e.parent.name.text === 'name')) return `${RT.jsConstructor}(${this.coerce(target, 'Any?')})`;
@@ -134,12 +140,9 @@ export const accessMethods = {
 		if (name === 'name' && ts.isIdentifier(target) && (ERRORS[target.text] || ['Number', 'String', 'Boolean'].includes(target.text)) && isLibDeclaration(this.resolve(target)?.declarations?.[0])) return swiftString(target.text);
 		// `value.constructor.name`: its class's name.
 		if (name === 'name' && ts.isPropertyAccessExpression(target) && target.name.text === 'constructor' && !isWriteTarget(e)) return `${RT.jsConstructorName}(${this.coerce(target.expression, 'Any?')})`;
-		// `Function.prototype`: a function that does nothing.
-		if (name === 'prototype' && ts.isIdentifier(target) && target.text === 'Function' && isLibDeclaration(this.resolve(target)?.declarations?.[0])) return '({ (_: [Any?]) throws -> Any? in nil } as JSFunction)';
 		if (ts.isIdentifier(target) && isLibGlobal(this, target)) {
 			const constant = LIB_CONSTANTS[`${target.text}.${name}`];
 			if (constant) return constant;
-			if (name === 'BYTES_PER_ELEMENT' && TYPED_ARRAYS.includes(target.text)) return `JS${target.text}.BYTES_PER_ELEMENT`;
 			// `const round = Math.round`: the function as a value.
 			const mathValue = target.text === 'Math' ? mathFunctionValue(name) : null;
 			if (mathValue) return this.convert(`{ (__x: Double) -> Double in ${MATH[mathValue]}(__x) }`, '(Double) throws -> Double', this.typeOf(e));
@@ -150,6 +153,9 @@ export const accessMethods = {
 				return this.convert(`{ (__args: JSRest<Any?>) -> Void in ${fn}(spread: __args.storage) }`, '(JSRest<Any?>) throws -> Void', this.typeOf(e));
 			}
 			if (libFn === 'fromCharCode') return this.convert(`{ (__args: JSRest<Double>) -> String in ${RT.jsFromCharCode}(codes: __args.storage) }`, '(JSRest<Double>) throws -> String', this.typeOf(e));
+			if (libFn === 'fromCodePoint') return this.convert(`{ (__args: JSRest<Double>) throws -> String in try ${RT.jsFromCodePoint}(codes: __args.storage) }`, '(JSRest<Double>) throws -> String', this.typeOf(e));
+			if (libFn === 'mathRandom') return this.convert('{ () -> Double in Double.random(in: 0..<1) }', '() throws -> Double', this.typeOf(e));
+			if (libFn === 'mathVariadic') return this.convert(`{ (__args: JSRest<Double>) -> Double in ${name === 'min' ? RT.jsMathMin : RT.jsMathMax}(values: __args.storage) }`, '(JSRest<Double>) throws -> Double', this.typeOf(e));
 			if (libFn === 'typedArrayFrom') return this.convert(`{ (__v: Any?) throws -> JS${target.text} in try JS${target.text}.from(__v) }`, `(Any?) throws -> JS${target.text}`, this.typeOf(e));
 			if (libFn === 'isArray') return this.convert(`{ (__v: Any?) -> Bool in JSArray<Any?>.isArray(__v) }`, '(Any?) throws -> Bool', this.typeOf(e));
 			if (libFn === 'numberCheck') {
@@ -504,6 +510,14 @@ export const accessMethods = {
 			const code = `JSNativeKeyed(${target}${/[?!]$/.test(this.typeOf(e.expression)) ? '!' : ''})[jsKey: ${this.propertyKey(key)}]`;
 			const rt = this.typeOf(e);
 			return isUntyped(spelledType(rt)) || isWriteTarget(e) ? code : this.fromAnyCode(code, rt, true);
+		}
+		// A homogeneous Swift tuple indexed dynamically (`next[startIndex]`): switch on the integer index.
+		if (this.typeOf(e.expression).startsWith('(') && this.checker.isTupleType(receiverType)) {
+			const parts = splitTopLevel(this.typeOf(e.expression).slice(1, -1));
+			if (parts.length && parts.every((x) => x === parts[0])) {
+				const cases = parts.map((_, k) => `case ${k}: return __t.${k}`).join('; ');
+				return `{ (__t: ${this.typeOf(e.expression)}, __i: Int) -> ${parts[0]} in switch __i { ${cases}; default: return __t.0 } }(${target}, Int(${this.toNumber(key)}))`;
+			}
 		}
 		// A computed key on an object (`this[side + 'Drawer']`): its members by name.
 		if (this.isObjectRef(e.expression)) {

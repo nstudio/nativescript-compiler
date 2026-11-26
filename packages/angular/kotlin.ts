@@ -14,9 +14,8 @@ function tokenName(t: Translator, e: ts.Expression | ts.EntityName): string {
   return file.isDeclarationFile ? e.getText() : t.topName(decl, decl.name.text);
 }
 
-/** What `inject(token)` gives at `at`; a ViewContainerRef has no instance whose views would attach to the component's. */
+/** What `inject(token)` gives at `at`. */
 function injectedToken(t: Translator, token: string, at: ts.Node, decl?: ts.Declaration): string {
-  if (token === 'ViewContainerRef') throw t.error(at, 'an injected ViewContainerRef', 'view-container-ref');
   const code = injected('kotlin', token, at, decl && ts.isClassDeclaration(decl) ? injectableShared(decl, t.pluginFiles, t.checker) : undefined);
   // A `shared` the module's statements initialize is held nullable until they run, which they have by injection.
   const shared = decl && ts.isClassDeclaration(decl) ? decl.members.find((m): m is ts.PropertyDeclaration => ts.isPropertyDeclaration(m) && isStatic(m) && m.name.getText() === 'shared') : undefined;
@@ -189,7 +188,6 @@ function methodCall(t: Translator, owner: string, method: string, e: ts.CallExpr
   }
   if (owner === 'Injector' && method === 'get' && e.arguments[0]) {
     const rawArg0 = forwardRefTarget(e.arguments[0]);
-    if (tokenName(t, ts.isExpressionWithTypeArguments(rawArg0) ? rawArg0.expression : rawArg0) === 'ViewContainerRef') throw t.error(e, 'an injected ViewContainerRef', 'view-container-ref');
     const raw = `${t.expr(target)}.get(${t.coerce(rawArg0, 'Any?')}${e.arguments[1] ? `, ${t.coerce(e.arguments[1], 'Any?')}` : ''}${e.arguments[2] ? `, ${t.coerce(e.arguments[2], 'Any?')}` : ''})`;
     const type = t.typeOf(e);
     return type === 'Any?' ? raw : t.fromAny(raw, type);
@@ -221,7 +219,7 @@ export const kotlinHooks: TranslatorHooks<Translator> = {
       'TeardownHandle', 'NavigationEnd', 'NavigationStart', 'NavigationCancel', 'NavigationError', 'RoutesRecognized', 'ResolveStart', 'ResolveEnd',
       'HttpParams', 'HttpHeaders', 'HttpResponse', 'HttpErrorResponse', 'HttpRequest', 'HttpContext', 'HttpContextToken',
       'ParamMap', 'UrlSegment', 'UrlTree', 'DefaultUrlSerializer', 'ActivatedRouteSnapshot',
-      'ViewContainerRef', 'TemplateRef', 'ComponentRef', 'EmbeddedViewRef', 'ApplicationRef', 'Location'].map((n) => [n, { type: n, shim: true }])),
+      'ViewContainerRef', 'TemplateRef', 'ComponentRef', 'EmbeddedViewRef', 'ApplicationRef', 'Location', 'PendingTasks', 'Renderer2', 'RendererFactory2'].map((n) => [n, { type: n, shim: true }])),
   },
   globalCall,
   methodCall,
@@ -251,9 +249,11 @@ export const kotlinHooks: TranslatorHooks<Translator> = {
     const ngImports = standaloneImports(cls, t.checker, t.compiles);
     return ngImports ? [`        val jsNgImports: Any? by lazy { jsArrayOf<Any?>(${ngImports.map((e) => t.coerce(e, 'Any?')).join(', ')}) }`] : [];
   },
-  componentAsValue: (t, cls, type) => `ComponentFactory { ${t.rootView(cls, type, `AngularView.construct { ${type}() }.${t.components.get(cls.name!.text)!.members.render}()`)} }`,
+  componentAsValue: (t, cls, type) => `ComponentFactory(${type}::class.java) { ${t.rootView(cls, type, `AngularView.construct { ${type}() }.${t.components.get(cls.name!.text)?.members?.render ?? 'render'}()`)} }`,
   /** A component created as a root view (bootstrap, route, dialog): made and rendered in its standalone injector. */
   wrapRootView: (t, cls, type, make) => (standaloneImports(cls, t.checker, t.compiles) ? `Injector.standalone(${type}::class.java, ${type}.jsNgImports) { ${make} }` : make),
+  dynamicImport: (specifier) =>
+    specifier === '@angular/compiler' ? 'JSPromise.reject<Any?>(JSError("Dynamic import(\'@angular/compiler\') is not available in AOT release builds"))' : undefined,
   serviceClass(t, cls, name) {
     const { params, lines, statics } = t.componentMembers(cls, [], true);
     return [`class ${name}(${params.join(', ')}) {`, ...lines, '', '    companion object {', `        val shared: ${name} get() = AppInjector.service(${name}::class.java) { ${name}() }`, ...statics, '    }', '}'].join('\n');

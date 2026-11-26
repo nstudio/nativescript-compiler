@@ -42,8 +42,12 @@ export const functionsMethods = {
 
 	/** `override`: an override's, which takes a constant default from the method it overrides. */
 	params(this: Translator, fn: ts.SignatureDeclaration, closure: boolean, override = false): string {
-		if (this.readsArguments(fn)) return '__arguments: JSArray<Any?>';
 		const implicit = this.implicitThis(fn) ? ['__this: Any?'] : [];
+		if (this.readsArguments(fn)) {
+			const explicitThis = fn.parameters.find((p) => isThisParameter(p) && !this.voidThis(p));
+			const selfParam = implicit.length ? implicit : explicitThis ? [`__this: ${this.type(this.checker.getTypeAtLocation(explicitThis.name), explicitThis)}`] : [];
+			return [...selfParam, '__arguments: JSArray<Any?>'].join(', ');
+		}
 		return [
 			...implicit,
 			...fn.parameters.map((p, k) => {
@@ -367,12 +371,19 @@ export const functionsMethods = {
 			}
 		}
 		const ret = this.closureResult(fn, slotRet).target;
-		if (!ts.isMethodDeclaration(fn) && fn.name && fn.body && refersTo(fn.body, this.checker.getSymbolAtLocation(fn.name), this.checker)) throw this.error(fn, 'a named function expression', 'named-function-expression');
 		let params = this.params(fn, true);
 		// A slot's function type may take more parameters than the literal declares (JavaScript ignores extras).
 		const slotParams = slotParts?.params ?? [];
 		const given = ts.isFunctionExpression(fn) && thisArgBound(fn, this.checker) ? fn.parameters.filter((q) => !isThisParameter(q)).length : fn.parameters.length;
 		for (let k = given; k < slotParams.length; k++) params += `${params ? ', ' : ''}__u${k}: ${slotParams[k]}`;
+		if (!ts.isMethodDeclaration(fn) && fn.name && fn.body && refersTo(fn.body, this.checker.getSymbolAtLocation(fn.name), this.checker)) {
+			const fnName = ident(fn.name.text);
+			const pTypes = splitTopLevel(params)
+				.map((p) => p.trim())
+				.filter(Boolean)
+				.map((p) => p.slice(p.indexOf(':') + 1).trim());
+			return `run { lateinit var ${fnName}: (${pTypes.join(', ')}) -> ${ret}; ${fnName} = fun(${params})${ret === 'Unit' ? '' : `: ${ret}`} ${this.functionBody(fn, ret, this.indent)}; ${fnName} }`;
+		}
 		return this.asLambda(fn, params, ret) ?? `fun(${params})${ret === 'Unit' ? '' : `: ${ret}`} ${this.functionBody(fn, ret, this.indent)}`;
 	},
 

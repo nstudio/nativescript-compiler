@@ -7,7 +7,7 @@ import { capturesThis, escapingParam, ident, isFunctionType, isMethodValue, isOp
 import type { Translator } from './translator.ts';
 import { equalOption } from '../semantics/signals.ts';
 import { isTemplateMethod } from '../semantics/trust.ts';
-import { hasModifier } from '../semantics/ast.ts';
+import { extendsHeritage, hasModifier, nonSuperStatements } from '../semantics/ast.ts';
 import { nullableTypeNode, resultsAreUndefinedElements } from '../semantics/lang.ts';
 import { implementedOptionalMembers } from '../semantics/shapes.ts';
 import { isAsync, isStatic } from '../semantics/throws.ts';
@@ -260,20 +260,36 @@ export const componentMethods = {
 			this.declare(m.name.text, { kind: 'var', type: t });
 			lines.push(`    var ${ident(m.name.text)}: ${t}`);
 		}
+		// If the component keeps a real superclass (e.g. `@Component extends @Directive`), chain `super.init()` before constructor body.
+		const baseCls = this.sourceBase(cls);
+		const baseThrows = !!baseCls && this.throwsInfo.initThrows(baseCls);
+		if (baseCls) {
+			inits.push(`        ${baseThrows ? 'try ' : ''}super.init()`);
+		}
 		// The constructor's body runs once every field is set; what it throws is reported, as a failed creation is.
-		if (ctor?.body?.statements.length) {
+		const bodyStmts = nonSuperStatements(ctor);
+		if (bodyStmts.length) {
 			this.indent = '            ';
-			const body = this.statements([...ctor.body.statements]);
-			inits.push(`        ${this.throwsInfo.statements(ctor.body.statements) ? RT.jsReport : 'do'} {\n${body.join('\n')}\n        }`);
+			const body = this.statements([...bodyStmts]);
+			inits.push(`        ${this.throwsInfo.statements(bodyStmts) ? RT.jsReport : 'do'} {\n${body.join('\n')}\n        }`);
 		}
 		this.indent = '';
-		const throws = convenienceZeroArg || fieldThrows ? ' throws' : '';
+		const throws = convenienceZeroArg || fieldThrows || baseThrows ? ' throws' : '';
 		if (throws && cls.name) this.throwingInits.add(cls.name.text);
-		lines.push(`    init(${propParams.join(', ')})${throws} {`, ...inits, '    }');
+		const overrideInit = !!baseCls && !propParams.length ? 'override ' : '';
+		lines.push(`    ${overrideInit}init(${propParams.join(', ')})${throws} {`, ...inits, '    }');
 		if (convenienceZeroArg) {
 			lines.push(`    convenience init() throws {\n        try self.init(${ctorInjectVals.join(', ')})\n    }`);
 		}
 		return lines;
+	},
+
+	/** The Swift superclass clause (`: Base<...>`) for a component that keeps a real superclass, else empty. */
+	componentSuperclass(this: Translator, cls: ts.ClassDeclaration): string {
+		const heritage = extendsHeritage(cls);
+		const appBase = this.sourceBase(cls);
+		if (!heritage || !appBase) return '';
+		return `: ${this.className(appBase)}${this.typeArguments(heritage, appBase)}`;
 	},
 
 	/** Static members a component class adds for the framework. */
@@ -308,8 +324,11 @@ export const componentMethods = {
 
 	/** Whether a component's method or getter throws, so its caller in `render()` reports what it throws. */
 	memberThrows(this: Translator, cls: ts.ClassDeclaration, name: string): boolean {
-		const m = cls.members.find((x) => x.name && ts.isIdentifier(x.name) && x.name.text === name);
-		return !!m && !isAsync(m) && this.throwsInfo.fn(m);
+		for (let cur: ts.ClassLikeDeclaration | undefined = cls; cur; cur = this.sourceBase(cur)) {
+			const m = cur.members.find((x) => x.name && ts.isIdentifier(x.name) && x.name.text === name);
+			if (m) return !isAsync(m) && this.throwsInfo.fn(m);
+		}
+		return false;
 	},
 
 	/** The memo call (`computed(fn)`) a module-level variable an identifier names is initialized with. */

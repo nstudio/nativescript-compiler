@@ -1,6 +1,6 @@
 // Assignment as Swift: prefix and postfix updates, compound assignment and the reads and writes they make.
 import ts from 'typescript';
-import { ident, isNullish, negation, swiftString, throwingSetter, RT } from './syntax.ts';
+import { ident, isNullish, negation, splitTopLevel, swiftString, throwingSetter, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { asOperation, assignmentOf, type ReadWrite } from '../semantics/lang.ts';
 import { assignedTo, negatedCell } from '../semantics/placement.ts';
@@ -229,6 +229,17 @@ export const assignmentMethods = {
 		if (ts.isPropertyAccessExpression(left) && this.isAny(left.expression)) return `${RT.jsSet}(${this.expr(left.expression)}, ${swiftString(left.name.text)}, ${this.stored(right, left, 'Any?', checks)})`;
 		// An array written at a key that may be no index (`frames[time]`, time untyped): as script writes it.
 		if (ts.isElementAccessExpression(left) && isKit(spelledType(this.typeOf(left.expression).replace(/[?!]$/, '')), 'JSArray') && this.typeOf(left.argumentExpression) !== 'Double') return `${RT.jsSet}(${this.expr(left.expression)}, ${this.propertyKey(left.argumentExpression)}, ${this.stored(right, left, 'Any?', checks)})`;
+		// A homogeneous Swift tuple indexed dynamically (`next[startIndex] = start`): switch on the integer index.
+		if (ts.isElementAccessExpression(left) && this.typeOf(left.expression).startsWith('(') && this.checker.isTupleType(this.checker.getNonNullableType(this.checker.getTypeAtLocation(left.expression)))) {
+			const parts = splitTopLevel(this.typeOf(left.expression).slice(1, -1));
+			if (parts.length && parts.every((x) => x === parts[0])) {
+				const recv = this.expr(left.expression);
+				const idx = this.toNumber(left.argumentExpression);
+				const val = this.stored(right, left, parts[0], checks);
+				const cases = parts.map((_, k) => `case ${k}: ${recv}.${k} = __v`).join('; ');
+				return `{ (__i: Int, __v: ${parts[0]}) -> ${parts[0]} in switch __i { ${cases}; default: break }; return __v }(Int(${idx}), ${val})`;
+			}
+		}
 		if (ts.isElementAccessExpression(left) && this.isAny(left.expression)) return `${RT.jsSet}(${this.expr(left.expression)}, ${this.propertyKey(left.argumentExpression)}, ${this.stored(right, left, 'Any?', checks)})`;
 		if (this.library && this.holdsMethods(left) && this.carriesMethod(right)) {
 			const place = this.place(left);

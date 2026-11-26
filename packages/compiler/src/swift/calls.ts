@@ -5,12 +5,13 @@ import { isLibGlobal } from '../semantics/globals.ts';
 import { comparedToNullish, functionParts, hasTopLevelArrow, ident, isFunctionType, isOptional, isSymbolAsyncIterator, openSwiftChain, optionalType, swiftString, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { assertedReceiverCell, nullishField } from '../semantics/placement.ts';
-import { intlConstructor, isDomGlobalDeclaration, isObjectToStringCall, mergedInterfaceMemberOf, statementLevel, isArguments, isSelf } from '../semantics/lang.ts';
+import { hookedDynamicImport, intlConstructor, isDomGlobalDeclaration, isObjectToStringCall, mergedInterfaceMemberOf, statementLevel, isArguments, isSelf } from '../semantics/lang.ts';
 import { isLibDeclaration, isSymbolIterator } from '../semantics/ast.ts';
 import { isStatic } from '../semantics/throws.ts';
 import { callableSignal, mayBeUnset } from '../semantics/signals.ts';
 import { baseMethod } from '../semantics/classes.ts';
 import { isKit, isUntyped, spelledType } from '../semantics/types.ts';
+import { isKitInstanceMethod } from '../program/core-facts.ts';
 
 export const callsMethods = {
 	/** How many parameters the called function declares (JavaScript ignores extra arguments). */
@@ -78,6 +79,8 @@ export const callsMethods = {
 		// Reading a callable signal (`count()`, an input, a computed field).
 		if (!e.arguments.length && callableSignal(this.framework.signalKind(this.symbolName(callee)))) return this.signalRead(callee, (code) => (this.nullSignalRead(e) ? this.marks.implicitOf(code) : code));
 		if (callee.kind === ts.SyntaxKind.SuperKeyword) throw this.error(e, 'super() outside the start of a constructor');
+		const dynImport = hookedDynamicImport(e, this.framework.hooks);
+		if (dynImport) return dynImport;
 		// `getWindow<UIWindow>?.()`: the type arguments are only TypeScript's, and a function declaration is always there.
 		const declaredFunction = (x: ts.Expression) => ts.isIdentifier(x) && !!this.resolve(x)?.declarations?.some(ts.isFunctionDeclaration);
 		if (ts.isExpressionWithTypeArguments(callee) && (!e.questionDotToken || declaredFunction(callee.expression))) return this.call(ts.factory.updateCallExpression(e, callee.expression, callee.typeArguments, e.arguments));
@@ -130,7 +133,7 @@ export const callsMethods = {
 		// `callback?.(x)` of a parameter declared present: Swift has it as non-optional, and the call is a plain one.
 		const param = ts.isIdentifier(callee) ? this.resolve(callee)?.valueDeclaration : undefined;
 		const presentParam = !!param && ts.isParameter(param) && !param.questionToken && !param.initializer && !this.states.mayBeNull(param) && isFunctionType(this.typeOf(callee));
-		if (e.questionDotToken && !presentParam && !this.core.isKitMethod(callee) && !declaredMethod && !declaredFunction(callee)) {
+		if (e.questionDotToken && !presentParam && !isKitInstanceMethod(this.core, callee) && !declaredMethod && !declaredFunction(callee)) {
 			// A field narrowed to a function already reads unwrapped.
 			const fn = this.expr(callee);
 			return fn.endsWith('!') ? `${fn}(${this.args(e).join(', ')})` : `${fn}?(${this.args(e).join(', ')})`;

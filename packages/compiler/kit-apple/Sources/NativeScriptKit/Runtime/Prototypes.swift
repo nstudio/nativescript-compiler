@@ -112,10 +112,24 @@ public enum JSPrototypes {
         return p
     }
 
+    /// Custom prototypes assigned via `Object.setPrototypeOf(obj, proto)`.
+    private static var customPrototypes: [ObjectIdentifier: Any?] = [:]
+
+    /// `Object.setPrototypeOf(target, proto)`.
+    static func setPrototype(object o: AnyObject, to proto: Any?) {
+        tableLock.lock()
+        customPrototypes[ObjectIdentifier(o)] = proto
+        tableLock.unlock()
+    }
+
     /// `Object.getPrototypeOf` of a plain object: a class's prototype leads to its superclass's.
     static func prototypeOf(object o: JSObject) -> Any? {
         if o === objectPrototype { return jsNull }
         tableLock.lock()
+        if let custom = customPrototypes[ObjectIdentifier(o)] {
+            tableLock.unlock()
+            return custom
+        }
         let cls: AnyClass? = owners[ObjectIdentifier(o)]
         tableLock.unlock()
         if let cls, let superclass = class_getSuperclass(cls), !isRoot(superclass) { return of(superclass) }
@@ -275,6 +289,17 @@ struct JSHolding {
     let holder: JSObject?
     let getter: ((Any?) throws -> Any?)?
     let setter: ((Any?, Any?) throws -> Void)?
+}
+
+/// `Object.setPrototypeOf(target, proto)`.
+public func jsSetPrototypeOf(_ target: Any?, _ proto: Any?) throws -> Any? {
+    guard let v = jsFlat(target), !(v is JSNull) else { throw JSException(JSTypeError("Object.setPrototypeOf called on null or undefined")) }
+    let p = jsFlat(proto)
+    if let p, !(p is JSNull), !(p is JSObject), !(p is JSDynamic), !(p is AnyClass) { throw JSException(JSTypeError("Object prototype may only be an Object or null")) }
+    let targetProto: Any? = (p == nil || p is JSNull) ? jsNull : p
+    if let o = v as? JSObject { o.jsPrototype = (p == nil || p is JSNull) ? nil : p }
+    if let obj = v as AnyObject? { JSPrototypes.setPrototype(object: obj, to: targetProto) }
+    return target
 }
 
 /// `Object.getPrototypeOf(value)`.

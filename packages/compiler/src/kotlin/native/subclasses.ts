@@ -211,14 +211,15 @@ ${indent}}`;
 		for (const p of literal.properties) {
 			const name = p.name?.getText().replace(/^['"]|['"]$/g, '') ?? '';
 			const fn = ts.isMethodDeclaration(p) ? p : ts.isPropertyAssignment(p) && (ts.isArrowFunction(p.initializer) || ts.isFunctionExpression(p.initializer)) ? p.initializer : null;
-			// A function value (`this.onTouch.bind(this)`): the override calls it.
-			const value = !fn && ts.isPropertyAssignment(p) ? t.checker.getTypeAtLocation(p.initializer).getCallSignatures()[0] : undefined;
+			// A function value (`this.onTouch.bind(this)`, `{ onDismiss }`): the override calls it.
+			const valueExpr = !fn && ts.isPropertyAssignment(p) ? p.initializer : !fn && ts.isShorthandPropertyAssignment(p) ? p.name : undefined;
+			const value = valueExpr ? t.checker.getTypeAtLocation(valueExpr).getCallSignatures()[0] : undefined;
 			const declared = value?.getDeclaration();
 			if (!fn && !(declared && !ts.isJSDocSignature(declared))) throw t.error(p, `${name} in an implementation of ${javaTypeName(`L${cls.name};`)} (only methods and functions)`, 'native');
 			const target = this.overrideTarget(fn ?? (declared as ts.SignatureDeclaration), [cls.name], name);
 			if (!target) throw t.error(p, `${name} (${javaTypeName(`L${cls.name};`)} has no method of that name to implement)`, 'native');
 			provided.add(name);
-			members.push(fn ? this.overrideMethod(fn, name, target, base + '    ', ownerVar(target.m.owner)) : this.overrideWithValue((p as ts.PropertyAssignment).initializer, declared as ts.SignatureDeclaration, name, target, base + '    ', ownerVar(target.m.owner)));
+			members.push(fn ? this.overrideMethod(fn, name, target, base + '    ', ownerVar(target.m.owner)) : this.overrideWithValue(valueExpr!, declared as ts.SignatureDeclaration, name, target, base + '    ', ownerVar(target.m.owner)));
 		}
 		if (isInterface) {
 			const objectMethods = new Set((this.classpath.get('java/lang/Object')?.methods ?? []).map((m) => m.name + m.descriptor));

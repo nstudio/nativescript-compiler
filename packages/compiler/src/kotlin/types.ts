@@ -8,7 +8,7 @@ import { ambientBase, evolvingArrayRead, evolvingArrayType, isAmbientClass, isRe
 import { nullishSignalType } from '../semantics/signals.ts';
 import { hasModifier, isLibDeclaration, thisNodes, isWriteTarget, implementationOf, takesOwnThis } from '../semantics/ast.ts';
 import { isCoreDeclaration } from '../program/core-facts.ts';
-import { coreTypeKind, eventDataTypeLiteral, isJsDocConstructorFunction, isKit, isLibObjectType, isNamed, isUntyped, libraryNativeType, libraryType, mappedOrErasedType, nonNullableInner, nonOptionalSpelling, parseNativeType, spelledType } from '../semantics/types.ts';
+import { coreTypeKind, eventDataTypeLiteral, hasMappedIntersection, isJsDocConstructorFunction, isKit, isLibObjectType, isNamed, isUntyped, libraryNativeType, libraryType, mappedOrErasedType, nonNullableInner, nonOptionalSpelling, parseNativeType, spelledType, valueModuleKind } from '../semantics/types.ts';
 import { isStatic } from '../semantics/throws.ts';
 import { literalOverArray, membersOverTypeParameter, untypedResultBinding, untypedResultField } from '../semantics/shapes.ts';
 import { extendedClass, isEventData } from '../semantics/classes.ts';
@@ -33,9 +33,9 @@ export const typesMethods = {
 		// A component class of a plugin's framework entry: only the framework's runtime makes its instances, and the build declares no such class.
 		const component = t.getSymbol()?.flags! & ts.SymbolFlags.Class ? t.getSymbol()!.declarations?.[0] : undefined;
 		if (component && ts.isClassDeclaration(component) && this.pluginFiles.has(component.getSourceFile().fileName) && this.framework.componentClass(component)) return 'Any?';
-		// A namespace as a value (`{ Kinds: Trace.Kinds }`): its object.
-		const nsDecl = t.flags & F.Object && t.getSymbol()?.flags! & ts.SymbolFlags.ValueModule ? t.getSymbol()!.valueDeclaration : undefined;
-		if (nsDecl && ts.isModuleDeclaration(nsDecl) && !nsDecl.getSourceFile().isDeclarationFile) return this.namespacePath(nsDecl)!;
+		// A namespace as a value (`{ Kinds: Trace.Kinds }`) or an ES module namespace (`typeof import('...')`).
+		const ns = valueModuleKind(t);
+		if (ns) return ns === 'module' ? 'Any?' : this.namespacePath(ns)!;
 		// An enum as a value (`typeof Color`) in app code: the object JavaScript makes of it. Not the enum's own name, through
 		// which its members are read (`Color.Red`).
 		const enumObject = !this.library && t.flags & F.Object && (t.getSymbol()?.flags ?? 0) & ts.SymbolFlags.RegularEnum ? t.getSymbol()!.valueDeclaration : undefined;
@@ -89,7 +89,7 @@ export const typesMethods = {
 		// `Source & StringLiteralCheck<Source, 'source'>` of `Source extends string`: checks only TypeScript resolves, over the primitive.
 		const bound = t.types.map((u) => (u.flags & F.TypeParameter ? this.checker.getBaseConstraintOfType(u) : undefined)).find((u) => u && u.flags & (F.String | F.Number | F.Boolean));
 		if (bound && t.types.every((u) => u.flags & (F.TypeParameter | F.Conditional))) return this.type(bound, where);
-		if (membersOverTypeParameter(t, this.checker)) return 'Any?';
+		if (membersOverTypeParameter(t, this.checker) || hasMappedIntersection(t)) return 'Any?';
 		// A function carrying properties (`((p: P) => R) & { type: string }`): an untyped value, called as script calls it.
 		if (t.types.some((u) => u.getCallSignatures().length) && t.types.some((u) => !u.getCallSignatures().length && u.getProperties().length) && !t.types.some((u) => isLibDeclaration(u.getSymbol()?.declarations?.[0]))) return 'Any?';
 		// Interfaces each held untyped (core's `BackstackEntry & ExpandedEntry`): untyped too. A shape would be a copy, so

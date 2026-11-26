@@ -227,6 +227,10 @@ export const constructionMethods = {
 			if (!args.length) return `${t}()`;
 			return `${t}(${this.args(e).join(', ')})`;
 		}
+		if (this.checker.getTypeAtLocation(callee).getConstructSignatures().length) {
+			const made = `NativeScriptKit.jsConstruct(${this.expr(callee)}${this.untypedArgs(e)})`;
+			return isUntyped(spelledType(t)) ? made : this.fromAny(made, t);
+		}
 		throw this.error(e, 'new');
 	},
 

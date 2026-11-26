@@ -203,6 +203,7 @@ export class ValueStates {
 						(f) => b.pluginFiles.has(f.fileName),
 						(d) => this.formNullish(d),
 						b.framework.hooks,
+						(n) => b.framework.signalKind(n),
 					);
 		// An element, callback parameter or loop variable the analysis can't hold: one nil, read as undefined, where
 		// nothing tells null from undefined in it; `JSNullish<T>` where something does.

@@ -485,6 +485,12 @@ public func jsReplaceAll(_ s: String, _ re: JSRegExp, _ replacement: String) thr
     return jsReplace(s, re, replacement)
 }
 
+/// `s.replaceAll(re, (match, ...groups) => …)`: the expression must be global.
+public func jsReplaceAll(_ s: String, _ re: JSRegExp, _ replacer: (JSMatch) throws -> String) throws -> String {
+    guard re.global else { throw JSException(value: JSTypeError("replaceAll must be called with a global RegExp")) }
+    return try jsReplace(s, re, replacer)
+}
+
 /// RegExp.prototype[@@replace]: every match is found before the first replacement is computed.
 private func replaceMatches(_ subject: JSRegExpSubject, _ re: JSRegExp, _ replacement: ([Int]) throws -> String) rethrows -> String {
     var results: [[Int]] = []

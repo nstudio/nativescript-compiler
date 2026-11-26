@@ -617,3 +617,104 @@ private fun field(target: Any?, key: String): Any? = if (jsIsNullish(target)) nu
 fun registerElement(tag: String, type: Any?, meta: Any? = null) {
     if (meta != null) kitRegisterViewMeta(tag, type, meta)
 }
+
+/** Runtime registry and mount helper for Angular's `[ngComponentOutlet]` / `*ngComponentOutlet`. */
+object ComponentOutlet {
+    private val factories = HashMap<Class<*>, (Region, Any?) -> Unit>()
+
+    fun register(type: Class<*>, render: (Region, Any?) -> Unit) {
+        factories[type] = render
+    }
+
+    fun mount(region: Region, component: () -> Any?, injector: (() -> Any?)? = null, inputs: (() -> Any?)? = null) {
+        var currentType: Class<*>? = null
+        var branchOwner: Owner? = null
+        Owner.current?.onCleanup { branchOwner?.dispose() }
+        Effect {
+            val raw = try { component() } catch (e: Throwable) { jsReportUncaught(jsCaught(e)); null }
+            val cls = jsBox(raw) as? Class<*>
+            if (cls == currentType) return@Effect
+            currentType = cls
+            val inj = try { injector?.invoke()?.let { jsBox(it) as? Injector } } catch (_: Throwable) { null }
+            val inp = try { inputs?.invoke() } catch (_: Throwable) { null }
+            untrack {
+                branchOwner?.dispose()
+                branchOwner = null
+                val factory = cls?.let { factories[it] }
+                if (factory == null) {
+                    region.set(emptyList())
+                    return@untrack
+                }
+                val owner = Owner(null)
+                branchOwner = owner
+                jsReport {
+                    if (inj != null) Injector.runInContext(inj) { owner.run { factory(region, inp) } }
+                    else owner.run { factory(region, inp) }
+                }
+            }
+        }
+    }
+}
+
+/** Runtime helper for dynamic/recursive `[ngTemplateOutlet]` / `*ngTemplateOutlet` and `TemplateRef` closures. */
+object TemplateOutlet {
+    fun bind(ref: TemplateRef, render: (Region, Any?) -> Unit) {
+        ref._render = { anyRegion, ctx ->
+            val region = anyRegion as? Region
+            if (region != null) render(region, ctx)
+        }
+        ref._detached = { ctx, injector ->
+            val owner = Owner(null)
+            val region = Region(null)
+            val run = { owner.run { render(region, ctx) } }
+            jsReport {
+                val inj = jsBox(injector) as? Injector
+                if (inj != null) Injector.runInContext(inj, run)
+                else run()
+            }
+            EmbeddedViewRef(ctx) { owner.dispose() }
+        }
+    }
+
+    fun make(render: (Region, Any?) -> Unit): TemplateRef = TemplateRef().also { bind(it, render) }
+
+    fun mount(region: Region, template: () -> Any?, context: (() -> Any?)? = null) {
+        var branchOwner: Owner? = null
+        Owner.current?.onCleanup { branchOwner?.dispose() }
+        Effect {
+            val tpl = jsBox(try { template() } catch (_: Throwable) { null }) as? TemplateRef
+            val ctx = try { context?.invoke() } catch (_: Throwable) { null }
+            untrack {
+                branchOwner?.dispose()
+                branchOwner = null
+                val render = tpl?._render
+                if (render == null) {
+                    region.set(emptyList())
+                    return@untrack
+                }
+                val owner = Owner(null)
+                branchOwner = owner
+                jsReport { owner.run { render(region, ctx) } }
+            }
+        }
+    }
+}
+
+/** Scopes `TemplateRef.current()` and `ViewContainerRef.current()` for custom structural directives (`*myDir`). */
+object StructuralDirective {
+    fun <T> scope(region: Region, template: TemplateRef, body: () -> T): T {
+        val vcr = ViewContainerRef()
+        vcr._clear = { region.set(emptyList()) }
+        vcr._mount = { tpl, ctx ->
+            val owner = Owner(null)
+            jsReport { owner.run { tpl._render?.invoke(region, ctx) } }
+            EmbeddedViewRef(ctx) {
+                owner.dispose()
+                region.set(emptyList())
+            }
+        }
+        return TemplateRef.with(template) {
+            ViewContainerRef.with(vcr, body)
+        }
+    }
+}

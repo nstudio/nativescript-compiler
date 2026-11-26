@@ -13,6 +13,7 @@ import { BuildContext } from '../program/build-context.ts';
 import { clearBuildCaches } from '../program/build-caches.ts';
 import { pathAliases } from '../program/app-paths.ts';
 import { appImports, reachedFrom, tsconfigIncluded } from '../program/app-modules.ts';
+import { loadViteAppPlugins } from '../program/vite-plugins.ts';
 import { appDeclarations, createProgram, nodeModules } from '../program/program.ts';
 import { corePatchRefusal } from '../program/core-patches.ts';
 import { reachability, type Reach } from '../program/reach.ts';
@@ -72,6 +73,8 @@ export interface CompileOptions {
 	allowUnimplementedProperties?: boolean;
 	/** `--allow-core-mismatch` (or release.allowCoreMismatch). */
 	allowCoreMismatch?: boolean;
+	/** `--allow-plugin-mismatch` (or release.allowPluginMismatch): warn when an installed plugin differs from its source. */
+	allowPluginMismatch?: boolean;
 	/** `--allow-untested-frameworks` (or release.allowUntestedFrameworks). */
 	allowUntestedFrameworks?: boolean;
 	/** `--skip-toolchain-check`. */
@@ -149,10 +152,17 @@ export async function compile(o: CompileOptions, build: BuildContext = new Build
 	// `x.ts` beside `x.ios.ts` is the other platforms' module: the platform's own file is the one `./x` resolves to.
 	const thisPlatform = platform === 'android' ? '.android.ts' : '.ios.ts';
 	const platformSources = files.filter((f) => f.endsWith('.ts') && !f.endsWith('.d.ts') && f !== entry && !/polyfills\.ts$/.test(f) && !otherPlatform.test(f) && !(!/\.(ios|android)\.ts$/.test(f) && files.includes(f.replace(/\.ts$/, thisPlatform))));
-	// The app's own specifiers: relative ones and its tsconfig's path aliases (`~/app/x`).
-	const aliased = pathAliases(app);
+	// The app's own specifiers: relative ones, Vite app-plugin `resolveId` hooks, and its tsconfig's path aliases (`~/app/x`).
+	const vitePlugins = await loadViteAppPlugins(app);
+	const baseAliased = pathAliases(app);
+	const aliased = (spec: string, importer?: string) => vitePlugins.resolveId(spec, importer) ?? baseAliased(spec);
 	const appSpecifier = (spec: string) => spec.startsWith('.') || aliased(spec) !== undefined;
-	const { importsOf, usedBy, workerScripts } = appImports(files, aliased, thisPlatform, app);
+	const readTransformed = (f: string) => vitePlugins.transform(readFileSync(f, 'utf8'), f);
+	const { importsOf, usedBy, workerScripts, discovered } = appImports(files, aliased, thisPlatform, app, readTransformed);
+	if (discovered.length) {
+		files.push(...discovered);
+		platformSources.push(...discovered.filter((f) => f.endsWith('.ts') && !f.endsWith('.d.ts') && f !== entry && !/polyfills\.ts$/.test(f) && !otherPlatform.test(f)));
+	}
 	// The modules of the build: what the bundler reaches. Some frameworks' bundle is what the entry imports, lazy routes
 	// included; another's, every file its tsconfig.json does not exclude (specs, mocks), and what those import.
 	const included = adapter?.reach === 'entry' ? null : tsconfigIncluded(app, appDir);
@@ -281,7 +291,7 @@ export async function compile(o: CompileOptions, build: BuildContext = new Build
 	];
 	const replacements = { ...bindingReplacements, ...pluginReplacements(app, platform) };
 	modules.push(...Object.values(replacements).filter((f) => !modules.includes(f)));
-	let { checker, program, files: sourceFiles, pluginFiles, resolved, lenient: lenientApp, assignsFields } = createProgram(modules, virtual, platform, undefined, plugins, declarations, replacements, {}, aliased, undefined, build);
+	let { checker, program, files: sourceFiles, pluginFiles, resolved, lenient: lenientApp, assignsFields } = createProgram(modules, virtual, platform, undefined, plugins, declarations, replacements, {}, aliased, undefined, build, vitePlugins);
 	// The binding contexts the program proves: closures read a proved class's members directly. The page factories build
 	// each XML file's tree. The program is made again to type both.
 	if (xml && xmlBindings) {
@@ -341,7 +351,7 @@ export async function compile(o: CompileOptions, build: BuildContext = new Build
 				changed = true;
 			}
 		}
-		if (changed) ({ checker, program, files: sourceFiles, pluginFiles, resolved, lenient: lenientApp, assignsFields } = createProgram(modules, virtual, platform, undefined, plugins, declarations, replacements, {}, aliased, undefined, build));
+		if (changed) ({ checker, program, files: sourceFiles, pluginFiles, resolved, lenient: lenientApp, assignsFields } = createProgram(modules, virtual, platform, undefined, plugins, declarations, replacements, {}, aliased, undefined, build, vitePlugins));
 		// Nothing parses XML or evaluates an expression at run time: core reads app objects by the keys the XML and app code name.
 		if (xmlRunTimeFree) {
 			const { planKeys, scriptKeys } = await import('../xml/keys.ts');
@@ -398,19 +408,22 @@ export async function compile(o: CompileOptions, build: BuildContext = new Build
 	// A closed world: the plugin code the app reaches, checked against what npm installed before it is compiled.
 	const appFiles = [...new Set([...modules, ...components.map((c) => c.file)])];
 	const { reach, compiled: compiledPlugins } = closedWorld(program, resolved, appFiles, pluginFiles, platform, build);
-	plugins.verify(compiledPlugins);
+	const allowPluginMismatch = !!o.allowPluginMismatch || releaseOptions(app, platform).allowPluginMismatch === true;
+	plugins.verify(compiledPlugins, allowPluginMismatch ? (msg) => console.warn(`warning: ${msg} (building anyway: release.allowPluginMismatch)`) : undefined);
 	const properties = collectProperties(checker, sourceFiles);
 	// The files the translated code says it came from: a component's source for its virtual class, a module's own file for a replacement of it.
 	const sourceLines = o.sourceLines === false ? null : new SourceLines(new Map([...components.map((c) => [c.file, componentSource(c)] as const), ...[...overrides.keys()].map((f) => [f, f] as const)]));
 	for (const c of components) if (c.templateLines) sourceLines?.pin(c.file, c.templateLines.file, c.templateLines.lines);
 	if (sourceLines) sourceLines.name = (file) => sourceName(file);
 	// Constructs no compiled release runs, all of them with their TypeScript lines, before anything is translated.
+	const pluginSet = new Set(pluginFiles);
+	const appSourceFiles = sourceFiles.filter((f) => !pluginSet.has(f.fileName));
 	const unsupported = preflight(
 		checker,
-		[...sourceFiles, ...compiledPlugins.map((f) => program.getSourceFile(f)!)],
+		[...appSourceFiles, ...compiledPlugins.map((f) => program.getSourceFile(f)!)],
 		sourceLines ? (n) => sourceLines.locate(n) : undefined,
-		(st) => !compiledPlugins.includes(st.getSourceFile().fileName) || reach.keeps(st),
-		(f) => compiledPlugins.includes(f) && !writtenStrict(f, build.adapter),
+		(st) => !pluginSet.has(st.getSourceFile().fileName) || reach.keeps(st),
+		(f) => pluginSet.has(f) && !writtenStrict(f, build.adapter),
 	);
 	if (unsupported.length) {
 		console.error(formatPreflight(unsupported));

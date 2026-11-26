@@ -204,7 +204,7 @@ export async function writeIos(b: IosBuild): Promise<void> {
 		for (const c of components) {
 			const cls = componentClass(c.name)!;
 			try {
-				const lines = [`final class ${swiftClass(c.name)} {`, NONISOLATED_DEINIT, members.get(c.name) ?? '', ...translator.componentStatics(cls), '', ...render(c, infos, (m) => translator.memberThrows(cls, m), behaviour, { itemType: (m) => translator.memberElementType(cls, m), propValue: (child, p, m) => translator.propValue(cls, componentClass(child), p, m), swiftClass: (name) => (elementClasses.has(name) || infos.has(name) ? swiftClass(name) : name) }), '}', translator.componentConformance(cls, swiftClass(c.name))];
+				const lines = [`final class ${swiftClass(c.name)}${translator.componentSuperclass(cls)} {`, NONISOLATED_DEINIT, members.get(c.name) ?? '', ...translator.componentStatics(cls), '', ...render(c, infos, (m) => translator.memberThrows(cls, m), behaviour, { itemType: (m) => translator.memberElementType(cls, m), propValue: (child, p, m) => translator.propValue(cls, componentClass(child), p, m), swiftClass: (name) => (elementClasses.has(name) || infos.has(name) ? swiftClass(name) : name) }), '}', translator.componentConformance(cls, swiftClass(c.name))];
 				writeFileSync(join(sourcesDir, c.name + '.swift'), header(c.file) + lines.join('\n') + '\n');
 			} catch (e) {
 				unwritten.add(c.name);

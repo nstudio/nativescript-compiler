@@ -7,6 +7,17 @@ import { BUFFER_TYPES, ERRORS, UNSUPPORTED_LIB_GLOBALS } from './globals.ts';
 import type { Ledger } from './ledger.ts';
 import { rethrowUnlessRefused } from './refusals.ts';
 
+/** Classifies a `ValueModule` object type: an ES module namespace (`typeof import('...')`), a program `namespace`, or null. */
+export function valueModuleKind(t: ts.Type): 'module' | ts.ModuleDeclaration | null {
+	const sym = t.flags & ts.TypeFlags.Object ? t.getSymbol() : undefined;
+	if (!sym || !(sym.flags & ts.SymbolFlags.ValueModule)) return null;
+	const decl = sym.valueDeclaration;
+	if (!decl) return null;
+	if (ts.isSourceFile(decl)) return 'module';
+	if (ts.isModuleDeclaration(decl) && !decl.getSourceFile().isDeclarationFile) return decl;
+	return null;
+}
+
 /** How the kits hold a core type they implement themselves: an animation's promise settles with no value; an animation definition is read by key. */
 export type CoreTypeKind = 'void-promise' | 'untyped';
 
@@ -561,8 +572,14 @@ export function nonOptionalSpelling(type: string): string {
 	return isUntyped(spelledType(type)) ? type : type.replace(/\?$/, '');
 }
 
-/** A JSDoc `@constructor` function in a JS module (no class/interface/enum/ambient declaration): no native class exists for it. */
+/** A JSDoc `@constructor`, `@typedef`, or `@callback` in a JS module (no class/interface/enum/ambient declaration): no native class exists for it. */
 export function isJsDocConstructorFunction(sym: ts.Symbol | undefined): boolean {
+	if (sym?.declarations?.length && sym.declarations.every((d) => ts.isJSDocTypedefTag(d) || ts.isJSDocCallbackTag(d))) return true;
 	if (!sym?.valueDeclaration || !(ts.isFunctionDeclaration(sym.valueDeclaration) || ts.isFunctionExpression(sym.valueDeclaration) || ts.isVariableDeclaration(sym.valueDeclaration))) return false;
 	return !sym.declarations?.some((d) => ts.isClassLike(d) || ts.isInterfaceDeclaration(d) || ts.isEnumDeclaration(d) || d.getSourceFile().isDeclarationFile);
+}
+
+/** An intersection containing a mapped or utility-mapped member (`{ a?: string } & Partial<Record<K, string>>`): held untyped. */
+export function hasMappedIntersection(t: ts.IntersectionType): boolean {
+	return t.types.some((u) => !!((u as ts.ObjectType).objectFlags & ts.ObjectFlags.Mapped) || (!!u.aliasSymbol && ['Partial', 'Record', 'Pick', 'Omit', 'Required', 'Readonly'].includes(u.aliasSymbol.name)));
 }

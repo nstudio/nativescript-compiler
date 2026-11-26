@@ -10,8 +10,17 @@ export function readConfig(app: string): Record<string, unknown> {
 	const file = ['nativescript.config.ts', 'nativescript.config.js'].map((f) => join(app, f)).find(existsSync);
 	if (!file) return {};
 	const sf = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
+	const locals = new Map<string, ts.Expression>();
+	for (const st of sf.statements) {
+		if (ts.isVariableStatement(st)) {
+			for (const d of st.declarationList.declarations) {
+				if (ts.isIdentifier(d.name) && d.initializer) locals.set(d.name.text, d.initializer);
+			}
+		}
+	}
 	const value = (e: ts.Expression): unknown => {
 		if (ts.isAsExpression(e) || ts.isSatisfiesExpression(e) || ts.isParenthesizedExpression(e)) return value(e.expression);
+		if (ts.isIdentifier(e) && locals.has(e.text)) return value(locals.get(e.text)!);
 		if (ts.isStringLiteralLike(e)) return e.text;
 		if (ts.isNumericLiteral(e)) return Number(e.text);
 		if (e.kind === ts.SyntaxKind.TrueKeyword) return true;
@@ -19,7 +28,10 @@ export function readConfig(app: string): Record<string, unknown> {
 		if (ts.isArrayLiteralExpression(e)) return e.elements.map(value);
 		if (ts.isObjectLiteralExpression(e)) {
 			const out: Record<string, unknown> = {};
-			for (const p of e.properties) if (ts.isPropertyAssignment(p)) out[p.name.getText().replace(/^['"]|['"]$/g, '')] = value(p.initializer);
+			for (const p of e.properties) {
+				if (ts.isPropertyAssignment(p)) out[p.name.getText().replace(/^['"]|['"]$/g, '')] = value(p.initializer);
+				else if (ts.isShorthandPropertyAssignment(p)) out[p.name.text] = value(p.name);
+			}
 			return out;
 		}
 		return undefined;

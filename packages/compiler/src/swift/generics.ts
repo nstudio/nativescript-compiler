@@ -50,7 +50,9 @@ export const genericsMethods = {
 	 * `Plot<Point>` where `Plot<any>` is taken compiles only erased. Each parameter is then any value.
 	 */
 	erasesGenerics(this: Translator, decl: ts.Node): boolean {
-		return !decl.getSourceFile().isDeclarationFile && this.pluginFiles.has(decl.getSourceFile().fileName) && !this.keepsGenerics(decl);
+		if (decl.getSourceFile().isDeclarationFile) return false;
+		if (ts.isClassDeclaration(decl) && this.framework.hooks.erasesGenericClass?.(decl)) return true;
+		return this.pluginFiles.has(decl.getSourceFile().fileName) && !this.keepsGenerics(decl);
 	},
 
 	/** The Swift type of a member whose declared type names a type parameter of its erased generic class (`data: T` as `Any?`); null for any other. */

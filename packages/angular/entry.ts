@@ -58,7 +58,7 @@ export function angularEntryModule(
   const isBuiltinProviderCall = (e: ts.Expression): boolean => {
     if (!ts.isCallExpression(e)) return false;
     const fn = e.expression.getText();
-    if (/^(provideNativeScriptRouter|provideRouter|provideZoneChangeDetection|provideZonelessChangeDetection|provideExperimentalZonelessChangeDetection|provideNativeScriptNgZone)$/.test(fn)) return true;
+    if (/^(provideNativeScriptRouter|provideRouter|provideFileRouter|provideZoneChangeDetection|provideZonelessChangeDetection|provideExperimentalZonelessChangeDetection|provideNativeScriptNgZone)$/.test(fn)) return true;
     if (/^(provideNativeScriptHttpClient|provideHttpClient)$/.test(fn) && e.arguments.every((a) => ts.isCallExpression(a) && /^(withInterceptorsFromDi|withFetch|withJsonpSupport|withNoXsrfProtection)$/.test(a.expression.getText()))) return true;
     return false;
   };
@@ -98,14 +98,35 @@ export function angularEntryModule(
   const rest = sf.statements.filter((st) => !ts.isImportDeclaration(st) && !isBootstrap(st));
   if (!rest.length && !hasCustomProviders) return null;
   const componentFiles = new Set(components.map((c) => c.file.replace(/\.release\.ts$/, '.ts')));
+  const rewriteSpecRanges: [number, number, string][] = [];
   for (const st of sf.statements) {
     if (ts.isImportDeclaration(st) && ts.isStringLiteral(st.moduleSpecifier)) {
       const spec = st.moduleSpecifier.text;
       const base = aliased(spec) ?? (spec.startsWith('.') ? resolve(dirname(file), spec) : undefined);
       if (base) {
         const candidates = [base, base + '.ts', join(base, 'index.ts')];
-        if (candidates.some((c) => routeFiles.has(c) || componentFiles.has(c))) {
+        if (candidates.some((c) => routeFiles.has(c))) {
           blankRanges.push([st.getStart(), st.getEnd()]);
+        } else if (candidates.some((c) => componentFiles.has(c))) {
+          const importedNames: string[] = [];
+          const clause = st.importClause;
+          if (clause?.name) importedNames.push(clause.name.text);
+          if (clause?.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+            for (const el of clause.namedBindings.elements) importedNames.push(el.name.text);
+          }
+          const maskedText = (() => {
+            let t = text;
+            for (const [s, e] of nullFirstArgRanges) t = t.slice(0, s) + ' '.repeat(e - s) + t.slice(e);
+            for (const [s, e] of blankRanges) t = t.slice(0, s) + ' '.repeat(e - s) + t.slice(e);
+            return t.slice(0, st.getStart()) + ' '.repeat(st.getEnd() - st.getStart()) + t.slice(st.getEnd());
+          })();
+          const stillUsed = importedNames.some((n) => new RegExp(`\\b${n}\\b`).test(maskedText));
+          if (stillUsed) {
+            const targetFile = candidates.find((c) => componentFiles.has(c))!;
+            rewriteSpecRanges.push([st.moduleSpecifier.getStart(), st.moduleSpecifier.getEnd(), JSON.stringify(targetFile.replace(/\.ts$/, '.release.ts'))]);
+          } else {
+            blankRanges.push([st.getStart(), st.getEnd()]);
+          }
         }
       }
     } else if (isBootstrap(st) && !hasCustomProviders) {
@@ -120,6 +141,9 @@ export function angularEntryModule(
   }
   for (const [s, e] of blankRanges) {
     out = out.slice(0, s) + out.slice(s, e).replace(/[^\n]/g, ' ') + out.slice(e);
+  }
+  for (const [s, e, rep] of rewriteSpecRanges.sort((a, b) => b[0] - a[0])) {
+    out = out.slice(0, s) + rep + out.slice(e);
   }
   return out;
 }

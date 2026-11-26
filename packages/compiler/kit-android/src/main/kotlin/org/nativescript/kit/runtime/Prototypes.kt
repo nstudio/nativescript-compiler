@@ -90,9 +90,16 @@ object JSPrototypes {
     /** The prototype a built-in kind of value has (`Array.prototype`), its own object. */
     fun builtin(name: String): JSObject = builtins[name] ?: builtins.computeIfAbsent(name) { JSObject() }
 
+    private val customPrototypes = java.util.Collections.synchronizedMap(java.util.WeakHashMap<Any, Any?>())
+
+    fun setPrototype(target: Any, proto: Any?) {
+        customPrototypes[target] = proto
+    }
+
     /** `Object.getPrototypeOf` of a plain object: a class's prototype leads to its superclass's. */
     fun prototypeOf(o: JSObject): Any? {
         if (o === objectPrototype || o.jsNullPrototype) return jsNull
+        if (customPrototypes.containsKey(o)) return customPrototypes[o]
         val superclass = owners[o]?.superclass
         if (superclass != null && superclass != Any::class.java) return of(superclass)
         return objectPrototype
@@ -143,6 +150,25 @@ internal fun jsClassGet(cls: Class<*>, key: String): Any? {
     // A nested class (`android.view.View.OnClickListener`).
     cls.classes.firstOrNull { it.simpleName == key }?.let { return it }
     return jsJavaGet(cls, key)
+}
+
+/** `Object.setPrototypeOf(target, proto)`. */
+fun jsSetPrototypeOf(target: Any?, proto: Any?): Any? {
+    val v = jsBox(target)
+    if (v == null || v === JSNull) throw JSException(JSTypeError("Object.setPrototypeOf called on null or undefined"))
+    val p = jsBox(proto)
+    if (p != null && p !== JSNull && p !is JSObject && p !is JSDynamic && p !is Class<*>) throw JSException(JSTypeError("Object prototype may only be an Object or null"))
+    if (v is JSObject) {
+        if (p == null || p === JSNull) {
+            v.jsPrototype = null
+            v.jsNullPrototype = true
+        } else {
+            v.jsPrototype = p
+            v.jsNullPrototype = false
+        }
+    }
+    JSPrototypes.setPrototype(v, if (p == null || p === JSNull) jsNull else p)
+    return target
 }
 
 /** `Object.getPrototypeOf(value)`. */

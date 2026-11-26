@@ -9,6 +9,8 @@ import { RUNTIME } from './package.ts';
 const RX_FILE = join(RUNTIME, 'angular-rx.ts');
 /** @angular/forms, ported: compiled as a package's source is, its classes' type parameters erased. */
 const FORMS_FILE = join(RUNTIME, 'angular-forms.ts');
+/** @angular/cdk, ported: compiled as a package's source is, providing native-safe CDK services and directives. */
+const CDK_FILE = join(RUNTIME, 'angular-cdk.ts');
 
 const SHIMS: Record<string, string> = {
   /** The kit's Angular API: its Rx, router, HTTP and DI types, which the Angular shims and the runtime ports build on. */
@@ -240,7 +242,7 @@ const SHIMS: Record<string, string> = {
     export declare class KitNativeDialogRef { static readonly current: KitNativeDialogRef; readonly data: any; close(result?: any): void; afterClosed(): RxObservable<any> }
     export declare class KitNativeDialogService { static readonly shared: KitNativeDialogService; open(component: any, config?: any): KitNativeDialogRef }
     /** A component's own injector, from its @Component providers: classes, and { provide, useClass | useValue | useFactory | useExisting }. */
-    export declare class NodeInjector { static enter(providers: any[]): NodeInjector; leave(): void }
+    export declare class NodeInjector { static enter(providers: any[]): NodeInjector; provideSelf(instance: any): void; leave(): void }
     /** A template's \`@let\`, read once on each check of its view; \`of\` only types a template method's parameter. */
     export declare class LetSlot<T> { static of<T>(value: T): LetSlot<T>; readonly value: T }
     /** A pure Angular pipe at one binding site: \`transform\` runs when an argument is no longer \`Object.is\` the last one. */
@@ -264,7 +266,8 @@ const SHIMS: Record<string, string> = {
     }
     export declare function isPlatformBrowser(platformId: Object): boolean;
     export declare function isPlatformServer(platformId: Object): boolean;
-    export declare const DOCUMENT: import('@angular/core').InjectionToken<any>;
+    export declare const DOCUMENT: import('@angular/core').InjectionToken<typeof globalThis extends { document: infer D } ? D : any>;
+    export declare const IMAGE_CONFIG: import('@angular/core').InjectionToken<any>;
     export declare const CommonModule: any;
     export declare const NgIf: any;
     export declare const NgFor: any;
@@ -275,6 +278,7 @@ const SHIMS: Record<string, string> = {
     export declare const NgSwitchCase: any;
     export declare const NgSwitchDefault: any;
     export declare const NgTemplateOutlet: any;
+    export declare const NgComponentOutlet: any;
     export declare const AsyncPipe: any;
     export declare const DatePipe: any;
     export declare const DecimalPipe: any;
@@ -339,6 +343,7 @@ const SHIMS: Record<string, string> = {
     }
   `,
   '@angular/core': `
+    import type { Subject } from 'rxjs';
     import { TeardownHandle } from '@angular#kit';
     export type ValueEqualityFn<T> = (a: T, b: T) => boolean;
     export interface CreateComputedOptions<T> { equal?: ValueEqualityFn<T> }
@@ -347,6 +352,7 @@ const SHIMS: Record<string, string> = {
     export interface Signal<T> { (): T }
     /** \`$assign\`: a decorated input the component writes itself (\`this.x = v\`), until its parent's binding changes. */
     export interface InputSignal<T> { (): T; $assign(value: T): void }
+    export interface InputSignalWithTransform<T, TransformT> extends InputSignal<T> {}
     export interface ModelSignal<T> extends WritableSignal<T> { $assign(value: T): void; subscribe(fn: (value: T) => void): TeardownHandle }
     export interface OutputEmitterRef<T> { emit(value: T): void; subscribe(fn: (value: T) => void): TeardownHandle }
     export interface OutputRef<T> { subscribe(fn: (value: T) => void): TeardownHandle }
@@ -358,17 +364,24 @@ const SHIMS: Record<string, string> = {
     export declare function isDevMode(): boolean;
     export declare function enableProdMode(): void;
     export type Provider = any;
+    export type StaticProvider = any;
+    export type ExistingProvider = { provide: any; useExisting: any; multi?: boolean };
+    export type ValueProvider = { provide: any; useValue: any; multi?: boolean };
+    export type ClassProvider = { provide: any; useClass: any; multi?: boolean };
+    export type FactoryProvider = { provide: any; useFactory: (...args: any[]) => any; deps?: any[]; multi?: boolean };
+    export type InjectOptions = { optional?: boolean; skipSelf?: boolean; self?: boolean; host?: boolean };
     export type EnvironmentProviders = any;
     export type ModuleWithProviders<T = any> = any;
-    export type Type<T = any> = any;
+    export interface Type<T = any> extends Function { new (...args: any[]): T }
     export declare function makeEnvironmentProviders(providers: any[]): EnvironmentProviders;
     export declare function provideEnvironmentInitializer(fn: () => void): EnvironmentProviders;
     export declare function provideAppInitializer(fn: () => any): EnvironmentProviders;
     export declare function importProvidersFrom(...modules: any[]): EnvironmentProviders;
     export declare class ErrorHandler { handleError(error: any): void }
-    export declare function input<T>(value: T, options?: any): InputSignal<T>;
-    export declare function input<T>(): InputSignal<T | undefined>;
-    export declare namespace input { function required<T>(options?: any): InputSignal<T>; }
+    export declare function input<T, TransformT = T>(value: undefined, options?: { alias?: string; debugName?: string; transform?: (v: TransformT) => T | undefined }): InputSignalWithTransform<T | undefined, TransformT>;
+    export declare function input<T, TransformT = T>(value: T, options?: { alias?: string; debugName?: string; transform?: (v: TransformT) => T }): InputSignalWithTransform<T, TransformT>;
+    export declare function input<T, TransformT = T>(): InputSignalWithTransform<T | undefined, TransformT>;
+    export declare namespace input { function required<T, TransformT = T>(options?: { alias?: string; debugName?: string; transform?: (v: TransformT) => T }): InputSignalWithTransform<T, TransformT>; }
     export declare function booleanAttribute(value: unknown): boolean;
     export declare function numberAttribute(value: unknown, fallbackValue?: number): number;
     export declare function model<T>(value: T, options?: any): ModelSignal<T>;
@@ -376,6 +389,38 @@ const SHIMS: Record<string, string> = {
     export declare namespace model { function required<T>(options?: any): ModelSignal<T>; }
     export declare function output<T = void>(options?: any): OutputEmitterRef<T>;
     export declare class InjectionToken<T = any> { readonly _desc: string; readonly _type?: T; constructor(description: string, options?: { providedIn?: 'root' | 'platform' | 'any' | null; factory: () => T }) }
+    export declare class HostAttributeToken { constructor(attributeName: string) }
+    export declare const DOCUMENT: InjectionToken<typeof globalThis extends { document: infer D } ? D : any>;
+    export declare const HOST_TAG_NAME: InjectionToken<string | null>;
+    export declare const ANIMATION_MODULE_TYPE: InjectionToken<string>;
+    export declare function afterNextRender(callback: any, options?: any): EffectRef;
+    export declare function afterRenderEffect(callback: ((onCleanup: (cleanupFn: () => void) => void) => void) | Record<string, any>, options?: any): EffectRef;
+    export declare function createComponent<C>(component: Type<C>, options: { environmentInjector: EnvironmentInjector; hostElement?: any; elementInjector?: Injector; projectableNodes?: any[][]; bindings?: any[]; directives?: any[] }): ComponentRef<C>;
+    export declare abstract class Renderer2 {
+      readonly data: { [key: string]: any };
+      destroy(): void;
+      createElement(name: string, namespace?: string | null): any;
+      createComment(value: string): any;
+      createText(value: string): any;
+      appendChild(parent: any, newChild: any): void;
+      insertBefore(parent: any, newChild: any, refChild: any, isMove?: boolean): void;
+      removeChild(parent: any, oldChild: any, isHostElement?: boolean): void;
+      selectRootElement(selectorOrNode: string | any, preserveContent?: boolean): any;
+      parentNode(node: any): any;
+      nextSibling(node: any): any;
+      setAttribute(el: any, name: string, value: string, namespace?: string | null): void;
+      removeAttribute(el: any, name: string, namespace?: string | null): void;
+      addClass(el: any, name: string): void;
+      removeClass(el: any, name: string): void;
+      setStyle(el: any, style: string, value: any, flags?: any): void;
+      removeStyle(el: any, style: string, flags?: any): void;
+      setProperty(el: any, name: string, value: any): void;
+      setValue(node: any, value: string): void;
+      listen(target: any, eventName: string, callback: (event: any) => boolean | void): () => void;
+    }
+    export interface RendererType2 { id: string; encapsulation: ViewEncapsulation; styles: any[]; data: { [key: string]: any } }
+    export declare abstract class RendererFactory2 { createRenderer(hostElement: any, type: RendererType2 | null): Renderer2 }
+    export declare class ViewRef { readonly destroyed: boolean; destroy(): void; onDestroy(callback: () => void): void; markForCheck(): void; detach(): void; detectChanges(): void; checkNoChanges(): void; reattach(): void }
     export declare function inject<T>(token: InjectionToken<T>): T;
     export declare function inject<T>(token: { prototype: T }): T;
     export declare function inject<T>(token: InjectionToken<T>, options: { optional: true; self?: boolean; skipSelf?: boolean; host?: boolean }): T | null;
@@ -393,12 +438,13 @@ const SHIMS: Record<string, string> = {
     export declare function NgModule(meta: any): <C>(c: C) => C;
     export declare function Input(options?: any): any;
     export declare function Output(options?: any): any;
-    export declare class EventEmitter<T = any> {
+    export declare class EventEmitter<T = any> extends Subject<T> {
       constructor(isAsync?: boolean);
       emit(value?: T): void;
       next(value?: T): void;
-      subscribe(next?: ((value: T) => void) | null, error?: ((error: any) => void) | null, complete?: (() => void) | null): TeardownHandle;
-      subscribe(observer?: { next?: (value: T) => void; error?: (e: any) => void; complete?: () => void } | null): TeardownHandle;
+      subscribe(next?: ((value: T) => void) | null, error?: ((error: any) => void) | null, complete?: (() => void) | null): any;
+      subscribe(observer?: { next?: (value: T) => void; error?: (e: any) => void; complete?: () => void } | null): any;
+      subscribe(generatorOrNext?: any, error?: any, complete?: any): any;
     }
     export declare enum ChangeDetectionStrategy { OnPush = 0, Eager = 1, Default = 1 }
     export declare enum ViewEncapsulation { Emulated = 0, None = 2, ShadowDom = 3, ExperimentalIsolatedShadowDom = 4 }
@@ -418,11 +464,21 @@ const SHIMS: Record<string, string> = {
     export declare function ViewChildren(selector: any, options?: any): any;
     export declare function ContentChild(selector: any, options?: any): any;
     export declare function ContentChildren(selector: any, options?: any): any;
+    export declare function viewChild<T>(locator: { prototype: T }, options?: any): Signal<T | undefined>;
     export declare function viewChild<T = any>(locator: any, options?: any): Signal<T | undefined>;
-    export declare namespace viewChild { function required<T = any>(locator: any, options?: any): Signal<T>; }
+    export declare namespace viewChild {
+      function required<T>(locator: { prototype: T }, options?: any): Signal<T>;
+      function required<T = any>(locator: any, options?: any): Signal<T>;
+    }
+    export declare function viewChildren<T>(locator: { prototype: T }, options?: any): Signal<readonly T[]>;
     export declare function viewChildren<T = any>(locator: any, options?: any): Signal<readonly T[]>;
+    export declare function contentChild<T>(locator: { prototype: T }, options?: any): Signal<T | undefined>;
     export declare function contentChild<T = any>(locator: any, options?: any): Signal<T | undefined>;
-    export declare namespace contentChild { function required<T = any>(locator: any, options?: any): Signal<T>; }
+    export declare namespace contentChild {
+      function required<T>(locator: { prototype: T }, options?: any): Signal<T>;
+      function required<T = any>(locator: any, options?: any): Signal<T>;
+    }
+    export declare function contentChildren<T>(locator: { prototype: T }, options?: any): Signal<readonly T[]>;
     export declare function contentChildren<T = any>(locator: any, options?: any): Signal<readonly T[]>;
     export declare function Pipe(meta: { name: string; pure?: boolean; standalone?: boolean }): <C>(c: C) => C;
     export interface PipeTransform { transform(value: any, ...args: any[]): any }
@@ -439,10 +495,10 @@ const SHIMS: Record<string, string> = {
     export declare const ENVIRONMENT_INITIALIZER: InjectionToken<readonly (() => void)[]>;
     export declare abstract class ChangeDetectorRef { markForCheck(): void; detectChanges(): void; detach(): void; reattach(): void; checkNoChanges(): void }
     /** A template's view: what a native element is to Angular, read untyped (its type argument is the app's claim). */
-    export declare class ElementRef<T = any> { constructor(nativeElement?: any); readonly nativeElement: any }
-    export declare class TemplateRef<C = any> { readonly elementRef: ElementRef; constructor(elementRef?: ElementRef) }
-    export declare class EmbeddedViewRef<C = any> { context: C; readonly rootNodes: any[]; readonly destroyed: boolean; destroy(): void; detectChanges(): void; markForCheck(): void }
-    export declare class ComponentRef<C = any> { readonly instance: C; readonly location: ElementRef; readonly injector: Injector; readonly hostView: EmbeddedViewRef<C>; setInput(name: string, value: unknown): void; destroy(): void }
+    export declare class ElementRef<T = any> { constructor(nativeElement?: any); readonly nativeElement: T }
+    export declare class TemplateRef<C = any> { readonly elementRef: ElementRef; constructor(elementRef?: ElementRef); createEmbeddedView(context?: C, injector?: Injector): EmbeddedViewRef<C> }
+    export declare class EmbeddedViewRef<C = any> extends ViewRef { context: C; readonly rootNodes: any[] }
+    export declare class ComponentRef<C = any> { readonly instance: C; readonly location: ElementRef; readonly injector: Injector; readonly hostView: EmbeddedViewRef<C>; readonly changeDetectorRef: ChangeDetectorRef; setInput(name: string, value: unknown): void; destroy(): void; onDestroy(callback: () => void): void }
     export declare class ViewContainerRef {
       readonly element: ElementRef;
       readonly injector: Injector;
@@ -452,7 +508,7 @@ const SHIMS: Record<string, string> = {
       createComponent<C = any>(componentType: Type<C>, options?: any): ComponentRef<C>;
       remove(index?: number): void;
     }
-    export declare class ApplicationRef { readonly isStable: any; tick(): void; destroy(): void }
+    export declare class ApplicationRef { readonly isStable: any; tick(): void; attachView(viewRef: any): void; detachView(viewRef: any): void; destroy(): void }
     export declare class SimpleChange { constructor(previousValue: any, currentValue: any, firstChange: boolean); previousValue: any; currentValue: any; firstChange: boolean; isFirstChange(): boolean }
     export type SimpleChanges<T = any> = { [propName: string]: SimpleChange };
     export interface OnChanges { ngOnChanges(changes: SimpleChanges): void }
@@ -471,7 +527,16 @@ const SHIMS: Record<string, string> = {
       notifyOnChanges(): void;
       readonly changes: { subscribe(observerOrNext?: ((value: QueryList<T>) => void) | { next?: (value: QueryList<T>) => void; error?: (e: any) => void; complete?: () => void } | null): { unsubscribe(): void } };
     }
-    export declare class DestroyRef { onDestroy(callback: () => void): () => void }
+    export declare class DestroyRef { readonly destroyed: boolean; onDestroy(callback: () => void): () => void }
+    export declare class PendingTasks { add(): () => void; run<T>(task: () => Promise<T>): Promise<T> }
+    export declare enum ɵɵFactoryTarget { Directive = 0, Component = 1, Injectable = 2, Pipe = 3, NgModule = 4 }
+    export declare function ɵɵngDeclareFactory(meta: any): any;
+    export declare function ɵɵngDeclareInjectable(meta: any): any;
+    export declare function ɵɵngDeclarePipe(meta: any): any;
+    export declare function ɵɵngDeclareNgModule(meta: any): any;
+    export declare function ɵɵngDeclareDirective(meta: any): any;
+    export declare function ɵɵngDeclareComponent(meta: any): any;
+    export declare function ɵɵngDeclareClassMetadata(meta: any): any;
     export declare class NgZone {
       static isInAngularZone(): boolean;
       readonly onStable: EventEmitter<any>;
@@ -500,6 +565,8 @@ const SHIMS: Record<string, string> = {
     export declare function toSignal<T>(source: Observable<T>, options?: { injector?: any; requireSync?: boolean; manualCleanup?: boolean; equal?: any }): Signal<T | undefined>;
     export declare function toObservable<T>(source: Signal<T>, options?: { injector?: any }): Observable<T>;
     export declare function takeUntilDestroyed<T>(destroyRef?: DestroyRef): OperatorFunction<T, T>;
+    export declare function outputToObservable<T>(ref: import('@angular/core').OutputRef<T>): Observable<T>;
+    export declare function outputFromObservable<T>(observable: Observable<T>, opts?: any): import('@angular/core').OutputRef<T>;
   `,
   '@angular/router': `
     import type { Observable } from 'rxjs';
@@ -569,10 +636,12 @@ const SHIMS: Record<string, string> = {
       navigate(commands: any[], extras?: NavigationExtras): Promise<boolean>;
       navigateByUrl(url: string | UrlTree, extras?: NavigationExtras): Promise<boolean>;
     }
+    export type RedirectFunction = (redirectData: { params: Params; queryParams: Params; [key: string]: any }) => string | UrlTree;
+    export type RouterFeatures = any;
     export interface Route {
       path?: string;
       component?: any;
-      redirectTo?: string;
+      redirectTo?: string | RedirectFunction;
       pathMatch?: string;
       outlet?: string;
       data?: Record<string, any>;
@@ -603,7 +672,7 @@ const SHIMS: Record<string, string> = {
     export declare const RouterModule: { forRoot(routes: Routes, config?: any): any; forChild(routes: Routes): any };
     export declare function provideRouter(routes?: any, ...features: any[]): any;
     export declare const RouterOutlet: any;
-    export declare const RouterLink: any;
+    export declare class RouterLink { [key: string]: any }
     export declare const RouterLinkActive: any;
   `,
   // What an app implements of @angular/forms (runtime/angular-forms.ts re-exports them): declarations, no classes.
@@ -642,6 +711,11 @@ const SHIMS: Record<string, string> = {
     export declare const NativeDialogModule: any;
     export declare const NATIVE_DIALOG_DATA: import('@angular/core').InjectionToken<any>;
     export declare function registerElement(name: string, resolver: () => any, meta?: any): void;
+    export declare function getViewClass(elementName: string): any;
+    export declare function getViewMeta(nodeName: string): any;
+    export declare function isKnownView(elementName: string): boolean;
+    export declare class ModalDialogParams { context: any; closeCallback: (...args: any[]) => any; constructor(context: any, closeCallback: (...args: any[]) => any) }
+    export declare class ModalDialogService { showModal(type: any, options: any): Promise<any> }
     export declare function isAngularHmrRestoringRoute(): boolean;
     export declare const ActionBarComponent: any;
     export declare const ActionItemDirective: any;
@@ -681,7 +755,7 @@ const RXJS = `
     pipe<A, B>(a: OperatorFunction<T, A>, b: OperatorFunction<A, B>): Observable<B>;
     pipe<A, B, C>(a: OperatorFunction<T, A>, b: OperatorFunction<A, B>, c: OperatorFunction<B, C>): Observable<C>;
   }
-  export declare class Subject<T> extends Observable<T> { next(value: T): void; asObservable(): Observable<T> }
+  export declare class Subject<T> extends Observable<T> { next(value: T): void; complete(): void; asObservable(): Observable<T> }
   export declare class BehaviorSubject<T> extends Subject<T> { constructor(value: T); readonly value: T; getValue(): T }
   export declare class ReplaySubject<T> extends Subject<T> { constructor(bufferSize?: number) }
   export declare function map<T, R>(project: (value: T, index: number) => R): OperatorFunction<T, R>;
@@ -699,6 +773,12 @@ export const modules: ModuleRules = {
     '@angular#rx': { file: RX_FILE, sourcesOnly: true, otherwise: '@angular#kit' },
     // Its controls are read untyped as often as typed (`form.get('name').value`).
     '@angular/forms': { file: FORMS_FILE, membersByName: true },
+    ...Object.fromEntries(
+      ['@angular/cdk/a11y', '@angular/cdk/bidi', '@angular/cdk/coercion', '@angular/cdk/dialog', '@angular/cdk/keycodes', '@angular/cdk/menu', '@angular/cdk/observers', '@angular/cdk/observers/private', '@angular/cdk/overlay', '@angular/cdk/platform', '@angular/cdk/portal', '@angular/cdk/scrolling'].map((m) => [
+        m,
+        { file: CDK_FILE, membersByName: true },
+      ]),
+    ),
   },
   // `<package>/angular`, whose components `angularLibraries` compiles with the app's.
   isLibraryEntry: (specifier, source, virtual) => specifier === `${core.packageOf(specifier)}/angular` && virtual.some((f) => f.endsWith('.release.ts') && f.startsWith(dirname(source) + '/')),

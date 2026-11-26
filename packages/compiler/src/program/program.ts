@@ -4,7 +4,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, resolve, sep } from 'node:path';
 import { foldPlatform, type Platform } from './platform.ts';
 import { desugarConstructorFactories } from './constructor-factories.ts';
+import { desugarClassMixins } from './class-mixins.ts';
 import { expandImportMetaGlob } from './glob.ts';
+import { NO_VITE_PLUGINS, type ViteAppPlugins } from './vite-plugins.ts';
 import { NATIVE_CONTROLLERS, NATIVE_VIEWS, nativeViewOf } from './core-facts.ts';
 import type { PluginSources } from '../plugins/source.ts';
 import { packageOf, runtimeFile } from '../plugins/resolve.ts';
@@ -25,9 +27,9 @@ const SHIMS: Record<string, string> = {
     /** Deeply reactive: arrays and objects it holds notify on mutation. */
     export interface DeepRef<T> { value: T }
     export declare function $ref<T>(value: T): DeepRef<T>;
-    import type { ItemEventData, PanGestureEventData, PinchGestureEventData, RotationGestureEventData, SwipeGestureEventData, TouchGestureEventData, Pointer as CorePointer } from '@nativescript/core';
+    import type { ItemEventData, PanGestureEventData, PinchGestureEventData, PropertyChangeData, RotationGestureEventData, SwipeGestureEventData, TouchGestureEventData, Pointer as CorePointer } from '@nativescript/core';
     /** A template handler's \$event: whichever of core's event types the handler declares. */
-    export type EventData = ItemEventData & PanGestureEventData & PinchGestureEventData & RotationGestureEventData & SwipeGestureEventData & TouchGestureEventData & { value: any; item: any };
+    export type EventData = ItemEventData & PanGestureEventData & PinchGestureEventData & PropertyChangeData & RotationGestureEventData & SwipeGestureEventData & TouchGestureEventData & { value: any; item: any; target?: any; currentTarget?: any; preventDefault?(): void; stopPropagation?(): void };
     export type Pointer = CorePointer;
     export declare function $navigate(page: () => any): void;
     export interface WritableSignal<T> { (): T; set(value: T): void; update(fn: (value: T) => T): void; $write(value: T | ((previous: T) => T)): void }
@@ -147,6 +149,23 @@ const WORKER_GLOBALS = `
   declare function close(): void;
 `;
 
+/** Minimal non-DOM globals added when the app's tsconfig includes `lib: ["dom"]` (which already declares console, URL, Worker, crypto, etc.). */
+const DOM_COMPAT_GLOBALS = `
+  declare function setTimeout(callback: (...args: any[]) => void): number;
+  declare function setInterval(callback: (...args: any[]) => void): number;
+  declare namespace NodeJS { type Timeout = number; type Timer = number; type Immediate = number }
+  declare var global: typeof globalThis;
+  declare function cancelAnimationFrame(id: number | undefined): void;
+  declare function __nsRegisterAppModules(modules: any): void;
+  declare function __nsClass(make: () => any): any;
+  declare function __nsRegisterCompiledBinding(key: string, binding: any): void;
+  declare function __nsRegisterPage(file: string, factory: ((exports: any, moduleName: string, xmlModule: string) => any) | undefined, codeModule?: string, codeExports?: any): void;
+  interface SymbolConstructor {
+    readonly dispose: unique symbol;
+    readonly asyncDispose: unique symbol;
+  }
+`;
+
 /** The platform's native API typings, as an app's `references.d.ts` includes them. */
 const PLATFORM_TYPES: Record<Platform, string> = { ios: '@nativescript/types-ios/index.d.ts', android: '@nativescript/types-android/index.d.ts' };
 
@@ -185,6 +204,16 @@ const NOT_PLUGINS = /^(@nativescript\/(core|types|types-ios|types-android|types-
  * resolves default and namespace imports directly to a real declaration in both Swift and Kotlin backends.
  */
 function desugarDefaultExport(code: string, name: string): string {
+	// Desugar standard UMD `if (typeof module !== 'undefined' && module.exports) { module.exports = X; }` to an ES default export.
+	if (/\.m?js$/.test(name) && code.includes('module.exports') && !/\brequire\s*\(/.test(code)) {
+		code = code.replace(
+			/if\s*\(\s*typeof\s+module\s*!==?\s*['"]undefined['"]\s*&&\s*module\.exports\s*\)\s*(?:\{\s*module\.exports\s*=\s*([^;{}]+?);?\s*\}|module\.exports\s*=\s*([^;]+?);?)/g,
+			(_, a: string | undefined, b: string | undefined) => {
+				const rhs = (a ?? b ?? '').trim();
+				return /^[A-Za-z_$][\w$]*$/.test(rhs) ? `export { ${rhs} as default };` : `const __nsDefault = ${rhs}; export { __nsDefault as default };`;
+			},
+		);
+	}
 	if (!code.includes('export default')) return code;
 	const sf = ts.createSourceFile(name, code, ts.ScriptTarget.Latest, true);
 	const edits: { start: number; end: number; text: string }[] = [];
@@ -210,7 +239,7 @@ function desugarDefaultExport(code: string, name: string): string {
  * own configuration is non-strict where no tsconfig.json of its says (a test's). `build`: the framework adapter's module
  * rules, the plugins built as stand-ins and the bundler's defines it is read with (by default, none).
  */
-export function createProgram(roots: string[], virtual: Map<string, string>, platform: Platform = 'ios', modulesDir?: string, plugins?: PluginSources, declarations: string[] = [], replacements: Record<string, string> = {}, overrides: ts.CompilerOptions = {}, aliased: (specifier: string) => string | undefined = () => undefined, appLenient?: boolean, build: BuildContext = new BuildContext()): Program {
+export function createProgram(roots: string[], virtual: Map<string, string>, platform: Platform = 'ios', modulesDir?: string, plugins?: PluginSources, declarations: string[] = [], replacements: Record<string, string> = {}, overrides: ts.CompilerOptions = {}, aliased: (specifier: string, importer?: string) => string | undefined = () => undefined, appLenient?: boolean, build: BuildContext = new BuildContext(), vitePlugins: ViteAppPlugins = NO_VITE_PLUGINS): Program {
 	const shimPath = (m: string) => `/__shims__/${m.replace(/[@/]/g, '_')}.d.ts`;
 	const rules = build.adapter.rules;
 	const notPlugin = (pkg: string) => NOT_PLUGINS.test(pkg) || build.adapter.isFrameworkPackage(pkg) || build.stubbedPlugins.has(pkg);
@@ -219,7 +248,8 @@ export function createProgram(roots: string[], virtual: Map<string, string>, pla
 	const substituted = new Set(Object.values(rules.substitutions ?? {}).map((s) => s.file));
 	const files = new Map<string, string>(virtual);
 	for (const [m, text] of Object.entries(shims)) files.set(shimPath(m), text);
-	files.set('/__shims__/globals.d.ts', GLOBALS + WORKER_GLOBALS);
+	const hasDom = appIncludesDomLib(roots[0] ?? [...virtual.keys()][0]);
+	files.set('/__shims__/globals.d.ts', hasDom ? DOM_COMPAT_GLOBALS : GLOBALS + WORKER_GLOBALS);
 	const modules = modulesDir ?? nodeModules(dirname([...roots, ...virtual.keys()][0]));
 	const platformTypes = resolve(modules, PLATFORM_TYPES[platform]);
 	if (!existsSync(platformTypes)) throw new Error(`${platformTypes} is missing: install ${PLATFORM_TYPES[platform].split('/index')[0]}`);
@@ -230,7 +260,7 @@ export function createProgram(roots: string[], virtual: Map<string, string>, pla
 		moduleResolution: ts.ModuleResolutionKind.Bundler,
 		// Of ES2024, only what both runtimes implement (groupBy, withResolvers): the rest would type-check and then not translate.
 		strict: true,
-		lib: ['lib.es2023.d.ts', 'lib.es2024.object.d.ts', 'lib.es2024.collection.d.ts', 'lib.es2024.promise.d.ts'],
+		lib: ['lib.es2023.d.ts', 'lib.es2024.object.d.ts', 'lib.es2024.collection.d.ts', 'lib.es2024.promise.d.ts', ...(hasDom ? ['lib.dom.d.ts', 'lib.dom.iterable.d.ts'] : [])],
 		types: [],
 		skipLibCheck: true,
 		experimentalDecorators: true,
@@ -268,17 +298,22 @@ export function createProgram(roots: string[], virtual: Map<string, string>, pla
 		return pluginDeclaredExports(code, name, platform);
 	};
 	const appRoot = plugins?.options?.app ? resolve(plugins.options.app) : null;
+	const rootSet = new Set(roots);
 	host.getSourceFile = (name, version, onError) => {
 		const text = files.get(name) ?? (isSource(name) && existsSync(name) ? readFileSync(name, 'utf8') : appTypings.has(name) ? nativeReferences(readFileSync(name, 'utf8'), name) : undefined);
 		if (text === undefined) {
 			// A package's own TypeScript (or pure-JS ESM) source.
 			if (!/\.(tsx?|m?js)$/.test(name) || name.endsWith('.d.ts') || !existsSync(name)) return readLib(name, version, onError);
 			const raw = desugarDefaultExport(expandImportMetaGlob(readFileSync(name, 'utf8'), name, appRoot), name);
-			if (/\.m?js$/.test(name)) return ts.createSourceFile(name, raw, version, true, ts.ScriptKind.JS);
-			return ts.createSourceFile(name, desugarConstructorFactories(declaredExports(name, raw), name), version, true);
+			if (/\.m?js$/.test(name)) {
+				const typedefs = pluginJsTypedefs(name, plugins);
+				return ts.createSourceFile(name, typedefs ? `${raw}\n${typedefs}\n` : raw, version, true, ts.ScriptKind.JS);
+			}
+			return ts.createSourceFile(name, desugarClassMixins(desugarConstructorFactories(declaredExports(name, raw), name), name), version, true);
 		}
-		const expanded = !name.startsWith('/__shims__/') && !name.endsWith('.d.ts') ? desugarDefaultExport(expandImportMetaGlob(text, name, appRoot), name) : text;
-		const code = /\.tsx?$/.test(name) && !name.endsWith('.d.ts') ? desugarConstructorFactories(declaredExports(name, expanded), name) : expanded;
+		const transformed = !name.startsWith('/__shims__/') && !name.startsWith('/__raw__/') && !name.startsWith('/__vite__/') && !name.endsWith('.d.ts') ? vitePlugins.transform(text, name) : text;
+		const expanded = !name.startsWith('/__shims__/') && !name.endsWith('.d.ts') ? desugarDefaultExport(expandImportMetaGlob(transformed, name, appRoot), name) : transformed;
+		const code = /\.tsx?$/.test(name) && !name.endsWith('.d.ts') ? desugarClassMixins(desugarConstructorFactories(declaredExports(name, expanded), name), name) : expanded;
 		return ts.createSourceFile(name, isSource(name) ? foldPlatform(code, name, platform, modules, build.defines) : code, version, true);
 	};
 	const fileExists = host.fileExists.bind(host);
@@ -308,7 +343,7 @@ export function createProgram(roots: string[], virtual: Map<string, string>, pla
 			// Vite `?raw` asset import (`import css from 'pkg/file.css?raw'` or `'./example.ts?raw'`): inline file contents as default export.
 			if (lit.text.endsWith('?raw')) {
 				const rawSpec = lit.text.slice(0, -4);
-				const aliasedRaw = isApp(containing) ? aliased(rawSpec) : undefined;
+				const aliasedRaw = isSource(containing) ? aliased(rawSpec, containing) : undefined;
 				const candidate = aliasedRaw ?? (rawSpec.startsWith('.') || isAbsolute(rawSpec) ? resolve(dirname(containing), rawSpec) : resolve(modules, rawSpec));
 				if (existsSync(candidate)) {
 					const hash = createHash('sha256').update(candidate).digest('hex').slice(0, 16);
@@ -318,8 +353,45 @@ export function createProgram(roots: string[], virtual: Map<string, string>, pla
 					return { resolvedModule: { resolvedFileName: rawPath, extension: ts.Extension.Ts } };
 				}
 			}
-			// The app's own tsconfig `paths` (`~/app/x`), as its bundler resolves them: plugins' sources have their own.
-			const aliasTarget = isApp(containing) ? aliased(lit.text) : undefined;
+			// JSON module import (`import data from 'pkg/data.json'` or `'./data.json'`): parse at runtime via JSON.parse so large data maps don't explode into native struct definitions.
+			if (lit.text.endsWith('.json') && !containing.startsWith('/__shims__/')) {
+				const aliasedJson = isSource(containing) ? aliased(lit.text, containing) : undefined;
+				let candidate = aliasedJson ?? (lit.text.startsWith('.') || isAbsolute(lit.text) ? resolve(dirname(containing), lit.text) : resolve(modules, lit.text));
+				if (!existsSync(candidate) && !lit.text.startsWith('.') && !isAbsolute(lit.text)) {
+					for (let dir = dirname(containing); ; dir = dirname(dir)) {
+						const probe = resolve(dir, 'node_modules', lit.text);
+						if (existsSync(probe)) {
+							candidate = probe;
+							break;
+						}
+						if (dirname(dir) === dir) break;
+					}
+				}
+				if (existsSync(candidate)) {
+					const hash = createHash('sha256').update(candidate).digest('hex').slice(0, 16);
+					const jsonPath = `/__json__/${hash}.ts`;
+					if (!files.has(jsonPath)) files.set(jsonPath, `const __nsJson_${hash}: any = JSON.parse(${JSON.stringify(readFileSync(candidate, 'utf8'))});\nexport { __nsJson_${hash} as default };\n`);
+					pluginFiles.add(jsonPath);
+					return { resolvedModule: { resolvedFileName: jsonPath, extension: ts.Extension.Ts } };
+				}
+			}
+			// Custom Vite plugin `load(id)` hook for query-suffixed virtual modules (e.g. `.md?ns-analog-content`).
+			const qIdx = lit.text.indexOf('?');
+			if (qIdx > 0) {
+				const baseSpec = lit.text.slice(0, qIdx);
+				const query = lit.text.slice(qIdx);
+				const resolvedBase = baseSpec.startsWith('.') || isAbsolute(baseSpec) ? resolve(dirname(containing), baseSpec) : (isSource(containing) ? aliased(baseSpec, containing) : undefined) ?? resolve(modules, baseSpec);
+				const loaded = vitePlugins.load(resolvedBase + query);
+				if (loaded !== undefined) {
+					const hash = createHash('sha256').update(resolvedBase + query).digest('hex').slice(0, 16);
+					const vPath = `/__vite__/${hash}.ts`;
+					if (!files.has(vPath)) files.set(vPath, desugarDefaultExport(loaded, vPath));
+					pluginFiles.add(vPath);
+					return { resolvedModule: { resolvedFileName: vPath, extension: ts.Extension.Ts } };
+				}
+			}
+			// The app's own tsconfig `paths` / Vite aliases (`~/app/x`), as its bundler resolves them: workspace sources outside node_modules share them.
+			const aliasTarget = isSource(containing) ? aliased(lit.text, containing) : undefined;
 			const m = aliasTarget ?? lit.text;
 			const substitution = rules.substitutions && Object.hasOwn(rules.substitutions, m) && !replacements[m] ? rules.substitutions[m] : undefined;
 			if (substitution && (plugins || !substitution.sourcesOnly)) {
@@ -348,9 +420,13 @@ export function createProgram(roots: string[], virtual: Map<string, string>, pla
 				for (const candidate of own ? [...direct, stem + '.d.ts', stem + '.ts'] : [...direct, `${stem}.${platform}.ts`, stem + '.ts', stem + '.tsx', `${stem}/index.${platform}.ts`, stem + '/index.ts', ...jsFallback]) {
 					if (files.has(candidate) || existsSync(candidate)) {
 						if (candidate.endsWith('.d.ts')) return { resolvedModule: { resolvedFileName: candidate, extension: ts.Extension.Dts } };
+						// A component file replaced by a compiled `.release.ts` virtual file must resolve to the virtual file everywhere so classes with private members stay nominally identical.
+						const released = candidate.endsWith('.ts') && !candidate.endsWith('.release.ts') ? candidate.replace(/\.ts$/, '.release.ts') : undefined;
+						if (released && virtual.has(released) && containing !== released) return { resolvedModule: { resolvedFileName: released, extension: ts.Extension.Ts } };
 						// A plugin's own modules, a substitution's file, or a monorepo workspace library outside the app folder
-						// are compiled through closed-world reachability so only reached declarations emit native code.
-						if (pluginFiles.has(containing) || substituted.has(candidate) || (aliasTarget && appRoot && !candidate.startsWith(appRoot + sep))) pluginFiles.add(candidate);
+						// (not already compiled as an app/component root) are compiled through closed-world reachability.
+						const isCompiledRoot = rootSet.has(candidate) || virtual.has(candidate) || virtual.has(candidate.replace(/\.ts$/, '.release.ts'));
+						if (!isCompiledRoot && (pluginFiles.has(containing) || substituted.has(candidate) || (aliasTarget && appRoot && !candidate.startsWith(appRoot + sep)))) pluginFiles.add(candidate);
 						const extension = candidate.endsWith('.tsx') ? ts.Extension.Tsx : candidate.endsWith('.mjs') ? ts.Extension.Mjs : candidate.endsWith('.js') ? ts.Extension.Js : ts.Extension.Ts;
 						return { resolvedModule: { resolvedFileName: candidate, extension } };
 					}
@@ -366,7 +442,9 @@ export function createProgram(roots: string[], virtual: Map<string, string>, pla
 			const typeOnly = !containing.startsWith('/__shims__/') && ts.isImportDeclaration(lit.parent) && !!lit.parent.importClause?.isTypeOnly && !(lit.parent.parent && ts.isSourceFile(lit.parent.parent) && lit.parent.parent.statements.some(valueImport));
 			// A plugin's augmentation of another's module augments the module the program compiles: that package's source.
 			const augments = ts.isModuleDeclaration(lit.parent) && lit.parent.name === lit && !!plugins?.all().some((p) => containing.startsWith(p.root + '/'));
-			if (plugins && (isSource(containing) || pluginFiles.has(containing) || augments || containing.startsWith('/__shims__/')) && !m.startsWith('.') && !m.startsWith('/') && !notPlugin(packageOf(m)) && !typeOnly) {
+			// Every import of `rxjs` (including `import type` and `.d.ts` files like `@angular/cdk`) must resolve to the same compiled `rxjs` source so Observable/OperatorFunction types match across the whole program.
+			const sharedRxjs = m === 'rxjs' || m.startsWith('rxjs/');
+			if (plugins && (isSource(containing) || pluginFiles.has(containing) || augments || containing.startsWith('/__shims__/') || (containing.endsWith('.d.ts') && sharedRxjs)) && !m.startsWith('.') && !m.startsWith('/') && !notPlugin(packageOf(m)) && (!typeOnly || sharedRxjs)) {
 				const js = runtimeFile(m, modules, platform, localPackages);
 				if (js) {
 					plugins.get(js.packageDir);
@@ -676,6 +754,18 @@ function appDefinesFields(from: string | undefined): boolean | undefined {
 	return undefined;
 }
 
+/** Whether the app's tsconfig.json (its `extends` followed) includes the DOM library (`"dom"`). */
+function appIncludesDomLib(from: string | undefined): boolean {
+	if (!from) return false;
+	for (let dir = dirname(from); dirname(dir) !== dir; dir = dirname(dir)) {
+		const file = resolve(dir, 'tsconfig.json');
+		if (!existsSync(file)) continue;
+		const libs = parseTsConfig(file)?.options?.lib ?? [];
+		return libs.some((l) => /^lib\.dom(\.|$)/i.test(l) || /^dom$/i.test(l));
+	}
+	return false;
+}
+
 /** Whether the app's tsconfig.json (its `extends` followed) leaves strict checking off. */
 function appStrictness(from: string | undefined): boolean {
 	if (!from) return false;
@@ -686,6 +776,35 @@ function appStrictness(from: string | undefined): boolean {
 		return !(o.strict || o.strictNullChecks);
 	}
 	return false;
+}
+
+/**
+ * For a pure-JS plugin compiled from `.js`/`.mjs` (e.g. `clsx`), exposes type/interface names declared in its
+ * package `.d.ts` as JSDoc `@typedef` so `import { clsx, type ClassValue } from 'clsx'` type-checks.
+ */
+function pluginJsTypedefs(file: string, plugins?: PluginSources): string {
+	const owner = plugins?.all().find((p) => file.startsWith(p.root + sep) || file.startsWith(p.dir + sep));
+	if (!owner) return '';
+	const pkgPath = resolve(owner.dir, 'package.json');
+	if (!existsSync(pkgPath)) return '';
+	let typesRel: string | undefined;
+	try {
+		const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+		typesRel = typeof pkg.types === 'string' ? pkg.types : typeof pkg.typings === 'string' ? pkg.typings : undefined;
+	} catch {
+		return '';
+	}
+	if (!typesRel) return '';
+	const dtsPath = resolve(owner.dir, typesRel);
+	if (!existsSync(dtsPath)) return '';
+	const dts = ts.createSourceFile(dtsPath, readFileSync(dtsPath, 'utf8'), ts.ScriptTarget.Latest, false);
+	const names = new Set<string>();
+	const scan = (st: ts.Statement) => {
+		if ((ts.isTypeAliasDeclaration(st) || ts.isInterfaceDeclaration(st)) && st.name) names.add(st.name.text);
+		else if (ts.isModuleDeclaration(st) && st.body && ts.isModuleBlock(st.body)) st.body.statements.forEach(scan);
+	};
+	dts.statements.forEach(scan);
+	return [...names].map((n) => `/** @typedef {any} ${n} */`).join('\n');
 }
 
 /**
@@ -729,16 +848,34 @@ export function pluginDeclaredExports(code: string, file: string, platform: Plat
 		}
 		return { exported, local, stars, from };
 	};
-	const own = exportsOf(ts.createSourceFile(file, code, ts.ScriptTarget.Latest, false));
-	const declared = exportsOf(ts.createSourceFile(`${stem}.d.ts`, readFileSync(`${stem}.d.ts`, 'utf8'), ts.ScriptTarget.Latest, false));
+	const ownSf = ts.createSourceFile(file, code, ts.ScriptTarget.Latest, true);
+	const declaredSf = ts.createSourceFile(`${stem}.d.ts`, readFileSync(`${stem}.d.ts`, 'utf8'), ts.ScriptTarget.Latest, false);
+	const own = exportsOf(ownSf);
+	const declared = exportsOf(declaredSf);
+	// Give unannotated exported functions in a plugin's platform file their sibling `.d.ts` return type so callers see the published contract.
+	const dtsFnReturn = new Map<string, number>();
+	for (const st of declaredSf.statements) {
+		if (!ts.isFunctionDeclaration(st) || !st.name || !st.type || st.typeParameters?.length) continue;
+		dtsFnReturn.set(st.name.text, (dtsFnReturn.get(st.name.text) ?? 0) + 1);
+	}
+	const fnEdits: { at: number; text: string }[] = [];
+	const relBase = `./${basename(stem)}`;
+	for (const st of ownSf.statements) {
+		if (!ts.isFunctionDeclaration(st) || !st.name || st.type || !st.body || st.typeParameters?.length) continue;
+		const isExported = !!ts.getModifiers(st)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
+		if (!isExported || dtsFnReturn.get(st.name.text) !== 1) continue;
+		fnEdits.push({ at: st.body.getStart(ownSf), text: `: ReturnType<typeof import(${JSON.stringify(relBase)}).${st.name.text}> ` });
+	}
+	let patched = code;
+	for (const e of fnEdits.sort((a, b) => b.at - a.at)) patched = patched.slice(0, e.at) + e.text + patched.slice(e.at);
 	const lines: string[] = [];
 	for (const name of declared.exported) {
 		if (own.exported.has(name)) continue;
 		const spec = declared.from.get(name);
 		if (own.local.has(name)) lines.push(`export { ${name} };`);
 		else if (spec) lines.push(`export { ${name} } from ${JSON.stringify(spec)};`);
-		else if (declared.local.get(name) === 'type') lines.push(`export type { ${name} } from ${JSON.stringify(`./${basename(stem)}`)};`);
+		else if (declared.local.get(name) === 'type') lines.push(`export type { ${name} } from ${JSON.stringify(relBase)};`);
 	}
 	for (const spec of declared.stars) if (!own.stars.has(spec)) lines.push(`export * from ${JSON.stringify(spec)};`);
-	return lines.length ? `${code}\n${lines.join('\n')}\n` : code;
+	return lines.length ? `${patched}\n${lines.join('\n')}\n` : patched;
 }

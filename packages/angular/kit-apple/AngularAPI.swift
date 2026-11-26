@@ -5,10 +5,14 @@ import Foundation
 // instance (`providedIn: 'root'`).
 
 /// A component class used as a value (`dialog.open(SheetComponent)`): what creating and rendering it gives.
-public final class ComponentFactory {
+public final class ComponentFactory: JSTokenKeyed {
     nonisolated deinit {}
     let make: () throws -> View
-    public init(_ make: @escaping () throws -> View) { self.make = make }
+    public let jsTokenKey: Any.Type?
+    public init(_ componentType: Any.Type? = nil, _ make: @escaping () throws -> View) {
+        self.jsTokenKey = componentType
+        self.make = make
+    }
 }
 
 /// `NativeDialogRef`: the open dialog a component was created in.

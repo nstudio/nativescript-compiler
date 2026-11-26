@@ -111,6 +111,15 @@ export const globalCallsMethods = {
 				case 'clearTimeout':
 				case 'clearInterval':
 					return `${RT[globalOp(op)]}(${arg(0) ? this.restArgument(e, arg(0), 'Double?') : 'null'})`;
+				case 'requestAnimationFrame': {
+					const takesTime = this.checker
+						.getTypeAtLocation(arg(0))
+						.getCallSignatures()
+						.some((sig) => sig.parameters.length > 0);
+					return `org.nativescript.kit.requestAnimationFrame { __t -> (${this.fn(arg(0))})(${takesTime ? '__t' : ''}); Unit }`;
+				}
+				case 'cancelAnimationFrame':
+					return `org.nativescript.kit.cancelAnimationFrame(${arg(0) ? this.restArgument(e, arg(0), 'Double?') : 'null'})`;
 				case 'Symbol':
 					return `${RT.jsSymbol}(${arg(0) ? this.str(arg(0)) : 'null'})`;
 				case 'BigInt':
@@ -119,6 +128,7 @@ export const globalCallsMethods = {
 			if (fn?.args) return runtimeCall(this, fn, e);
 			// `Error('x')` constructs as `new Error('x')` does; so does `Array(n)`.
 			if (ERRORS[name]) return this.errorValue(name, e.arguments);
+			if (name === 'getComputedStyle') return `run { ${arg(0) ? `${this.coerce(arg(0), 'Any?')}; ` : ''}JSObject("getPropertyValue" to JSFunction { "" }) }`;
 			if (name === 'Array' && isLibGlobal(this, callee as ts.Identifier)) return this.arrayConstruct(e, this.typeOf(e), e.arguments);
 			// `RegExp(re)` without flags is `re` itself; otherwise it constructs as `new RegExp` does.
 			if (name === 'RegExp' && decl && isLibDeclaration(decl)) return e.arguments.length === 1 && this.isRegExp(e.arguments[0]) ? this.expr(e.arguments[0]) : this.regExpConstruct(e.arguments, true);

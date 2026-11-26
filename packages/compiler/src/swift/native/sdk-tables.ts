@@ -29,8 +29,8 @@ export function isSubframework(module: string): boolean {
 
 // By the SDK's build too: a beta and its release candidate share a version and differ in API.
 export const tableCache = () => join(compiledEnv('TABLE_CACHE') ?? cacheDir('native-tables'), `ios-${sdk().version}-${sdk().build}`);
-/** The layout tables are written in: availability of enums, escaping block parameters, optional protocol properties, typedefs of a plugin's headers. */
-const TABLE_FORMAT = 8;
+/** The layout tables are written in: availability of enums, escaping block parameters, optional protocol properties, typedefs of a plugin's headers, nested @objc types. */
+const TABLE_FORMAT = 9;
 
 export const tables = buildCache(new Map<string, NativeTable>());
 /** The key each module outside the SDK was loaded under. */
@@ -170,7 +170,7 @@ function generate(module: string, extraArgs: string[], plugin = false, internal 
 	const objcUSR = plugin
 		? (usr: string) =>
 				usr
-					.replace(/^c:@C?M@\w+@@?(?=objc\()/, 'c:')
+					.replace(/^c:@C?M@\w+(?:@[A-Z]+@\w+)*@@?(?=objc\()/, 'c:')
 					.replace(/^c:@M@\w+@(?=E@)/, 'c:@')
 					.replace(/(^|::SYNTHESIZED::)c:[^@:]+@(?=T@)/, '$1c:@')
 		: (usr: string) => usr;
@@ -215,6 +215,46 @@ function generate(module: string, extraArgs: string[], plugin = false, internal 
 					if (kind && s.pathComponents.length === 1 && (s.accessLevel === 'public' || s.accessLevel === 'open') && !s.pathComponents[0].startsWith('_')) swiftTypes[s.pathComponents[0]] = kind;
 				}
 			}
+			const swiftObjcMap = new Map<string, string>();
+			if (plugin) {
+				for (const s of graph.symbols) {
+					if (!s.identifier.precise.startsWith('s:') || (s.kind.identifier !== 'swift.protocol' && s.kind.identifier !== 'swift.class')) continue;
+					const declText = (s.declarationFragments ?? []).map((x: Fragment) => x.spelling).join('');
+					if (!/@objc\b/.test(declText)) continue;
+					const explicit = /@objc\((\w+)\)/.exec(declText)?.[1];
+					const name = explicit ?? s.pathComponents.at(-1);
+					if (name) swiftObjcMap.set(s.identifier.precise, `c:objc(${s.kind.identifier === 'swift.protocol' ? 'pl' : 'cs'})${name}`);
+				}
+				if (swiftObjcMap.size) {
+					const ownerOf = new Map<string, string>();
+					for (const r of graph.relationships as Rel[]) if ((r.kind === 'memberOf' || r.kind === 'requirementOf') && swiftObjcMap.has(r.target)) ownerOf.set(r.source, swiftObjcMap.get(r.target)!);
+					for (const s of graph.symbols) {
+						const mapped = swiftObjcMap.get(s.identifier.precise);
+						if (mapped) {
+							s.identifier.precise = mapped;
+							continue;
+						}
+						const ownerUsr = ownerOf.get(s.identifier.precise);
+						if (!ownerUsr || !s.identifier.precise.startsWith('s:')) continue;
+						const declText = (s.declarationFragments ?? []).map((x: Fragment) => x.spelling).join('');
+						if (!/@objc\b/.test(declText) && !ownerUsr.includes('objc(pl)')) continue;
+						const last = s.pathComponents.at(-1) ?? '';
+						if (s.kind.identifier === 'swift.method' || s.kind.identifier === 'swift.type.method' || s.kind.identifier === 'swift.init') {
+							const part = s.kind.identifier === 'swift.type.method' ? 'cm' : 'im';
+							const explicitSel = /@objc\(([^)]+)\)/.exec(declText)?.[1];
+							const m = /^(\w+)\(([^)]*)\)$/.exec(last);
+							const lbls = m && m[2] ? m[2].split(':').slice(0, -1) : [];
+							const sel = explicitSel ?? (m ? `${m[1]}${lbls.length ? (lbls[0] === '_' ? ':' : `With${upperFirst(lbls[0])}:`) + lbls.slice(1).map((l) => (l === '_' ? ':' : `${l}:`)).join('') : ''}` : last);
+							swiftObjcMap.set(s.identifier.precise, `${ownerUsr}(${part})${sel}`);
+							s.identifier.precise = `${ownerUsr}(${part})${sel}`;
+						} else if (s.kind.identifier === 'swift.property' || s.kind.identifier === 'swift.type.property') {
+							const part = s.kind.identifier === 'swift.type.property' ? 'cpy' : 'py';
+							swiftObjcMap.set(s.identifier.precise, `${ownerUsr}(${part})${last}`);
+							s.identifier.precise = `${ownerUsr}(${part})${last}`;
+						}
+					}
+				}
+			}
 			for (const s of graph.symbols) {
 				const swiftClass = plugin && s.kind.identifier === 'swift.class' && /^c:@M@/.test(s.identifier.precise);
 				s.identifier.precise = objcUSR(s.identifier.precise);
@@ -226,7 +266,7 @@ function generate(module: string, extraArgs: string[], plugin = false, internal 
 				// An Objective-C method with a completion handler is imported twice under one USR; the `async` variant drops the handler.
 				if (!prev || isAsync(prev)) symbols.set(sym.usr, sym);
 			}
-			for (const r of graph.relationships as Rel[]) rels.push({ ...r, source: objcUSR(r.source), target: objcUSR(r.target) });
+			for (const r of graph.relationships as Rel[]) rels.push({ ...r, source: objcUSR(swiftObjcMap.get(r.source) ?? r.source), target: objcUSR(swiftObjcMap.get(r.target) ?? r.target) });
 		}
 	} finally {
 		rmSync(dir, { recursive: true, force: true });

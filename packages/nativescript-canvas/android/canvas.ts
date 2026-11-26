@@ -75,7 +75,7 @@ export class Canvas extends View {
 	}
 
 	disposeNativeView(): void {
-		this._canvas.setListener(null);
+		this._canvas.setListener(null as any);
 		this._context2d?.__stopRaf();
 		this._context2d = null;
 		this._gpuContext = null;
@@ -204,3 +204,43 @@ export class GPU {
 export const GPUBufferUsage = { MAP_READ: 1, MAP_WRITE: 2, COPY_SRC: 4, COPY_DST: 8, INDEX: 16, VERTEX: 32, UNIFORM: 64, STORAGE: 128, INDIRECT: 256, QUERY_RESOLVE: 512 };
 export const GPUShaderStage = { VERTEX: 1, FRAGMENT: 2, COMPUTE: 4 };
 export const GPUTextureUsage = { COPY_SRC: 1, COPY_DST: 2, TEXTURE_BINDING: 4, STORAGE_BINDING: 8, RENDER_ATTACHMENT: 16 };
+
+/** `OffscreenCanvas`: an offscreen 2D canvas backed by the plugin's `Canvas` for measurement and offscreen drawing. */
+export class OffscreenCanvas {
+	private _inner: Canvas;
+	width: number;
+	height: number;
+
+	constructor(width = 0, height = 0) {
+		this.width = width;
+		this.height = height;
+		this._inner = new Canvas();
+		if (width > 0) this._inner.width = width;
+		if (height > 0) this._inner.height = height;
+	}
+
+	getContext(type: string, options?: any): any {
+		return this._inner.getContext(type);
+	}
+}
+
+/** `Path2D`: reusable 2D path descriptor (SVG path string or procedural path commands). */
+export class Path2D {
+	readonly _svgPath: string | undefined;
+
+	constructor(path?: string | Path2D) {
+		this._svgPath = typeof path === 'string' ? path : path?._svgPath;
+	}
+
+	addPath(_path: Path2D, _transform?: any): void {}
+	closePath(): void {}
+	moveTo(_x: number, _y: number): void {}
+	lineTo(_x: number, _y: number): void {}
+	bezierCurveTo(_cp1x: number, _cp1y: number, _cp2x: number, _cp2y: number, _x: number, _y: number): void {}
+	quadraticCurveTo(_cpx: number, _cpy: number, _x: number, _y: number): void {}
+	arc(_x: number, _y: number, _radius: number, _startAngle: number, _endAngle: number, _counterclockwise?: boolean): void {}
+	arcTo(_x1: number, _y1: number, _x2: number, _y2: number, _radius: number): void {}
+	ellipse(_x: number, _y: number, _radiusX: number, _radiusY: number, _rotation: number, _startAngle: number, _endAngle: number, _counterclockwise?: boolean): void {}
+	rect(_x: number, _y: number, _w: number, _h: number): void {}
+	roundRect(_x: number, _y: number, _w: number, _h: number, _radii?: any): void {}
+}

@@ -376,7 +376,6 @@ export const builtinMethods = {
 				const fn = name === 'replace' ? RT.jsReplace : RT.jsReplaceAll;
 				// A function value: called with the match, each group (undefined where it took no part), the match's index and the string.
 				if (!(ts.isArrowFunction(second) || ts.isFunctionExpression(second)) && this.checker.getTypeAtLocation(second).getCallSignatures().length) {
-					if (name === 'replaceAll') throw this.error(e, 'replaceAll with a function');
 					// A rest parameter takes the arguments from its position on, which a call by script cannot give it.
 					const decl = this.checker.getTypeAtLocation(second).getCallSignatures()[0]?.getDeclaration();
 					const restAt = decl && !ts.isJSDocSignature(decl) ? decl.parameters.findIndex((p) => p.dotDotDotToken) : -1;
@@ -394,7 +393,6 @@ export const builtinMethods = {
 					return `${fn}(${s}, ${r}, fun(__m: JSMatch): String = ${RT.jsToString}(${RT.jsCall}(${callee}, *__m.replacerArguments.toTypedArray())))`;
 				}
 				if (!(ts.isArrowFunction(second) || ts.isFunctionExpression(second))) return `${fn}(${s}, ${r}, ${this.str(second)})`;
-				if (name === 'replaceAll') throw this.error(e, 'replaceAll with a function');
 				// The replacer gets the match, then each group, then the offset.
 				const m = this.fresh('__match');
 				// The match, each group (undefined where it took no part), the index, the input, then the groups object.

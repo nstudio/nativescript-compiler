@@ -91,9 +91,17 @@ export type TNode =
 			/** A ListView whose items are sections (`sectioned`), each holding its rows in `items`. */
 			sections?: boolean;
 	  }
-	| { kind: 'component'; name: string; props: Attr[]; events: Event[]; queries?: QueryHook[]; slots?: Record<string, TNode[]> }
+	| { kind: 'component'; name: string; props: Attr[]; events: Event[]; queries?: QueryHook[]; slots?: Record<string, TNode[]>; directives?: DirectiveUse[] }
 	/** A content projection slot (`<ng-content>`): `name` is `'default'` or the `select` selector; `fallback` renders when the parent gives no content. */
 	| { kind: 'slot'; name: string; fallback?: TNode[] }
+	/** A dynamic component outlet (`*ngComponentOutlet` / `[ngComponentOutlet]`): mounts the component type returned by `component`. */
+	| { kind: 'componentOutlet'; component: string; injector?: string; inputs?: string }
+	/** A dynamic or recursive template outlet (`*ngTemplateOutlet` / `[ngTemplateOutlet]`): renders a `TemplateRef` with optional context. */
+	| { kind: 'templateOutlet'; template: string; context?: string }
+	/** Binds a `<ng-template #ref>` body to a component `TemplateRef` field in its enclosing scope (e.g. inside `@let`). */
+	| { kind: 'bindTemplate'; field: string; ctxParam: string; body: TNode[] }
+	/** A custom structural directive (`*myDir="expr"`): constructs `directive` with `TemplateRef` and `ViewContainerRef` scoped to its region. */
+	| { kind: 'structural'; directive: DirectiveUse; ctxParam: string; body: TNode[] }
 	| { kind: 'if'; branches: { cond: string | null; body: TNode[] }[] }
 	/**
 	 * A value of the view the body is in, made when the view is (a pipe): `make` is called with the names in
@@ -138,6 +146,8 @@ export interface ComponentIR {
 	/** A routed component whose template is a page's content (an ActionBar plus a view). */
 	page?: boolean;
 	template: TNode[];
+	/** Named `<ng-template #ref>` bodies bound to `TemplateRef` fields on the component for dynamic/recursive `*ngTemplateOutlet`. */
+	templates?: { field: string; ctxParam: string; body: TNode[] }[];
 	/** Props a parent may leave out. */
 	optional?: string[];
 	/** Props set through the component's `$set_<prop>` method (an input's setter) when the binding changes, not passed to its constructor. */
@@ -206,6 +216,8 @@ export function scopeTemplate(nodes: TNode[], attribute: string): TNode[] {
 			case 'template':
 			case 'local':
 			case 'let':
+			case 'structural':
+			case 'bindTemplate':
 				return { ...n, body: scopeTemplate(n.body, attribute) };
 			case 'component':
 				return n.slots ? { ...n, slots: Object.fromEntries(Object.entries(n.slots).map(([k, v]) => [k, scopeTemplate(v, attribute)])) } : n;
@@ -219,7 +231,7 @@ export function scopeTemplate(nodes: TNode[], attribute: string): TNode[] {
 
 /** The nodes with each `local` and `let` replaced by its body: what renders where the local is. */
 export function withoutLocals(nodes: TNode[]): TNode[] {
-	return nodes.flatMap((n) => (n.kind === 'local' || n.kind === 'let' ? withoutLocals(n.body) : [n]));
+	return nodes.flatMap((n) => (n.kind === 'local' || n.kind === 'let' ? withoutLocals(n.body) : n.kind === 'bindTemplate' ? [] : [n]));
 }
 
 export interface Watcher {

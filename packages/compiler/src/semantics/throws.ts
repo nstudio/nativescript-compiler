@@ -25,6 +25,7 @@ const THROWING_BUILTINS = new Set([
 	'String.replaceAll',
 	'Date.toISOString',
 	'Object.assign',
+	'Object.setPrototypeOf',
 	'Object.fromEntries',
 	'Object.defineProperty',
 	'Object.defineProperties',

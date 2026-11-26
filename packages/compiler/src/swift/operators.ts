@@ -9,7 +9,7 @@ import { asOperation, assignmentOf, readWrite } from '../semantics/lang.ts';
 import { assertedFrom, emptyComparison, scriptComparison } from '../semantics/placement.ts';
 import { notedField } from '../semantics/shapes.ts';
 import { isLibDeclaration } from '../semantics/ast.ts';
-import { constClassExpr } from '../semantics/classes.ts';
+import { constClassExpr, hasInstanceClass } from '../semantics/classes.ts';
 import { isUntyped, spelledType } from '../semantics/types.ts';
 import { bigIntArithmetic, bigIntCompare, bigIntPlan, type BigIntInfix } from '../semantics/apis/bigint.ts';
 import { BIT_ASSIGNMENTS, addCall, bitOperation, concatOperand, numericThrowing, untypedBinary, untypedConversion } from '../semantics/apis/operators.ts';
@@ -302,6 +302,8 @@ export const operatorsMethods = {
 				return op === K.BarBarToken ? `({ () ${throws}-> ${t} in let ${v} = ${this.marks.tryBefore(lt, leftCode)}; return ${RT.jsTruthy}(${v}) ? ${leftValue} : ${rt}${right} }())` : `({ () ${throws}-> ${t} in let ${v} = ${this.marks.tryBefore(lt, leftCode)}; return ${RT.jsTruthy}(${v}) ? ${rt}${right} : ${leftValue} }())`;
 			}
 			case K.InstanceOfKeyword: {
+				const hi = hasInstanceClass(e.right, this.checker);
+				if (hi) return `${this.className(hi)}.jsHasInstance(${this.coerce(e.left, 'Any?')})`;
 				const ce = constClassExpr(e.right, this.checker);
 				if (ce) return `(${this.observed(e.left)} is ${this.emitClassExpr(ce)})`;
 				const name = e.right.getText();

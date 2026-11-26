@@ -4,7 +4,9 @@ package org.nativescript.kit
 // services compiled to classes with a `shared` instance (`providedIn: 'root'`), as kit-apple's AngularAPI.swift.
 
 /** A component class used as a value (`dialog.open(SheetComponent)`): what creating and rendering it gives. */
-class ComponentFactory(internal val make: () -> View)
+class ComponentFactory(override val jsTokenKey: Class<*>?, internal val make: () -> View) : JSTokenKeyed {
+    constructor(make: () -> View) : this(null, make)
+}
 
 /** `NativeDialogRef`: the open dialog a component was created in. */
 class NativeDialogRef {

@@ -103,16 +103,16 @@ export interface RegisteredElement {
   fromApp?: boolean;
 }
 
-/** Annotates untyped parameters of JS function/arrow/method expressions inside a meta object literal so it compiles in strict TS. */
-function typedMetaLiteral(sf: ts.SourceFile, obj: ts.ObjectLiteralExpression): string {
+/** Annotates untyped parameters of JS function/arrow/method expressions inside a node so it compiles in strict TS. */
+function typedMetaLiteral(sf: ts.SourceFile, node: ts.Node): string {
   const edits: { at: number; text: string }[] = [];
   const visit = (n: ts.Node) => {
     if (ts.isParameter(n) && !n.type) edits.push({ at: n.name.getEnd(), text: ': any' });
     ts.forEachChild(n, visit);
   };
-  visit(obj);
-  const start = obj.getStart(sf);
-  let text = obj.getText(sf);
+  visit(node);
+  const start = node.getStart(sf);
+  let text = node.getText(sf);
   for (const e of edits.sort((a, b) => b.at - a.at)) {
     const pos = e.at - start;
     text = text.slice(0, pos) + e.text + text.slice(pos);
@@ -120,29 +120,33 @@ function typedMetaLiteral(sf: ts.SourceFile, obj: ts.ObjectLiteralExpression): s
   return text;
 }
 
-/** Collects top-level constant literal declarations referenced by `obj` (e.g. `MAINCONTENT = 'MainContent'`). */
+/** Collects top-level constant and helper function declarations referenced by `obj` (e.g. `MAINCONTENT = 'MainContent'`, `rawChildIndex(...)`). */
 function metaLiteralCode(sf: ts.SourceFile, obj: ts.ObjectLiteralExpression): string {
-  const consts = new Map<string, string>();
+  const decls = new Map<string, { node: ts.Node; code: string }>();
   for (const st of sf.statements) {
-    if (!ts.isVariableStatement(st) || !(st.declarationList.flags & ts.NodeFlags.Const)) continue;
-    for (const d of st.declarationList.declarations) {
-      if (!ts.isIdentifier(d.name) || !d.initializer) continue;
-      if (ts.isStringLiteralLike(d.initializer) || ts.isNumericLiteral(d.initializer) || d.initializer.kind === ts.SyntaxKind.TrueKeyword || d.initializer.kind === ts.SyntaxKind.FalseKeyword) {
-        consts.set(d.name.text, `const ${d.name.text} = ${d.initializer.getText(sf)};`);
+    if (ts.isFunctionDeclaration(st) && st.name) {
+      decls.set(st.name.text, { node: st, code: typedMetaLiteral(sf, st) });
+    } else if (ts.isVariableStatement(st) && (st.declarationList.flags & ts.NodeFlags.Const)) {
+      for (const d of st.declarationList.declarations) {
+        if (!ts.isIdentifier(d.name) || !d.initializer) continue;
+        if (ts.isStringLiteralLike(d.initializer) || ts.isNumericLiteral(d.initializer) || d.initializer.kind === ts.SyntaxKind.TrueKeyword || d.initializer.kind === ts.SyntaxKind.FalseKeyword) {
+          decls.set(d.name.text, { node: d.initializer, code: `const ${d.name.text} = ${d.initializer.getText(sf)};` });
+        }
       }
     }
   }
   const used = new Set<string>();
   const scanIds = (n: ts.Node) => {
-    if (ts.isIdentifier(n) && consts.has(n.text) && !(ts.isPropertyAccessExpression(n.parent) && n.parent.name === n) && !(ts.isPropertyAssignment(n.parent) && n.parent.name === n)) {
+    if (ts.isIdentifier(n) && decls.has(n.text) && !used.has(n.text) && !(ts.isPropertyAccessExpression(n.parent) && n.parent.name === n) && !(ts.isPropertyAssignment(n.parent) && n.parent.name === n) && !(ts.isFunctionDeclaration(n.parent) && n.parent.name === n)) {
       used.add(n.text);
+      scanIds(decls.get(n.text)!.node);
     }
     ts.forEachChild(n, scanIds);
   };
   scanIds(obj);
   const body = typedMetaLiteral(sf, obj);
   if (!used.size) return body;
-  return `(() => { ${[...used].map((k) => consts.get(k)!).join(' ')} return ${body}; })()`;
+  return `(() => { ${[...used].map((k) => decls.get(k)!.code).join(' ')} return ${body}; })()`;
 }
 
 /** Discovers elements registered via a plugin helper module (e.g. `<pkg>/elements.js` + `@CSSType` decorators in `<pkg>/web.js`). */

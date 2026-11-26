@@ -1,10 +1,49 @@
 // A class's place in its hierarchy, as the checker gives it: its program base, the constructor it runs, what it inherits.
 import ts from 'typescript';
-import { ERRORS } from './globals.ts';
+import { ERRORS, isLibGlobal } from './globals.ts';
 import { isStatic } from './throws.ts';
 import { hasModifier, isLibDeclaration, isWriteTarget } from './ast.ts';
 import { literalKey, optionalBodilessMethod } from './lang.ts';
 import type { StateBackend } from './states/value-states.ts';
+
+/** The program class declaring `static [Symbol.hasInstance]`, if `e` names one. */
+export function hasInstanceClass(e: ts.Expression, checker: ts.TypeChecker): ts.ClassDeclaration | null {
+	if (!ts.isIdentifier(e) && !ts.isPropertyAccessExpression(e)) return null;
+	let sym = checker.getSymbolAtLocation(ts.isPropertyAccessExpression(e) ? e.name : e);
+	if (sym && sym.flags & ts.SymbolFlags.Alias) sym = checker.getAliasedSymbol(sym);
+	const decl = sym?.valueDeclaration;
+	if (!decl || !ts.isClassDeclaration(decl) || decl.getSourceFile().isDeclarationFile) return null;
+	for (let c: ts.ClassLikeDeclaration | undefined = decl; c; c = programBase(c, checker)) {
+		if (
+			c.members.some(
+				(m) =>
+					ts.isMethodDeclaration(m) &&
+					!!m.body &&
+					isStatic(m) &&
+					ts.isComputedPropertyName(m.name) &&
+					ts.isPropertyAccessExpression(m.name.expression) &&
+					ts.isIdentifier(m.name.expression.expression) &&
+					m.name.expression.expression.text === 'Symbol' &&
+					m.name.expression.name.text === 'hasInstance',
+			)
+		)
+			return decl;
+	}
+	return null;
+}
+
+/** A member declared on a class applied as a mixin: the extension it becomes has it by name. */
+export function isMixinOwnMember(name: ts.MemberName, checker: ts.TypeChecker, mixinOf: (sym: ts.Symbol | undefined) => unknown): boolean {
+	const decl = checker.getSymbolAtLocation(name)?.valueDeclaration;
+	return !!decl && ts.isClassDeclaration(decl.parent) && !!mixinOf(checker.getSymbolAtLocation(decl.parent.name!));
+}
+
+/** The class symbol whose `.prototype` is read (`Cls.prototype`), excluding ES lib globals. */
+export function prototypeClassSymbol(target: ts.Expression, name: string, b: Pick<StateBackend, 'resolve'>): ts.Symbol | null {
+	if (name !== 'prototype' || (ts.isIdentifier(target) && isLibGlobal(b, target))) return null;
+	const sym = b.resolve(target);
+	return sym && sym.flags & ts.SymbolFlags.Class ? sym : null;
+}
 
 /** The class `cls` extends where the program's own source declares it; undefined for a library's class or none. */
 export function programBase(cls: ts.ClassLikeDeclaration, checker: ts.TypeChecker): ts.ClassLikeDeclaration | undefined {

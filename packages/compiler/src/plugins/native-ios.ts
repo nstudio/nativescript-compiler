@@ -340,7 +340,8 @@ function targetsOf(source: NativeSources, errors: string[], deps: Dependencies):
 				else if (f.endsWith('.framework')) fail(p, 'a .framework is not supported yet (an .xcframework is)');
 				else if (f.endsWith('.bundle')) fail(p, 'resource bundles are not supported yet');
 				else walk(p);
-			} else if (f.endsWith('.swift')) swift.push(p);
+			} else if (f === 'Package.swift') continue;
+			else if (f.endsWith('.swift')) swift.push(p);
 			else if (/\.(h|hh|hpp|m|mm|c|cc|cpp)$/.test(f)) clang.push(p);
 			else if (f === 'module.modulemap') maps.push(p);
 			// The app target compiles Metal shaders into the app's default library.

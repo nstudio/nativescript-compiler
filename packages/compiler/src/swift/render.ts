@@ -215,6 +215,37 @@ export function render(c: ComponentIR, components: Map<string, ComponentInfo>, t
 				}
 				return say(depth, `if let __slot = self.__slots[${swiftString(s.name)}] { try __slot(${host}) }`);
 			}
+			case 'componentOutlet': {
+				const host = regionHost(s.host);
+				const inj = s.injector ? `, injector: { ${call(s.injector)} }` : '';
+				const inp = s.inputs ? `, inputs: { ${call(s.inputs)} }` : '';
+				return say(depth, `${s.call}(${host}, component: { ${call(s.component)} }${inj}${inp})`);
+			}
+			case 'templateOutlet': {
+				const host = regionHost(s.host);
+				const ctx = s.context ? `, context: { ${call(s.context)} }` : '';
+				return say(depth, `${s.call}(${host}, template: { ${call(s.template)} }${ctx})`);
+			}
+			case 'bindTemplate':
+			case 'structural': {
+				const open = s.kind === 'bindTemplate' ? `TemplateOutlet.bind(self.${ident(s.field)})` : `let ${s.tplName} = TemplateOutlet.make`;
+				say(depth, `${open} { (__sr: Region, ${s.ctxParam}: Any?) throws -> Void in`);
+				const wrap = s.scope ? scope(s.scope, 'Void') : null;
+				const d = wrap ? depth + 2 : depth + 1;
+				if (wrap) say(depth + 1, wrap);
+				if (s.viewMark) say(d, 'let __view = EffectOrder.current');
+				say(d, `let ${s.body.fragment} = RegionFragment(__sr)`);
+				steps(s.body.steps, d);
+				say(d, `__sr.set(parts: ${s.body.fragment}.parts)`);
+				if (wrap) say(depth + 1, '}');
+				say(depth, '}');
+				if (s.kind === 'structural') {
+					say(depth, `try ${s.call}(${s.region}, ${s.tplName}) {`);
+					steps(s.steps, depth + 1);
+					say(depth, '}');
+				}
+				return;
+			}
 			case 'choose': {
 				const host = regionHost(s.host);
 				const which = s.conds.map((k, i) => (k ? `${cond(k, s.caught)} ? ${i} : ` : `${i}`)).join('') + (s.conds.at(-1) ? `${s.conds.length}` : '');

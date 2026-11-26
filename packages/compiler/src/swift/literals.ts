@@ -2,13 +2,13 @@
 import ts from 'typescript';
 import { functionParts, ident, identPath, initOrder, isNullish, isOptional, label, optionalType, splitTopLevel, swiftString, withoutThenables, spell, RT } from './syntax.ts';
 import type { ShapeField, Translator } from './translator.ts';
-import { assertedOperand, evolvingElementContext, intersectionAliasMembers, literalKey, openSpreadType, spreadOperand, unquoted } from '../semantics/lang.ts';
+import { assertedOperand, evolvingElementContext, intersectionAliasMembers, isTypeParameterType, literalKey, openSpreadType, spreadOperand, unquoted } from '../semantics/lang.ts';
 import { place } from '../semantics/placement.ts';
 import { holdsNil, literalNotes, signatureField, shapePlanOfLiteral, spelledOptional, resultShapeNamed } from '../semantics/shapes.ts';
 import { isCoreDeclaration } from '../program/core-facts.ts';
-import { thisNodes, withoutDefault } from '../semantics/ast.ts';
+import { hasModifier, thisNodes, tupleSpreadTypes, withoutDefault } from '../semantics/ast.ts';
 import { programSymbolKey } from '../program/stable-names.ts';
-import { literalClassOf } from '../semantics/classes.ts';
+import { classOfType, literalClassOf } from '../semantics/classes.ts';
 import { heldOf, isKit, isUntyped, spelledType } from '../semantics/types.ts';
 
 export const literalsMethods = {
@@ -31,9 +31,41 @@ export const literalsMethods = {
 		if (placedElement) t = this.heldElements(e, `JSArray<${this.type(placedElement, e)}>`);
 		if (isUntyped(spelledType(t)) || t === 'JSArray<Never>') t = 'JSArray<Any?>';
 		if (t.startsWith('(')) {
-			const types = want ? splitTopLevel(t.slice(1, -1)) : [];
+			const tupleTypes = splitTopLevel(t.slice(1, -1));
+			if (e.elements.some(ts.isSpreadElement)) {
+				const binds: string[] = [];
+				const items: string[] = [];
+				for (const x of e.elements) {
+					if (ts.isSpreadElement(x)) {
+						const args = tupleSpreadTypes(x, this.checker);
+						if (args) {
+							const spreadExpr = this.expr(x.expression);
+							const ref = ts.isIdentifier(x.expression) ? spreadExpr : this.fresh('__tup');
+							if (ref !== spreadExpr) binds.push(`let ${ref} = ${this.tryPrefix(x.expression)}${spreadExpr}`);
+							const stName = this.typeOf(x.expression);
+							for (let k = 0; k < args.length; k++) {
+								const elem = stName.startsWith('(') ? `${ref}.${k}` : `${ref}[${k}]`;
+								const from = this.type(args[k], x);
+								const to = tupleTypes[items.length];
+								items.push(to && to !== from ? this.convert(elem, from, to) : elem);
+							}
+							continue;
+						}
+						throw this.error(x, `a non-tuple spread in tuple ${t}`);
+					}
+					const to = tupleTypes[items.length];
+					items.push(to ? this.coerce(x, to) : this.expr(x));
+				}
+				const missing = tupleTypes.slice(items.length).map((x) => (isOptional(x) || isUntyped(spelledType(x)) ? 'nil' : null));
+				if (missing.some((x) => x === null)) throw this.error(e, `an array literal shorter than its tuple type ${t}`);
+				const made = `(${[...items, ...missing].join(', ')})`;
+				if (!binds.length) return made;
+				const throws = this.throwsInfo.expr(e) || binds.some((b) => b.includes('try '));
+				return `{ () ${throws ? 'throws ' : ''}-> ${t} in ${binds.join('; ')}; return ${made} }()`;
+			}
+			const types = want ? tupleTypes : [];
 			// An optional element left out (`['a']` for `[string, string?]`) is undefined.
-			const missing = splitTopLevel(t.slice(1, -1))
+			const missing = tupleTypes
 				.slice(e.elements.length)
 				.map((x) => (isOptional(x) || isUntyped(spelledType(x)) ? 'nil' : null));
 			if (missing.some((x) => x === null)) throw this.error(e, `an array literal shorter than its tuple type ${t}`);
@@ -100,6 +132,7 @@ export const literalsMethods = {
 					if (ts.isSpreadAssignment(p)) return `${this.tryPrefix(p.expression)}${RT.jsObjectSpread}(${r}.object, ${this.coerce(p.expression, 'Any?')})`;
 					if (ts.isPropertyAssignment(p)) return `${r}.object[${ts.isComputedPropertyName(p.name) ? `${this.tryPrefix(p.name.expression)}${this.propertyKey(p.name.expression)}` : swiftString(literalKey(p.name, this.checker) ?? p.name.getText())}] = ${this.marks.tryBefore(this.tryPrefix(p.initializer), this.stored(p.initializer, p, v))}`;
 					if (ts.isShorthandPropertyAssignment(p)) return `${r}.object[${swiftString(p.name.text)}] = ${this.shorthandEntry(p, v)}`;
+					if (ts.isMethodDeclaration(p)) return `${r}.object[${ts.isComputedPropertyName(p.name) ? `${this.tryPrefix(p.name.expression)}${this.propertyKey(p.name.expression)}` : swiftString(literalKey(p.name, this.checker) ?? p.name.getText())}] = ${this.untypedMethod(p)}`;
 					throw this.error(p, 'this member in a dictionary literal');
 				});
 				const throws = this.throwsInfo.expr(e) || steps.some((x) => x.includes('try '));
@@ -108,6 +141,7 @@ export const literalsMethods = {
 			const entries = e.properties.map((p) => {
 				if (ts.isPropertyAssignment(p)) return `(${ts.isComputedPropertyName(p.name) ? this.propertyKey(p.name.expression) : swiftString(literalKey(p.name, this.checker) ?? p.name.getText())}, ${this.stored(p.initializer, p, v)})`;
 				if (ts.isShorthandPropertyAssignment(p)) return `(${swiftString(p.name.text)}, ${this.shorthandEntry(p, v)})`;
+				if (ts.isMethodDeclaration(p)) return `(${ts.isComputedPropertyName(p.name) ? this.propertyKey(p.name.expression) : swiftString(literalKey(p.name, this.checker) ?? p.name.getText())}, ${this.untypedMethod(p)})`;
 				throw this.error(p, 'this member in a dictionary literal');
 			});
 			return entries.length ? `${name}([${entries.join(', ')}])` : `${name}()`;
@@ -115,6 +149,7 @@ export const literalsMethods = {
 		// Library mode: an event's literal is core's EventData over it, its other keys read by name.
 		if (name === 'EventData' && this.library) return `EventData(jsObject: ${this.dynamicObject(e)})`;
 		if (isUntyped(spelledType(name)) || name === 'Any' || name === 'Never' || name === 'EventData' || name === 'JSObject') return this.dynamicObject(e);
+		if (isTypeParameterType(type, this.checker)) return this.fromAnyCode(this.dynamicObject(e), name);
 		if (/^JS(Iterator|AsyncIterator)</.test(name)) return this.scriptIterator(e, name);
 		// A spread of an open type (`{ ...state, x }` with `state: T`) carries keys no shape declares; the shape keeps them as extras.
 		if (e.properties.some((p) => ts.isSpreadAssignment(p) && openSpreadType(this.checker.getTypeAtLocation(p.expression)))) return this.fromAnyCode(this.dynamicObject(e), name);
@@ -142,7 +177,12 @@ export const literalsMethods = {
 		} else if (shape) order = shape.fields;
 		else if (decl && (ts.isInterfaceDeclaration(decl) || ts.isTypeLiteralNode(decl))) order = this.interfaceFields(ts.isInterfaceDeclaration(decl) ? this.interfaceMembers(decl) : decl.members);
 		else if (joined) order = this.interfaceFields(joined);
-		else throw this.error(e, `an object literal of type ${name}`);
+		else if (decl && ts.isModuleDeclaration(decl)) return this.dynamicObject(e);
+		else {
+			const cls = classOfType(type, this.checker) ?? literalClassOf(this, e);
+			if (cls && (this.pluginFiles.has(e.getSourceFile().fileName) || hasModifier(cls, ts.SyntaxKind.AbstractKeyword))) return this.abstractClassLiteral(e, cls, name);
+			throw this.error(e, `an object literal of type ${name}`);
+		}
 		const given = new Map<string, string>();
 		const spreadTemps: string[] = [];
 		// An optional field given undefined is a key all the same, as one given null is: the shape notes which (`jsUnset`,

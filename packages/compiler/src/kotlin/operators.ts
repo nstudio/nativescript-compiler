@@ -9,7 +9,7 @@ import { located, type Refusal, type RefusalId } from '../semantics/refusals.ts'
 import { notedField } from '../semantics/shapes.ts';
 import { isKit, isUntyped, spelledType } from '../semantics/types.ts';
 import { assertedFrom, emptyComparison, scriptComparison } from '../semantics/placement.ts';
-import { constClassExpr } from '../semantics/classes.ts';
+import { constClassExpr, hasInstanceClass } from '../semantics/classes.ts';
 import { isLibDeclaration } from '../semantics/ast.ts';
 import { nullAs } from './expressions.ts';
 import { bigIntArithmetic, bigIntCompare, bigIntPlan, type BigIntInfix } from '../semantics/apis/bigint.ts';
@@ -229,6 +229,8 @@ export const operatorsMethods = {
 				return heldRight ? this.undefinedAs(chosen, t) : chosen;
 			}
 			case K.InstanceOfKeyword: {
+				const hi = hasInstanceClass(e.right, this.checker);
+				if (hi) return `${this.className(hi)}.jsHasInstance(${this.coerce(e.left, 'Any?')})`;
 				const rhsExpr = constClassExpr(e.right, this.checker);
 				if (rhsExpr) return `(${this.observed(e.left)} is ${this.emitClassExprCode(rhsExpr)})`;
 				// A class held as a value (`C: ErrorConstructor`): tested by the class it holds.

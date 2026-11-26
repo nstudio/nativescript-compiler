@@ -118,11 +118,16 @@ export class PropertyGuard {
 						if (n.slots) for (const slotNodes of Object.values(n.slots)) walk(slotNodes);
 					} else if (n.kind === 'slot') {
 						if (n.fallback) walk(n.fallback);
+					} else if (n.kind === 'componentOutlet' || n.kind === 'templateOutlet') {
+						// Dynamic outlets have no static template children.
+					} else if (n.kind === 'structural' || n.kind === 'bindTemplate') {
+						walk(n.body);
 					} else if (n.kind === 'if') for (const b of n.branches) walk(b.body);
 					else walk(n.body);
 				}
 			};
 			walk(c.template);
+			for (const t of c.templates ?? []) walk(t.body);
 		}
 		return dedupe(out);
 	}

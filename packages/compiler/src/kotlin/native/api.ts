@@ -1,5 +1,5 @@
 import ts from 'typescript';
-import { ACC_FINAL, ACC_STATIC, methodTypes, type ClassPath, type JavaClass } from './classfiles.ts';
+import { ACC_BRIDGE, ACC_FINAL, ACC_STATIC, ACC_SYNTHETIC, methodTypes, type ClassPath, type JavaClass } from './classfiles.ts';
 import { ANDROID_TYPINGS, type Callable, type Extension } from './bridging.ts';
 import type { KotlinNative, Translator } from '../translator.ts';
 import { nativeTypesMethods } from './types.ts';
@@ -110,6 +110,12 @@ export class AndroidNativeAPI implements KotlinNative {
 		const kinds = fn.parameters.map((p) => this.kindOfType(this.t.checker.getTypeAtLocation(p.name), p));
 		const fits = pool.filter((c) => kinds.every((k, i) => k.kind === 'any' || this.score(k, c.params[i]) !== null));
 		if (fits.length === 1 || (every && fits.length)) return fits;
+		if (fits.length > 1) {
+			const nonBridge = fits.filter((c) => !(c.m.access & (ACC_BRIDGE | ACC_SYNTHETIC)));
+			if (nonBridge.length === 1) return nonBridge;
+			const concrete = (nonBridge.length ? nonBridge : fits).filter((c) => !c.params.some((p) => p === 'Ljava/lang/Object;'));
+			if (concrete.length === 1) return concrete;
+		}
 		throw this.t.error(fn, `${name} (matches ${pool.map((c) => this.display(c.m.owner, name, c)).join(' and ')}; declare its parameter types)`, 'native');
 	}
 

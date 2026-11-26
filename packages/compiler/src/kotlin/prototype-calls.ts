@@ -112,6 +112,11 @@ export const prototypeCallsMethods = {
 				.map((n, k) => `${n}: ${parts.params[given.length + k]}`)
 				.join(', ')} -> ${fn}(${[...fixed, ...names.slice(given.length)].join(', ')}) }`;
 		}
+		const targetDecl = ts.isIdentifier(target) ? this.resolve(target)?.valueDeclaration : undefined;
+		if (method === 'call' && targetDecl && !ts.isJSDocSignature(targetDecl) && ts.isFunctionLike(targetDecl) && this.readsArguments(targetDecl)) {
+			const selfArg = takesThis ? [thisArg ? this.coerce(thisArg, parts.params[0]) : 'null'] : [];
+			return `${fn}(${[...selfArg, this.packed(rest, 'JSArray<Any?>', this.restSlot(e, 'Any?'))].join(', ')})`;
+		}
 		const args = parts.params.map((t, k) => (given[k] ? this.coerce(given[k], t) : t.endsWith('?') ? 'null' : (this.zero(t) ?? 'null')));
 		return `${fn}(${args.join(', ')})`;
 	},

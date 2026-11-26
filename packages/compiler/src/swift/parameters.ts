@@ -27,8 +27,12 @@ export const parametersMethods = {
 	},
 
 	params(this: Translator, fn: ts.SignatureDeclaration, closure: boolean): string {
-		if (this.readsArguments(fn)) return `${closure ? '' : '_ '}__arguments: JSArray<Any?>`;
 		const receiver = this.implicitThis(fn) ? [`${closure ? '' : '_ '}${ident('this')}: Any?`] : [];
+		if (this.readsArguments(fn)) {
+			const explicitThis = !closure ? fn.parameters.find((p) => ts.isIdentifier(p.name) && p.name.text === 'this' && p.type?.kind !== ts.SyntaxKind.VoidKeyword) : undefined;
+			const selfParam = receiver.length ? receiver : explicitThis ? [`_ ${ident('this')}: ${this.typeOf(explicitThis.name)}`] : [];
+			return [...selfParam, `${closure ? '' : '_ '}__arguments: JSArray<Any?>`].join(', ');
+		}
 		// `this: void` only says the function reads no `this`: no parameter.
 		return [
 			...receiver,

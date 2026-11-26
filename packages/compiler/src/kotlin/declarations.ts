@@ -248,6 +248,7 @@ export const declarationsMethods = {
 						.filter((x) => x !== el)
 						.map((x) => {
 							const key = x.propertyName ?? x.name;
+							if (ts.isComputedPropertyName(key)) return this.propertyKey(key.expression);
 							if (!ts.isIdentifier(key) && !ts.isStringLiteral(key)) throw this.error(x, 'a computed key beside an object rest pattern');
 							return kotlinString(key.text);
 						});

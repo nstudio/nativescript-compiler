@@ -8,7 +8,7 @@ import { isStatic } from '../semantics/throws.ts';
 import { COLLECTION_OVERRIDE_METHODS, collectionBaseInfo, programBase, uncheckedIteratorResult } from '../semantics/classes.ts';
 import { namesMembersBySymbol } from '../semantics/read-sites.ts';
 import { fixedKey } from '../semantics/translator-methods.ts';
-import { isDisposerMember } from '../semantics/lang.ts';
+import { isDirectSymbolMethod } from '../semantics/lang.ts';
 import type { SymbolMethod } from './translator-types.ts';
 type NativeSetter = { property: string; method: string; param: string; throws: boolean };
 
@@ -126,8 +126,8 @@ export const classMethodsMethods = {
 			}
 			return;
 		}
-		if (keyed && isDisposerMember(keyed.member)) {
-			lines.push('    ' + this.memberFunc(m, keyed.member));
+		if (keyed && isDirectSymbolMethod(keyed.member)) {
+			lines.push('    ' + this.memberFunc(m, keyed.member, isStatic(m) ? 'class ' : ''));
 			return;
 		}
 		if (keyed) throw this.error(m.name, 'a method named by this symbol');

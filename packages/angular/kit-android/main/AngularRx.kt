@@ -138,6 +138,10 @@ open class RxSubject<T> : RxObservable<T>({ TeardownHandle() }) {
         for (observer in observers.toList()) observer.next(value)
     }
 
+    fun complete() {
+        observers.clear()
+    }
+
     fun asObservable(): RxObservable<T> = RxObservable { next -> subscribe(next) }
 }
 

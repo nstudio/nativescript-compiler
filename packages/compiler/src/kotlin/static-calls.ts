@@ -5,6 +5,7 @@ import { TYPED_ARRAYS } from '../semantics/globals.ts';
 import { ident, isThisParameter, optionalType, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { undefinedLiteral } from '../semantics/lang.ts';
+import { arrayFromLengthInit } from '../semantics/ast.ts';
 import { assignsArrayIntoObject } from '../semantics/shapes.ts';
 import { CONSOLE } from '../semantics/apis/console.ts';
 import { staticFunction } from '../semantics/apis/statics.ts';
@@ -105,16 +106,16 @@ export const staticCallsMethods = {
 				if (method === 'isArray') return `JSArray.isArray(${this.restArgument(e, arg(0), 'Any?')})`;
 				if (method === 'from' && e.arguments.length === 1) return `JSArray(${this.iterable(arg(0))}.toList())`;
 				if (method === 'from' && (e.arguments.length === 2 || e.arguments.length === 3) && ts.isObjectLiteralExpression(arg(0))) {
-					const length = (arg(0) as ts.ObjectLiteralExpression).properties.find((p) => p.name?.getText() === 'length');
+					const lenExpr = arrayFromLengthInit(arg(0) as ts.ObjectLiteralExpression);
 					const fn = arg(1);
-					if (!length || !ts.isPropertyAssignment(length) || !(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn))) throw this.error(e, 'Array.from of this object');
+					if (!lenExpr || !(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn))) throw this.error(e, 'Array.from of this object');
 					const el = T().replace(/^JSArray<(.*)>$/, '$1');
 					const params = fn.parameters.filter((p) => !isThisParameter(p));
 					const index = params[1] ? ident((params[1].name as ts.Identifier).text) : '__i';
 					const value = params[0] && ts.isIdentifier(params[0].name) && params[0].name.text !== '_' ? `val ${ident(params[0].name.text)}: Any? = null; ` : '';
 					return this.ignoringThisArg(e, arg(0), () => {
 						const body = ts.isBlock(fn.body) ? this.functionBody(fn, el, this.indent) : `{ return ${this.coerce(fn.body, el)} }`;
-						return `JSArray.fromLength<${el}>(${this.toNumber(length.initializer)}, fun(${index}: Double): ${el} { ${value}${body.slice(1, -1)} })`;
+						return `JSArray.fromLength<${el}>(${this.toNumber(lenExpr)}, fun(${index}: Double): ${el} { ${value}${body.slice(1, -1)} })`;
 					});
 				}
 				if (method === 'from' && (e.arguments.length === 2 || e.arguments.length === 3)) return this.ignoringThisArg(e, arg(0), () => `JSArray(${this.iterable(arg(0))}.toList()).map(${this.fn(arg(1))})`);

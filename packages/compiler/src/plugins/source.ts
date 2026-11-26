@@ -104,19 +104,30 @@ export class PluginSources {
 	 * Checks source files the build compiles against the published files they
 	 * were built from, once each: what is compiled is what npm installed.
 	 */
-	verify(sources: Iterable<string>) {
+	verify(sources: Iterable<string>, onMismatch?: (message: string) => void) {
+		const check = (fn: () => void) => {
+			if (!onMismatch) {
+				fn();
+				return;
+			}
+			try {
+				fn();
+			} catch (e) {
+				onMismatch((e as Error).message.split('\n')[0]);
+			}
+		};
 		for (const src of sources) {
 			for (const source of this.packages.values()) {
 				// A bundle is checked when any source it bundles is compiled: its entry may be an index that only re-exports.
 				// When a dual-format package ships both CJS and ESM outputs for the same source, prefer the ESM output.
 				const matches = [...source.files].filter(([j, s]) => s === src || !!source.bundles.get(j)?.files.includes(src)).map(([j]) => j);
 				const js = matches.find((j) => isEsModule(j)) ?? matches[0];
-				if (js && !source.checked.has(js) && source.verified === 'shipped') verifyMap(source.name, js, this.options.app, source.version);
-				if (!js) continue;
+				if (js && !source.checked.has(js) && source.verified === 'shipped') check(() => verifyMap(source.name, js, this.options.app, source.version));
+				if (!js || src === js) continue;
 				if (!source.checked.has(js) && source.verified === 'published') {
 					const bundle = source.bundles.get(js);
-					if (bundle) verifyBundle(source.name, js, bundle, this.options.app, source.version);
-					else verify(source.name, js, src, this.options.app, source.version);
+					if (bundle) check(() => verifyBundle(source.name, js, bundle, this.options.app, source.version));
+					else check(() => verify(source.name, js, src, this.options.app, source.version));
 				}
 				source.checked.add(js);
 			}
@@ -419,12 +430,15 @@ function shipsJsSource(dir: string, pkg: any): boolean {
 	return true;
 }
 
-/** Whether a JavaScript file uses CommonJS syntax (`require(...)` or `module.exports`/`exports.`). */
+/** Whether a JavaScript file uses CommonJS syntax (`require(...)` or unconditional `module.exports`/`exports.`). */
 function isCommonJsModule(js: string): boolean {
 	try {
 		const text = readFileSync(js, 'utf8');
 		if (/(?:^|\n)\s*(?:import\s|export\s)/.test(text)) return false;
-		return /\b(?:module\.exports|exports\.[A-Za-z_$]|require\s*\()/.test(text);
+		if (/\brequire\s*\(/.test(text)) return true;
+		// Standard UMD default export guard (`if (typeof module !== 'undefined' && module.exports) { module.exports = X; }`) can be desugared to ESM.
+		const stripped = text.replace(/if\s*\(\s*typeof\s+module\s*!==?\s*['"]undefined['"]\s*&&\s*module\.exports\s*\)\s*(?:\{\s*module\.exports\s*=\s*[^;{}]+;?\s*\}|module\.exports\s*=\s*[^;]+;?)/g, '');
+		return /\b(?:module\.exports|exports\.[A-Za-z_$])/.test(stripped);
 	} catch {
 		return false;
 	}
@@ -688,9 +702,9 @@ function mapFiles(dir: string, root: string, repoFiles: string[], packageDir: st
 	const sources = repoFiles.filter((f) => /\.tsx?$/.test(f) && !f.endsWith('.d.ts'));
 	const out = new Map<string, string | null>();
 	const installed = listFiles(dir).filter((f) => /\.m?js$/.test(f) && !f.includes(`${sep}platforms${sep}`) && !/\.(config|webpack)\.js$/.test(f));
-	// Pure-JavaScript package (no TypeScript source in package or checkout): compile installed ES modules directly.
+	// Pure-JavaScript package (no TypeScript source in package or checkout): compile installed ES modules and non-CommonJS scripts directly.
 	if (sources.length === 0) {
-		for (const js of installed) out.set(js, isEsModule(js, pkg) ? js : null);
+		for (const js of installed) out.set(js, isEsModule(js, pkg) || !isCommonJsModule(js) ? js : null);
 		return out;
 	}
 	const reexportTarget = (js: string): string | null => {
@@ -759,7 +773,22 @@ function mapFiles(dir: string, root: string, repoFiles: string[], packageDir: st
 			for (const base of bases) {
 				for (const ext of ['.ts', '.tsx']) src ??= bySuffix(base + ext);
 			}
+			// Monorepo re-bundled sibling workspace folder (e.g. `dist/scales/point.js` -> `packages/charts-scales/src/point.ts`).
+			const parts = stripped.split(sep);
+			if (!src && parts.length >= 2) {
+				const [seg, ...rest] = parts;
+				const tail = join('src', ...rest);
+				for (const ext of ['.ts', '.tsx']) {
+					const hits = sources.filter((f) => f.endsWith(`-${seg}${sep}${tail}${ext}`) || f.endsWith(`${sep}${seg}${sep}${tail}${ext}`));
+					if (hits.length === 1) {
+						src = hits[0];
+						break;
+					}
+				}
+			}
 		}
+		// Unmapped standalone ES module in a directory without source maps (e.g. a monorepo package re-exporting sibling workspace files into `dist/`) or pure-JS script in a repo with no TypeScript sources: compile the installed JS directly.
+		if (!src && !bundles.has(js) && !existsSync(js + '.map') && ((isEsModule(js, pkg) && !installed.some((f) => dirname(f) === dirname(js) && existsSync(f + '.map'))) || (!sources.length && !isCommonJsModule(js)))) src = js;
 		resolved.set(js, src);
 		return src;
 	};
@@ -948,7 +977,7 @@ function normalize(text: string, file: string, jsReference?: string): string[] {
 		const tsf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 		const drops: { start: number; end: number }[] = [];
 		for (const st of tsf.statements) {
-			if (ts.isEnumDeclaration(st) && st.modifiers?.some((m) => m.kind === ts.SyntaxKind.ConstKeyword) && !new RegExp(`\\b${st.name.text}\\b`).test(jsReference)) {
+			if (ts.isEnumDeclaration(st) && st.modifiers?.some((m) => m.kind === ts.SyntaxKind.ConstKeyword) && !new RegExp(`\\b(?:var|let|const)\\s+${st.name.text}\\b`).test(jsReference)) {
 				drops.push({ start: st.getStart(tsf), end: st.end });
 			}
 		}
@@ -979,7 +1008,7 @@ function normalize(text: string, file: string, jsReference?: string): string[] {
 		for (const line of raw.split('\n')) {
 			const trimmed = line.trim();
 			if (!trimmed) continue;
-			if (outLines.length && ((!/[;{}]$/.test(outLines[outLines.length - 1]) && !/^(?:case |default:)/.test(outLines[outLines.length - 1]) && !/^[{}]/.test(trimmed)) || (/^\}\s*$/.test(outLines[outLines.length - 1]) && /^:\s*\{$/.test(trimmed)))) {
+			if (outLines.length && ((!/[;{}]$/.test(outLines[outLines.length - 1]) && !/^(?:case |default:)/.test(outLines[outLines.length - 1]) && !/^[{}]/.test(trimmed)) || (/^\}\s*$/.test(outLines[outLines.length - 1]) && /^:\s*\{$/.test(trimmed)) || /^:\s+/.test(trimmed) || /^\]/.test(trimmed))) {
 				outLines[outLines.length - 1] += (trimmed.startsWith('.') ? '' : ' ') + trimmed;
 			} else {
 				outLines.push(trimmed);
@@ -987,11 +1016,17 @@ function normalize(text: string, file: string, jsReference?: string): string[] {
 		}
 		return outLines.join('\n');
 	};
-	// Decorator metadata (`__metadata("design:paramtypes", [])`), which a build with emitDecoratorMetadata adds.
+	// Decorator metadata (`__metadata("design:paramtypes", [])`), which a build with emitDecoratorMetadata adds,
+	// plus SWC arrow-parameter destructuring (`(acc, param) => { let [k, v] = param; ... }`).
 	const printed = kept
 		.map(singleLine)
 		.join('\n')
-		.replace(/,?\s*(?:\b(?:tslib_\d+|tslib)\.)?__metadata\("design:\w+",\s*(?:\[[^\]]*\]|[\w.$]+|void 0)\)/g, '');
+		.replace(/,?\s*(?:\b(?:tslib_\d+|tslib)\.)?__metadata\("design:\w+",\s*(?:\[[^\]]*\]|[\w.$]+|void 0)\)/g, '')
+		.replace(/\(([^()]*,\s*)?param\)\s*=>\s*\{\n(?:let|var|const)\s+(\[[^\]]+\])\s*=\s*param;\nreturn\s+([^\n]+);\n\}/g, '($1$2) => $3')
+		.replace(/\(([^()]*,\s*)?param\)\s*=>\s*\{\n(?:let|var|const)\s+(\[[^\]]+\])\s*=\s*param;\n/g, '($1$2) => {\n')
+		.replace(/=>\s*\{\s*(?:var\s+(?:_[a-zA-Z0-9_]+,\s*)*_[a-zA-Z0-9_]+;\s*)?return\s+([^;\n]+);\s*\}/g, '=> {\nreturn $1;\n}')
+		.replace(/\{\n\}/g, '{}')
+		.replace(/^\}\s*([\]):,])/gm, '}\n$1');
 	return printed
 		.split('\n')
 		.map((l) =>
@@ -999,14 +1034,17 @@ function normalize(text: string, file: string, jsReference?: string): string[] {
 				.trim()
 				.replace(/\b(tslib_\d+|tslib)\.(__\w+)/g, '$2')
 				.replace(/\bvoid 0\b/g, 'undefined')
+				.replace(/"(?:\\.|[^"\\])*"|'((?:\\.|[^'\\])*)'/g, (m, sq?: string) => (sq !== undefined && !sq.includes('"') && !sq.includes('\\') ? `"${sq}"` : m))
 				.replace(/\b0[xX][0-9a-fA-F]+\b/g, (h) => String(parseInt(h, 16)))
 				.replace(/\b\d+(?:\.\d+)?[eE][+-]?\d+\b/g, (n) => String(Number(n)))
 				.replace(/,\s*([}\]])/g, ' $1')
+				.replace(/\s+([}\]])/g, '$1')
 				.replace(/,$/, '')
 				.replace(/^var ([A-Za-z_$][\w$]*) = \(\(\1\d*\) => \{$/, '(function ($1) {')
-				.replace(/^\}\)\(([A-Za-z_$][\w$]*) \|\| \{\}\);$/, '})($1 || ($1 = {}));'),
+				.replace(/^\}\)\(([A-Za-z_$][\w$]*) \|\| \{\}\);$/, '})($1 || ($1 = {}));')
+				.replace(/^\)\(([A-Za-z_$][\w$]*) \|\| \{\}\);$/, ')($1 || ($1 = {}));'),
 		)
-		.filter((l) => l && !l.startsWith('//# sourceMappingURL') && l !== 'export {};' && l !== '"use strict";' && l !== "'use strict';" && !/^var (?:_[a-z],\s*)*_[a-z];$/.test(l));
+		.filter((l) => l && !l.startsWith('//# sourceMappingURL') && l !== 'export {};' && l !== '"use strict";' && l !== "'use strict';" && !/^var (?:_[a-zA-Z0-9_]+,\s*)*_[a-zA-Z0-9_]+;$/.test(l));
 }
 
 /** Lines of a diff between the source's output `a` and the published `b` that no benign difference explains. */
@@ -1016,20 +1054,27 @@ function unexplained(a: string[], b: string[]): string[] {
 	// Inlined enum members and emitter temp aliases (`_a`, `_b`): a line whose only difference is `E.Member` against a literal or `_a` vs `_b`.
 	const shape = (l: string) =>
 		l
-			.replace(/^export\s+(?=(?:async\s+|function|class|const|let|var)\s+)/, '')
+			.replace(/^export\s+(?=(?:async\s+)?(?:function|class|const|let|var)\s+)/, '')
 			.replace(/^__exportStar\(require\(([^)]+)\),\s*exports\);$/, '__export(require($1));')
 			.replace(/^\}\)\((\w+)\s*\|\|\s*\(exports\.\1\s*=\s*\1\s*=\s*\{\}\)\);$/, '})($1 = exports.$1 || (exports.$1 = {}));')
+			.replace(/^\}\s*([\]):,])/, '$1')
 			.replace(/\(([A-Za-z_$][\w$]*)\)\s*=>/g, '$1 =>')
-			.replace(/(?<=^|[{,\s])([A-Za-z_$][\w$]*)\s*:\s*\1(?=\s*[,}]|$)/g, '$1')
+			.replace(/(?<=^|[{,\s])([A-Za-z_$][\w$]*)\s*:\s*\1\d*(?=\s*[,}]|$)/g, '$1')
 			.replace(/^(?:const|let)\s+\{\s*(\w+)\s*\}\s*=\s*(\w+);$/, 'var $1 = $2.$1;')
 			.replace(/(?:^|(?<=for\s*\(\s*))(?:const|let)\s+/, 'var ')
-			.replace(/`[^`]*`|"[^"]*"\.concat\([^)]*\)/g, '"#"')
-			.replace(/\s*\{\s*$/, '')
+			.replace(/"[^"]*"|'[^']*'|`[^`]*`/g, '"#"')
+			.replace(/"#"(?:\s*\+\s*"#")+/g, '"#"')
+			.replace(/"#"\.concat\([^)]*\)/g, '"#"')
+			.replace(/\s*\{\s*\}?\s*$/, '')
+			.replace(/var\s+(_[a-z])\s*=\s*([A-Za-z_$][\w$.]*),\s*(\{[^}]+\})\s*=\s*\1,\s*([A-Za-z_$][\w$]*)\s*=\s*__rest\(\1,/g, 'var $3 = $2, $4 = __rest($2,')
+			.replace(/\((_[a-z])\s*=\s*\((_[a-z])\s*=\s*([A-Za-z_$][\w$.]*)\)\.([A-Za-z_$][\w$]*)\)\s*===\s*null\s*\|\|\s*\1\s*===\s*undefined\s*\?\s*undefined\s*:\s*\1\.call\(\2/g, '(_a = $3.$4) === null || _a === undefined ? undefined : _a.call($3')
+			.replace(/\((_[a-zA-Z0-9_]+)\s*=\s*([^()]+?)\s*===\s*null\s*\|\|\s*\2\s*===\s*undefined\s*\?\s*undefined\s*:\s*([^()]+?)\)\s*===\s*null\s*\|\|\s*\1\s*===\s*undefined\s*\?\s*undefined\s*:\s*\1\./g, '$3?.')
+			.replace(/([A-Za-z_$][\w$.]*)\s*===\s*null\s*\|\|\s*\1\s*===\s*undefined\s*\?\s*undefined\s*:\s*\((_[a-zA-Z0-9_]+)\s*=\s*([^()]+?)\)\s*===\s*null\s*\|\|\s*\2\s*===\s*undefined\s*\?\s*undefined\s*:\s*\2\./g, '$3?.')
 			.replace(/\((_[a-z])\s*=\s*([A-Za-z_$][\w$]*)\)\s*!==\s*null\s*&&\s*\1\s*!==\s*undefined\s*\?\s*\1\s*:/g, '$2 !== null && $2 !== undefined ? $2 :')
-			.replace(/\b_[a-z]\b/g, '_a')
-			.replace(/\b[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)+\b|-?\b\d+(\.\d+)?\b|"[^"]*"|'[^']*'/g, '#');
+			.replace(/\b(?:_[a-z]|param)\b/g, '_a')
+			.replace(/\b[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)+\b|-?\b\d+(\.\d+)?\b/g, '#');
 	const stripParens = (s: string) => s.replace(/[()]/g, '').replace(/\s+/g, ' ').trim();
-	const stripShadowSuffix = (s: string) => s.replace(/\b([A-Za-z$](?:[A-Za-z_$]*[A-Za-z$])?)\d+(_\d+)?\b/g, '$1$2');
+	const stripShadowSuffix = (s: string) => s.replace(/\b([A-Za-z_$](?:[A-Za-z0-9_$]*[A-Za-z_$])?)\d+(_\d+)?\b/g, '$1$2');
 	const isImportOrReexport = (l: string) => /^(?:import\b|export\s+(?:\*|\{))/.test(l);
 	for (let i = 0; i < ops.length;) {
 		if (ops[i].op === '=') {
@@ -1043,11 +1088,12 @@ function unexplained(a: string[], b: string[]): string[] {
 			i++;
 		}
 		const filteredDel = del.filter((l) => l !== '}' && !/^export var [A-Za-z_$][\w$]*;$/.test(l) && !isImportOrReexport(l));
-		const filteredAdd = add.filter((l) => l !== '}' && !isImportOrReexport(l) && !/^return [A-Za-z_$][A-Za-z_$]*\d+;$/.test(l));
+		const filteredAdd = add.filter((l) => l !== '}' && !isImportOrReexport(l));
 		for (let k = 0; k < Math.max(filteredDel.length, filteredAdd.length); k++) {
 			const x = filteredDel[k],
 				y = filteredAdd[k];
 			if (x !== undefined && y !== undefined && (shape(x) === shape(y) || stripShadowSuffix(stripParens(shape(x))) === stripShadowSuffix(stripParens(shape(y))))) continue;
+			if (x === undefined && y !== undefined && /^return [A-Za-z_$][A-Za-z_$]*\d+;$/.test(y)) continue;
 			// Imports and re-exports a whole-program build elides as type-only, or esbuild/rollup rewrites (`export { x } from './y'` -> `import { x as x2 } from './y'`).
 			if (x !== undefined && y === undefined && /^(import|export) \{?/.test(x) && !/^export (default |const |let |var |function |class |async )/.test(x)) continue;
 			if (x !== undefined && y !== undefined && /^(import|export)\b/.test(x) && /^import\b/.test(y)) continue;

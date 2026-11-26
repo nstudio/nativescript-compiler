@@ -15,7 +15,7 @@ import { holdsNil, notedField, resultShapeNamed } from '../semantics/shapes.ts';
 import { implementedInterfaces, literalKey, takesReceiver } from '../semantics/lang.ts';
 import { slotOf } from '../semantics/trust.ts';
 import { isCoreDeclaration } from '../program/core-facts.ts';
-import { isStatic } from '../semantics/throws.ts';
+import { isAsync, isStatic } from '../semantics/throws.ts';
 import { typedCollection } from './native/bridging.ts';
 import { isLibGlobal } from '../semantics/globals.ts';
 import { literalClassOf } from '../semantics/classes.ts';
@@ -805,5 +805,47 @@ export const placementMethods = {
 			throw this.error(p, 'this member in an object literal of a class');
 		});
 		return `{ () ${this.throwsInfo.expr(e) ? 'throws ' : ''}-> ${name} in ${[`let ${o} = ${name}(jsLiteral: ())`, ...steps, `return ${o}`].join('; ')} }()`;
+	},
+
+	/** An object literal typed as an abstract/plugin class (`HlmPickerPanelRef`, `IconInfo`): a local subclass overriding its methods and fields. */
+	abstractClassLiteral(this: Translator, e: ts.ObjectLiteralExpression, cls: ts.ClassDeclaration, name: string): string {
+		const clsName = this.className(cls);
+		const implName = this.fresh('__Lit');
+		const clsType = this.checker.getDeclaredTypeOfSymbol(this.checker.getSymbolAtLocation(cls.name!)!);
+		const ctorLines: string[] = [];
+		const methodLines: string[] = [];
+		const args: string[] = [];
+		const ctorParams: string[] = [];
+		for (const p of e.properties) {
+			if (!(ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p) || ts.isMethodDeclaration(p))) {
+				throw this.error(p, `this member of an object literal of type ${name}`);
+			}
+			const key = literalKey(p.name, this.checker) ?? p.name.getText();
+			const m = cls.members.find((x): x is ts.MethodDeclaration => ts.isMethodDeclaration(x) && x.name.getText() === key);
+			if (m) {
+				const sig = this.emittedSignature(m);
+				const throws = !isAsync(m) && this.throwsInfo.fn(m);
+				const fnType = `(${sig.params.map((x) => x.type).join(', ')}) ${throws ? 'throws ' : ''}-> ${sig.ret}`;
+				const fField = `__fn_${ident(key)}`;
+				const val = ts.isMethodDeclaration(p) ? `{ (${this.params(p, true)}) ${throws ? 'throws ' : ''}-> ${sig.ret} in${this.functionBody(p, sig.ret, this.indent).slice(1)}` : this.coerce(ts.isPropertyAssignment(p) ? p.initializer : p.name, fnType);
+				ctorParams.push(`_ ${fField}: @escaping ${fnType}`);
+				args.push(val);
+				const pDecls = sig.params.map((x, k) => `_ __a${k}: ${x.type}`).join(', ');
+				const pArgs = sig.params.map((_, k) => `__a${k}`).join(', ');
+				methodLines.push(`private let ${fField}: ${fnType}`);
+				methodLines.push(`override func ${ident(key)}(${pDecls})${throws ? ' throws' : ''}${sig.ret === 'Void' ? '' : ` -> ${sig.ret}`} { ${sig.ret === 'Void' ? '' : 'return '}${throws ? 'try ' : ''}${fField}(${pArgs}) }`);
+				ctorLines.push(`self.${fField} = ${fField}`);
+				continue;
+			}
+			const prop = clsType.getProperty(key)?.valueDeclaration;
+			const pt = prop && ts.isPropertyDeclaration(prop) ? this.typeOf(prop.name) : 'Any?';
+			const pVal = ts.isPropertyAssignment(p) ? p.initializer : (p as ts.ShorthandPropertyAssignment).name;
+			const param = `__p_${ident(key)}`;
+			ctorParams.push(`_ ${param}: ${pt}`);
+			args.push(this.coerce(pVal, pt));
+			ctorLines.push(`self.${ident(key)} = ${param}`);
+		}
+		const throws = this.throwsInfo.expr(e);
+		return `{ () ${throws ? 'throws ' : ''}-> ${clsName} in final class ${implName}: ${clsName} { nonisolated deinit {}; ${methodLines.join('; ')}; init(${ctorParams.join(', ')}) { ${ctorLines.join('; ')}; super.init() } }; return ${implName}(${args.join(', ')}) }()`;
 	},
 };

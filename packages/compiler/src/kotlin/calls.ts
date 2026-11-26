@@ -4,12 +4,13 @@ import { TYPED_ARRAYS, isLibGlobal } from '../semantics/globals.ts';
 import { cast, functionTypeParts, ident, isFunctionType, kotlinString, optionalType, splitTopLevel, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { assertedReceiverCell, nullishField } from '../semantics/placement.ts';
-import { intlConstructor, isObjectToStringCall, literalKey, mergedInterfaceMemberOf, isSelf } from '../semantics/lang.ts';
+import { hookedDynamicImport, intlConstructor, isObjectToStringCall, literalKey, mergedInterfaceMemberOf, isSelf } from '../semantics/lang.ts';
 import { callableSignal } from '../semantics/signals.ts';
 import { isLibDeclaration, isSymbolIterator, implementationOf } from '../semantics/ast.ts';
 import { isStatic } from '../semantics/throws.ts';
 import { constClassExpr, programBase } from '../semantics/classes.ts';
 import { isKit, isNamed, isUntyped, spelledType } from '../semantics/types.ts';
+import { isKitInstanceMethod } from '../program/core-facts.ts';
 import { globalOp, type NamedGlobal } from '../semantics/apis/globals.ts';
 
 export const callsMethods = {
@@ -87,6 +88,8 @@ export const callsMethods = {
 			return this.framework.signalKind(this.symbolName(callee)) === 'computed' && this.isComputedProperty(callee) ? this.expr(callee) : `${this.expr(callee)}.value`;
 		}
 		if (callee.kind === ts.SyntaxKind.SuperKeyword) throw this.error(e, 'super() outside the start of a constructor');
+		const dynImport = hookedDynamicImport(e, this.framework.hooks);
+		if (dynImport) return dynImport;
 		// `getWindow<UIWindow>?.()`: the type arguments are only TypeScript's, and a function declaration is always there.
 		const declaredFunction = (x: ts.Expression) => ts.isIdentifier(x) && !!this.resolve(x)?.declarations?.some(ts.isFunctionDeclaration);
 		if (ts.isExpressionWithTypeArguments(callee) && (!e.questionDotToken || declaredFunction(callee.expression))) return this.call(ts.factory.updateCallExpression(e, callee.expression, callee.typeArguments, e.arguments));
@@ -95,7 +98,7 @@ export const callsMethods = {
 		const declaredMethod = ts.isPropertyAccessExpression(callee) && !!this.resolve(callee.name)?.declarations?.some((d) => ts.isMethodDeclaration(d) && !!d.body);
 		// `iterator.next?.()`: a method the library declares on a typed value is always there too.
 		const libMethod = !this.library && ts.isPropertyAccessExpression(callee) && !this.isAny(callee.expression) && !!this.resolve(callee.name)?.declarations?.length && this.resolve(callee.name)!.declarations!.every((d) => isLibDeclaration(d) && (ts.isMethodSignature(d) || ts.isMethodDeclaration(d)));
-		if (e.questionDotToken && !declaredMethod && !libMethod && !this.core?.isKitMethod(callee) && !declaredFunction(callee) && !(ts.isPropertyAccessExpression(callee) && mergedInterfaceMemberOf(callee, this.checker))) {
+		if (e.questionDotToken && !declaredMethod && !libMethod && !isKitInstanceMethod(this.core, callee) && !declaredFunction(callee) && !(ts.isPropertyAccessExpression(callee) && mergedInterfaceMemberOf(callee, this.checker))) {
 			const fn = this.expr(callee);
 			// A Java method read untyped (`window.getInsetsController?.()`): called as script calls it.
 			if (/^js(Java)?Get(Optional)?\(/.test(fn)) return this.fromAnyCode(`${RT.jsCallOptional}(${fn}${this.untypedArgs(e)})`, this.typeOf(e), true);

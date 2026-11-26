@@ -115,6 +115,11 @@ export const argumentsMethods = {
 				break;
 			}
 			if (ts.isSpreadElement(a)) {
+				if (restAt >= 0 && k >= restAt && !appDeclared) {
+					out.push(`*${this.packed(list.slice(k), 'JSArray<Any?>', this.restSlot(e, 'Any?'))}.storage.toTypedArray()`);
+					covered = list.length;
+					break;
+				}
 				const spread = k === list.length - 1 ? this.spreadArgs(a, k, params, restAt, appDeclared, slot) : null;
 				if (!spread) throw this.error(a, 'a spread argument');
 				out.push(...spread);

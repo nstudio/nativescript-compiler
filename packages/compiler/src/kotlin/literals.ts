@@ -2,13 +2,13 @@
 import ts from 'typescript';
 import { cast, destructuringSource, ident, isNullable, jsObjectCode, kotlinString, optionalType, splitTopLevel, spell, RT } from './syntax.ts';
 import type { ShapeField, Translator } from './translator.ts';
-import { assertedOperand, evolvingElementContext, intersectionAliasMembers, literalKey, openSpreadType, spreadOperand, unquoted, wellKnownMember } from '../semantics/lang.ts';
+import { assertedOperand, evolvingElementContext, intersectionAliasMembers, isTypeParameterType, literalKey, openSpreadType, spreadOperand, unquoted, wellKnownMember } from '../semantics/lang.ts';
 import { holdsNil, literalNotes, signatureField, shapePlanOfLiteral, spelledOptional, resultShapeNamed } from '../semantics/shapes.ts';
 import { structural, type Structural, type StructuralFacts } from '../semantics/conversion.ts';
 import { heldOf, isKit, isUntyped, parseNativeType, spelledType } from '../semantics/types.ts';
 import { boxStep, unboxStep, type TypeStep } from '../semantics/type-step.ts';
 import { place } from '../semantics/placement.ts';
-import { isLibDeclaration, thisNodes } from '../semantics/ast.ts';
+import { hasModifier, isLibDeclaration, thisNodes, tupleSpreadTypes } from '../semantics/ast.ts';
 import { isCoreDeclaration } from '../program/core-facts.ts';
 import { isStatic } from '../semantics/throws.ts';
 import { programSymbolKey } from '../program/stable-names.ts';
@@ -38,6 +38,38 @@ export const literalsMethods = {
 		if (t === 'JSMatch' && !e.elements.length) return 'JSMatch.empty()';
 		if (t.startsWith('Pair<') || t.startsWith('Triple<')) {
 			const types = splitTopLevel(t.replace(/^(Pair|Triple)<(.*)>$/, '$2'));
+			if (e.elements.some(ts.isSpreadElement)) {
+				const binds: string[] = [];
+				const items: string[] = [];
+				for (const x of e.elements) {
+					if (ts.isSpreadElement(x)) {
+						const tArgs = tupleSpreadTypes(x, this.checker);
+						if (tArgs) {
+							const spreadCode = this.expr(x.expression);
+							const ref = ts.isIdentifier(x.expression) ? spreadCode : this.fresh('__tup');
+							if (ref !== spreadCode) binds.push(`val ${ref} = ${spreadCode}`);
+							const spreadType = this.typeOf(x.expression);
+							const pairOrTriple = spreadType.startsWith('Pair<') || spreadType.startsWith('Triple<');
+							for (let k = 0; k < tArgs.length; k++) {
+								const elem = pairOrTriple ? `${ref}.${['first', 'second', 'third'][k]}` : `${ref}[${k}]`;
+								const from = this.type(tArgs[k], x);
+								const targetType = types[items.length];
+								items.push(targetType && targetType !== from ? this.convert(elem, from, targetType) : elem);
+							}
+							continue;
+						}
+						throw this.error(x, `a non-tuple spread in ${t}`);
+					}
+					const to = types[items.length];
+					items.push(to ? this.coerce(x, to) : this.expr(x));
+				}
+				const missing = types
+					.slice(items.length)
+					.filter(isNullable)
+					.map(() => 'null');
+				const made = `${t.replace(/<.*/, '')}(${[...items, ...missing].join(', ')})`;
+				return binds.length ? `run { ${binds.join('; ')}; ${made} }` : made;
+			}
 			// A literal shorter than its tuple type leaves an optional element out: undefined there.
 			const missing = types
 				.slice(e.elements.length)
@@ -101,6 +133,7 @@ export const literalsMethods = {
 					if (ts.isSpreadAssignment(p)) return `${RT.jsObjectSpread}(${r}.obj, ${this.coerce(p.expression, 'Any?')})`;
 					if (ts.isPropertyAssignment(p)) return `${r}.obj[${ts.isComputedPropertyName(p.name) ? this.propertyKey(p.name.expression) : kotlinString(literalKey(p.name, this.checker) ?? p.name.getText())}] = ${this.stored(p.initializer, p, v)}`;
 					if (ts.isShorthandPropertyAssignment(p)) return `${r}.obj[${kotlinString(p.name.text)}] = ${this.shorthandValue(p.name)}`;
+					if (ts.isMethodDeclaration(p)) return `${r}.obj[${ts.isComputedPropertyName(p.name) ? this.propertyKey(p.name.expression) : kotlinString(literalKey(p.name, this.checker) ?? p.name.getText())}] = ${this.untypedMethod(p)}`;
 					throw this.error(p, 'this member in a dictionary literal');
 				});
 				return `run { val ${r} = ${name}(); ${steps.join('; ')}; ${r} }`;
@@ -108,6 +141,7 @@ export const literalsMethods = {
 			const entries = e.properties.map((p) => {
 				if (ts.isPropertyAssignment(p)) return `Pair(${ts.isComputedPropertyName(p.name) ? this.propertyKey(p.name.expression) : kotlinString(literalKey(p.name, this.checker) ?? p.name.getText())}, ${this.stored(p.initializer, p, v)})`;
 				if (ts.isShorthandPropertyAssignment(p)) return `Pair(${kotlinString(p.name.text)}, ${this.shorthandValue(p.name)})`;
+				if (ts.isMethodDeclaration(p)) return `Pair(${ts.isComputedPropertyName(p.name) ? this.propertyKey(p.name.expression) : kotlinString(literalKey(p.name, this.checker) ?? p.name.getText())}, ${this.untypedMethod(p)})`;
 				throw this.error(p, 'this member in a dictionary literal');
 			});
 			return this.construction(entries.length ? `${name}(listOf(${entries.join(', ')}))` : `${name}()`, name);
@@ -115,6 +149,7 @@ export const literalsMethods = {
 		// Library mode: core's own EventData, holding what the literal adds beyond its fields.
 		if (name === 'EventData' && this.library) return `EventData.fromJS(${this.dynamicObject(e)})`;
 		if (isUntyped(spelledType(name)) || name === 'Any' || name === 'Nothing' || name === 'JSObject' || name === 'EventData') return this.dynamicObject(e);
+		if (isTypeParameterType(type, this.checker)) return this.fromAnyCode(this.dynamicObject(e), name);
 		// The generated kit: an object of an interface core declares (`TraceErrorHandler`), which core holds untyped and calls by name.
 		if (this.generatedKit && this.core?.has(`${name}Object`) && isCoreDeclaration(this.checker.getNonNullableType(type).getSymbol()?.declarations?.[0])) return this.dynamicObject(e);
 		if (/^JS(Iterator|AsyncIterator)</.test(name)) return this.scriptIterator(e, name);
@@ -146,8 +181,13 @@ export const literalsMethods = {
 			order = this.interfaceFields(all);
 		} else if (joined) {
 			order = joined.map((m) => this.interfaceField(m));
-		} else if (this.library && (classOfType(type, this.checker) ?? literalClassOf(this, e))) return this.classLiteral(e, classOfType(type, this.checker) ?? literalClassOf(this, e)!, name);
-		else throw this.error(e, `an object literal of type ${name}`);
+		} else if (classOfType(type, this.checker) ?? literalClassOf(this, e)) {
+			const cls = (classOfType(type, this.checker) ?? literalClassOf(this, e))!;
+			if (this.library || this.inPluginFile(e) || hasModifier(cls, ts.SyntaxKind.AbstractKeyword)) return this.classLiteral(e, cls, name);
+			throw this.error(e, `an object literal of type ${name}`);
+		} else if (decl && ts.isModuleDeclaration(decl)) {
+			return this.dynamicObject(e);
+		} else throw this.error(e, `an object literal of type ${name}`);
 		const given = new Map<string, string>();
 		// Methods that read `this` see the object through a variable the literal sets once it exists.
 		// A function expression as a member (`onViewLoaded: function () { this.loadedCount++ }`) reads the object as `this` too.
@@ -340,7 +380,7 @@ export const literalsMethods = {
 		// A literal no type of the class's is at (one held as the class) has fields of its own types, which the class's fields take.
 		const own = this.checker.getTypeAtLocation(e);
 		const fields = classOfType(this.checker.getContextualType(e) ?? own, this.checker) ? own : this.checker.getDeclaredTypeOfSymbol(this.checker.getSymbolAtLocation(cls.name!)!);
-		const method = (n: string) => cls.members.find((m): m is ts.MethodDeclaration => ts.isMethodDeclaration(m) && !!m.body && m.name.getText() === n) ?? this.inheritedMethod(cls, n);
+		const method = (n: string) => cls.members.find((m): m is ts.MethodDeclaration => ts.isMethodDeclaration(m) && (!!m.body || hasModifier(m, ts.SyntaxKind.AbstractKeyword)) && m.name.getText() === n) ?? this.inheritedMethod(cls, n);
 		for (const p of e.properties) {
 			if (!ts.isPropertyAssignment(p) && !ts.isShorthandPropertyAssignment(p) && !ts.isMethodDeclaration(p)) throw this.error(p, `this member of an object literal of type ${name}`);
 			const key = p.name.getText();

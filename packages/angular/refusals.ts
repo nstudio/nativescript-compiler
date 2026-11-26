@@ -4,7 +4,6 @@ const ISOLATE = 'move the code into a plain function of its own with typed param
 
 export const refusals = {
   'library-injectable': { class: 'gap', title: "an injected class only a library's typings declare", suggestion: ISOLATE },
-  'view-container-ref': { class: 'gap', title: 'an injected ViewContainerRef', suggestion: ISOLATE },
 } as const satisfies Record<string, RefusalKind>;
 
 declare module '@nstudio/nativescript-compiler/adapter-api' {

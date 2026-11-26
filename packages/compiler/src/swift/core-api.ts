@@ -6,6 +6,7 @@ import { NATIVE_MEMBERS, SCRIPT_OBJECTS, addedDeclarations, augmentedProperty, c
 import { optionalType, splitTopLevel, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { rethrowUnlessRefused } from '../semantics/refusals.ts';
+import { isMixinOwnMember } from '../semantics/classes.ts';
 import { isKit, isUntyped, spelledType } from '../semantics/types.ts';
 
 export const KIT = KIT_APPLE_SOURCES;
@@ -333,7 +334,9 @@ export class CoreAPI extends KitTypes {
 		if (!owner.isStatic && NATIVE_MEMBERS.has(name) && this.isView(owner.name) && !kitMember(this.index, owner.name, name)) return `${recv}.nativeView`;
 		if (!owner.isStatic && this.isView(owner.name) && !kitMember(this.index, owner.name, name)) {
 			if (!this.isViewProperty(owner.name, name)) {
-				if (!augmentedProperty(this.index, owner.name, e.name, t.resolve(e.name))) unappliedProperty(t, e.name, `${owner.name}.${name}`, 'NativeScriptKit');
+				const sym = t.resolve(e.name);
+				const extra = !sym || sym.declarations?.every((d) => !isCoreDeclaration(d));
+				if (!extra && !augmentedProperty(this.index, owner.name, e.name, sym)) unappliedProperty(t, e.name, `${owner.name}.${name}`, 'NativeScriptKit');
 				else if (inChain) throw t.error(e, `${owner.name}.${name} in an optional chain`);
 				else return t.fromAnyCode(`${recv}[jsKey: ${JSON.stringify(name)}]`, t.typeOf(e), true);
 			}
@@ -353,7 +356,8 @@ export class CoreAPI extends KitTypes {
 			}
 			return undefined;
 		})();
-		if (!own && !owner.isStatic && (this.ownPropertyOnly(owner.name, e.name) || augmentedProperty(this.index, owner.name, e.name, t.resolve(e.name)))) {
+		const propSym = t.resolve(e.name);
+		if (!own && !owner.isStatic && (this.ownPropertyOnly(owner.name, e.name) || augmentedProperty(this.index, owner.name, e.name, propSym) || ((!propSym || !propSym.declarations?.some(isCoreDeclaration)) && kitMember(this.index, owner.name, 'jsExpando')))) {
 			if (inChain) throw t.error(e, `${owner.name}.${name} in an optional chain`);
 			return t.fromAnyCode(`${recv}[jsKey: ${JSON.stringify(name)}]`, t.typeOf(e), true);
 		}
@@ -408,7 +412,8 @@ export class CoreAPI extends KitTypes {
 		const recv = owner.isStatic ? owner.name : this.receiver(left.expression, left.name.text);
 		if (!owner.isStatic && this.isView(owner.name) && (!kitMember(this.index, owner.name, name) || this.isViewProperty(owner.name, name))) {
 			if (!this.isViewProperty(owner.name, name)) {
-				if (augmentedProperty(this.index, owner.name, left.name, t.resolve(left.name))) return `${recv}[jsKey: ${JSON.stringify(name)}] = ${t.coerce(value, 'Any?')}`;
+				const sym = t.resolve(left.name);
+				if (!sym || sym.declarations?.every((d) => !isCoreDeclaration(d)) || augmentedProperty(this.index, owner.name, left.name, sym)) return `${recv}[jsKey: ${JSON.stringify(name)}] = ${t.coerce(value, 'Any?')}`;
 				unappliedProperty(t, left.name, `${owner.name}.${name}`, 'NativeScriptKit');
 			}
 			// Core's `set` runs the property's change handlers, whose errors are reported as core reports them.
@@ -440,8 +445,7 @@ export class CoreAPI extends KitTypes {
 
 	/** A member a mixin class declares: the extension it becomes has it by name. */
 	private mixinOwn(name: ts.MemberName): boolean {
-		const decl = this.t.checker.getSymbolAtLocation(name)?.valueDeclaration;
-		return !!decl && ts.isClassDeclaration(decl.parent) && !!this.t.mixinOf(this.t.checker.getSymbolAtLocation(decl.parent.name!));
+		return isMixinOwnMember(name, this.t.checker, (s) => this.t.mixinOf(s));
 	}
 
 	/**
@@ -626,13 +630,6 @@ export class CoreAPI extends KitTypes {
 		const out = [...args];
 		this.matchKitParams(e, params, out);
 		return out;
-	}
-
-	/** Whether `target.method` is a method the kit declares on target's class (an optional call of it is a plain call). */
-	isKitMethod(callee: ts.Expression): boolean {
-		if (!ts.isPropertyAccessExpression(callee)) return false;
-		const owner = this.owner(callee.expression);
-		return !!owner && !owner.isStatic && kitMember(this.index, owner.name, callee.name.text)?.kind === 'func';
 	}
 
 	/** `target.method(args)` where target is core-typed, or `new CoreClass(args)`. */

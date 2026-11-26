@@ -23,8 +23,8 @@ export const nativeTypesMethods = {
 			let found: JavaClass | null = null;
 			for (let k = segs.length - 1; k >= 1 && !found; k--) found = this.classpath.get(`${segs.slice(0, k).join('/')}/${segs.slice(k).join('$')}`);
 			this.symbols.set(sym, found);
-			// Library mode: a type core's code names that no Android version has (`View.androidviewViewAccessibilityDelegate`), untyped.
-			if (!found && this.t.library) return null;
+			// Library mode or plugin code naming another platform's class (`NativeScript.Mason.TextNode`, `MasonTextWrap`), untyped.
+			if (!found && (this.t.library || this.t.pluginFiles.has(where?.getSourceFile().fileName ?? this.t.currentFile ?? ''))) return null;
 			if (!found) throw this.t.error(where, `${segs.join('.')} (no class file on the classpath: android.jar, the widgets AAR, androidx in the Gradle cache)`, 'native');
 		}
 		return this.symbols.get(sym)!;
@@ -357,12 +357,14 @@ export const nativeTypesMethods = {
 		const base = this.classOf(this.t.resolve(heritage.expression), heritage) ?? (this.t.library ? (this.classOf(this.classSymbol(heritage.expression), heritage) ?? this.nestedAlias(heritage.expression)) : null);
 		if (!base) return null;
 		const interfaces: JavaClass[] = [];
-		const add = (e: ts.Expression) => {
-			const i = this.classOf(this.t.resolve(e), e);
+		const add = (e: ts.Expression, skipNonNative = false) => {
+			const sym = this.t.resolve(e);
+			if (skipNonNative && !this.isNativeSymbol(sym)) return;
+			const i = this.classOf(sym, e);
 			if (!i || !(i.access & ACC_INTERFACE)) throw this.t.error(e, `${e.getText()} (not a Java interface)`, 'native');
 			if (!interfaces.includes(i)) interfaces.push(i);
 		};
-		for (const i of cls.heritageClauses?.find((h) => h.token === ts.SyntaxKind.ImplementsKeyword)?.types ?? []) add(i.expression);
+		for (const i of cls.heritageClauses?.find((h) => h.token === ts.SyntaxKind.ImplementsKeyword)?.types ?? []) add(i.expression, true);
 		const listed = cls.members.find((m): m is ts.PropertyDeclaration => ts.isPropertyDeclaration(m) && m.name.getText() === 'interfaces' && hasStatic(m));
 		if (listed?.initializer && ts.isArrayLiteralExpression(listed.initializer)) for (const e of listed.initializer.elements) add(e);
 		return { base, interfaces, listed };

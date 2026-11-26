@@ -1,7 +1,8 @@
 // Which slots may hold null and undefined both, decided once for the program: what each backend's optional alone
 // can't tell apart, and the program facts that decide it (what a function gives, which variables code reassigns).
 import ts from 'typescript';
-import type { FrameworkModel } from '../api/adapter-api.ts';
+import type { FrameworkModel, SignalKind } from '../api/adapter-api.ts';
+import { ALL_WEB_CLASSES } from './globals.ts';
 import { alwaysEnds } from './lang.ts';
 
 /**
@@ -39,7 +40,7 @@ export function refusedStatements(sf: ts.SourceFile, refused: NullishSlots['refu
 	return out;
 }
 
-export function nullishSlots(checker: ts.TypeChecker, files: readonly ts.SourceFile[], skip: (file: ts.SourceFile) => boolean, formBoth: (d: ts.Declaration) => boolean = () => false, framework: FrameworkModel = {}): NullishSlots {
+export function nullishSlots(checker: ts.TypeChecker, files: readonly ts.SourceFile[], skip: (file: ts.SourceFile) => boolean, formBoth: (d: ts.Declaration) => boolean = () => false, framework: FrameworkModel = {}, signalKind: (name: string) => SignalKind | undefined = (n) => framework.signalTypes?.[n]): NullishSlots {
 	const held = new Set<ts.Declaration>(),
 		fields = new Set<ts.Declaration>();
 	const refused: [ts.Node, string, NullishCover?][] = [];
@@ -52,7 +53,11 @@ export function nullishSlots(checker: ts.TypeChecker, files: readonly ts.SourceF
 			.filter((x) => !(x.flags & nullish))
 			.every((x) => x.getCallSignatures().length && !x.getProperties().length);
 	const parts = (t: ts.Type) => (t.isUnion() ? t.types : [t]);
-	const loose = (t: ts.Type) => parts(t).some((x) => x.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown));
+	const domOnly = (x: ts.Type) => {
+		const sym = x.getSymbol();
+		return !!sym?.declarations?.length && sym.declarations.every((d) => /[\\/]lib\.dom[\w.]*\.d\.ts$/.test(d.getSourceFile().fileName)) && !ALL_WEB_CLASSES.has(sym.name);
+	};
+	const loose = (t: ts.Type) => parts(t).some((x) => !!(x.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) || domOnly(x));
 	const hasNull = (t: ts.Type) => !loose(t) && parts(t).some((x) => x.flags & ts.TypeFlags.Null);
 	const both = (t: ts.Type) => hasNull(t) && parts(t).some((x) => x.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Void));
 	// A result typed `void | null` is one callers ignore.
@@ -129,9 +134,15 @@ export function nullishSlots(checker: ts.TypeChecker, files: readonly ts.SourceF
 		return (op === ts.SyntaxKind.BarBarToken || op === ts.SyntaxKind.AmpersandAmpersandToken || op === ts.SyntaxKind.QuestionQuestionToken) && tested(p);
 	};
 	// A parameter whose value goes on (printed, stored, passed) where it may still be null or undefined both.
+	const signalSet = (x: ts.Node): boolean => {
+		if (!ts.isCallExpression(x.parent) || x.parent.arguments[0] !== x || !ts.isPropertyAccessExpression(x.parent.expression) || x.parent.expression.name.text !== 'set') return false;
+		const recv = checker.getTypeAtLocation(x.parent.expression.expression);
+		const name = (recv.aliasSymbol ?? recv.getSymbol())?.name;
+		return !!name && !!signalKind(name);
+	};
 	const escapes = (d: ts.Declaration) => {
 		const sym = (d as ts.NamedDeclaration).name && checker.getSymbolAtLocation((d as ts.NamedDeclaration).name!);
-		return !sym || (refs.get(sym) ?? []).some((r) => both(checker.getTypeAtLocation(r)) && !tested(r));
+		return !sym || (refs.get(sym) ?? []).some((r) => both(checker.getTypeAtLocation(r)) && !tested(r) && !signalSet(r));
 	};
 	/**
 	 * A slot typed `T | null` whose value form holds undefined too (a missing value reaches it) and tells them apart
@@ -224,10 +235,13 @@ export function nullishSlots(checker: ts.TypeChecker, files: readonly ts.SourceF
 		return false;
 	};
 	// Any parameter or result of `fn` that may hold both, refused as `why`.
-	const refuseBoth = (fn: ts.SignatureDeclaration, why: string) => {
+	const refuseBoth = (fn: ts.SignatureDeclaration, why: string, coverUnobserved = false) => {
 		for (const p of fn.parameters) {
 			const t = typeOf(p);
-			if (both(t) && oneKind(t)) refuse(p, `${why} (\`${text(t)}\`)`);
+			if (both(t) && oneKind(t)) {
+				if (coverUnobserved && !observes(p) && !escapes(p)) continue;
+				refuse(p, `${why} (\`${text(t)}\`)`, coverUnobserved && named(p) && !observes(p) ? { kind: 'value', slot: p } : undefined);
+			}
 		}
 		const ret = returnOf(fn);
 		if (!ts.isConstructorDeclaration(fn) && ret && bothResult(ret) && oneKind(ret)) refuse(fn.type ?? fn, `${why} (\`${text(ret)}\`)`);
@@ -281,7 +295,7 @@ export function nullishSlots(checker: ts.TypeChecker, files: readonly ts.SourceF
 			if (families.has(fn)) continue;
 			const { members: family, why } = familyOf(fn);
 			if (why) {
-				for (const x of family) refuseBoth(x, why);
+				for (const x of family) refuseBoth(x, why, why === 'a method an interface declares');
 				continue;
 			}
 			const width = Math.max(...family.map((x) => x.parameters.length));
@@ -352,7 +366,7 @@ export function nullishSlots(checker: ts.TypeChecker, files: readonly ts.SourceF
 				})()
 			: checker.getContextualType(fn as ts.Expression);
 		const ctx = contextual?.getNonNullableType().getCallSignatures()[0];
-		if (!ctx) {
+		if (!ctx || ctx.getDeclaration() === fn) {
 			holdSignature(fn);
 			continue;
 		}
@@ -392,6 +406,8 @@ export function nullishSlots(checker: ts.TypeChecker, files: readonly ts.SourceF
 		if (depth > 0 && both(t) && oneKind(t)) return [t, depth];
 		for (const x of parts(t)) {
 			if (!(x.flags & ts.TypeFlags.Object) || x.getCallSignatures().length) continue;
+			const symName = (x.aliasSymbol ?? x.getSymbol())?.name ?? '';
+			if (symName === 'OutputEmitterRef' || symName === 'EventEmitter') continue;
 			const args = (x as ts.ObjectType).objectFlags & ts.ObjectFlags.Reference ? checker.getTypeArguments(x as ts.TypeReference) : (x.aliasTypeArguments ?? []);
 			for (const a of [...args, ...checker.getIndexInfosOfType(x).map((i) => i.type)]) {
 				const r = nested(a, depth + 1, seen);
@@ -404,7 +420,7 @@ export function nullishSlots(checker: ts.TypeChecker, files: readonly ts.SourceF
 	const collectionElement = (t: ts.Type) => {
 		const x = checker.getNonNullableType(t),
 			name = x.getSymbol()?.name ?? '';
-		if (!checker.isArrayType(x) && !['Set', 'ReadonlySet', 'Map', 'ReadonlyMap'].includes(name)) return undefined;
+		if (!checker.isArrayType(x) && !['ReadonlyArray', 'Set', 'ReadonlySet', 'Map', 'ReadonlyMap'].includes(name)) return undefined;
 		return checker.getTypeArguments(x as ts.TypeReference)[name === 'Map' || name === 'ReadonlyMap' ? 1 : 0];
 	};
 	const checkNested = (n: ts.Node, t: ts.Type | undefined, slot = n as ts.Declaration) => {
@@ -419,7 +435,7 @@ export function nullishSlots(checker: ts.TypeChecker, files: readonly ts.SourceF
 			else if (ts.isBindingElement(n) && ts.isIdentifier(n.name) && both(typeOf(n)) && oneKind(typeOf(n))) refuse(n, `a destructured binding that may be null or undefined both (\`${text(typeOf(n))}\`)`);
 			else if (ts.isPropertyDeclaration(n) && fieldLike(n) && ts.isIdentifier(n.name) && hasNull(typeOf(n)) && (!n.initializer || both(typeOf(n)))) fields.add(n);
 			else if (ts.isPropertySignature(n) && ts.isIdentifier(n.name) && both(typeOf(n))) fields.add(n);
-			else if ((ts.isGetAccessorDeclaration(n) || ts.isSetAccessorDeclaration(n)) && n.body) refuseBoth(n, 'an accessor that may take or give null or undefined both');
+			else if ((ts.isGetAccessorDeclaration(n) || ts.isSetAccessorDeclaration(n)) && n.body) refuseBoth(n, 'an accessor that may take or give null or undefined both', ts.isSetAccessorDeclaration(n));
 			if ((ts.isVariableDeclaration(n) || ts.isParameter(n) || ts.isPropertyDeclaration(n) || ts.isPropertySignature(n)) && (n as ts.NamedDeclaration).name && checker.getSymbolAtLocation((n as ts.NamedDeclaration).name!)) checkNested(n, typeOf(n));
 			if (ts.isFunctionLike(n) && !ts.isConstructorDeclaration(n)) checkNested(n.type ?? n, returnOf(n as ts.SignatureDeclaration), n);
 			ts.forEachChild(n, scan);
@@ -710,7 +726,7 @@ export function downcast(checker: ts.TypeChecker, e: ts.AsExpression | ts.TypeAs
 	const cls = to.getSymbol();
 	if (!cls || !(cls.flags & ts.SymbolFlags.Class) || !own(cls.valueDeclaration) || from.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown) || from === to) return false;
 	// A class extending a native or the kit's class keeps its checked cast: such objects are not all read by name.
-	for (let t: ts.Type | undefined = to; t; t = checker.getBaseTypes(t as ts.InterfaceType)[0]) {
+	for (let t: ts.Type | undefined = to; t?.isClassOrInterface(); t = checker.getBaseTypes(t)[0]) {
 		if (!own(t.getSymbol()?.valueDeclaration)) return false;
 		if (!(t.flags & ts.TypeFlags.Object) || !((t as ts.ObjectType).objectFlags & ts.ObjectFlags.ClassOrInterface)) break;
 	}

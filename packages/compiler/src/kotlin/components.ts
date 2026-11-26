@@ -4,7 +4,7 @@ import { atLossSite, HELD_LOSS } from '../semantics/losses.ts';
 import { ident, isFunctionType, isNullable, kotlinString, nullishType, optionalType, ownReturns, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { UNKEYED, definesDuringConstruction, implementedOptionalMembers, restrictsField, definedField } from '../semantics/shapes.ts';
-import { hasModifier, isLibDeclaration } from '../semantics/ast.ts';
+import { extendsHeritage, hasModifier, isLibDeclaration, nonSuperStatements } from '../semantics/ast.ts';
 import { implementedInterfaces } from '../semantics/lang.ts';
 import { isCoreDeclaration } from '../program/core-facts.ts';
 import { isStatic } from '../semantics/throws.ts';
@@ -194,15 +194,19 @@ export const componentMethods = {
 		}
 		for (const m of implementedOptionalMembers(cls, this.checker)) lines.push(`    var ${ident(m.name.text)}: ${optionalType(this.typeOf(m))} = null`);
 		// The constructor's body runs once every field has its value, as TypeScript's class fields come first.
-		if (ctor?.body?.statements.length && ownReturns(ctor.body)) {
+		const ctorStmts = nonSuperStatements(ctor);
+		if (ctorStmts.length && ctor?.body && ownReturns(ctor.body)) {
 			this.returnLabel = '__ctor';
-			this.indent = '        ';
+			this.indent = '            ';
 			try {
-				lines.push(`    init {\n        run __ctor@${this.block(ctor.body, '        ')}\n    }`);
+				lines.push(`    init {\n        run __ctor@{\n${this.statements(ctorStmts).join('\n')}\n        }\n    }`);
 			} finally {
 				this.returnLabel = null;
 			}
-		} else if (ctor?.body?.statements.length) lines.push(`    init ${this.block(ctor.body, '    ')}`);
+		} else if (ctorStmts.length) {
+			this.indent = '        ';
+			lines.push(`    init {\n${this.statements(ctorStmts).join('\n')}\n    }`);
+		}
 		this.indent = '';
 		statics.push(...(this.framework.hooks.componentStatics?.(this, cls) ?? []));
 		return { params, lines, statics };
@@ -322,8 +326,10 @@ export const componentMethods = {
 		const witnesses: string[] = [];
 		const notOverrides = new Set<string>();
 		const appInterface = (n: string) => this.protocols.has(n) && [...implementedInterfaces(this.checker, cls).map((i) => this.checker.getTypeAtLocation(i).getSymbol()?.declarations?.find(ts.isInterfaceDeclaration)), ...(this.structural.get(cls) ?? [])].some((d) => !!d && this.topName(d, d.name.text) === n && !d.getSourceFile().isDeclarationFile);
+		const heritage = extendsHeritage(cls);
+		const baseSuper = heritage && this.classPlan(cls).base ? [`${this.type(this.checker.getTypeAtLocation(heritage), heritage)}()`] : [];
 		const supertypes = this.implementedProtocols(cls, witnesses, notOverrides).filter(appInterface);
-		if (!supertypes.length) return { supertypes, overrides: new Set(), lines: [] };
+		if (!supertypes.length) return { supertypes: baseSuper, overrides: new Set(), lines: [] };
 		for (const i of supertypes) this.used.add(i);
 		const overrides = this.overridden(cls, supertypes);
 		for (const n of notOverrides) overrides.delete(n);
@@ -343,7 +349,7 @@ export const componentMethods = {
 				else fields.push({ name: m.name.text, type });
 			}
 		}
-		return { supertypes, overrides, lines: [...witnesses, ...this.dynamicMembers(UNKEYED, { fields, className: cls.name?.text ?? null, accessors })] };
+		return { supertypes: [...baseSuper, ...supertypes], overrides, lines: [...witnesses, ...this.dynamicMembers(UNKEYED, { fields, className: cls.name?.text ?? null, accessors })] };
 	},
 
 	/**

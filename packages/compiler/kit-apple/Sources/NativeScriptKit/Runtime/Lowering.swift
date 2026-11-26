@@ -339,6 +339,10 @@ public func jsFromCharCode(codes: [Double]) -> String {
 }
 
 public func jsFromCodePoint(_ points: Double...) throws -> String {
+    try jsFromCodePoint(codes: points)
+}
+
+public func jsFromCodePoint(codes points: [Double]) throws -> String {
     var units: [UInt16] = []
     for p in points {
         guard p >= 0, p <= 0x10FFFF, p.rounded(.towardZero) == p else { throw JSException(JSRangeError("Invalid code point \(jsNumberToString(p))")) }

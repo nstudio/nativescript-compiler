@@ -26,13 +26,13 @@ export interface PluginNativeAndroid {
 	/** The AARs and jars the app links (absolute). */
 	archives: string[];
 	/** The Maven dependencies the plugins declare, as the app declares them. */
-	dependencies: { configuration: 'implementation' | 'compileOnly' | 'runtimeOnly'; coords: string }[];
+	dependencies: { configuration: 'implementation' | 'compileOnly' | 'runtimeOnly' | 'annotationProcessor'; coords: string }[];
 	/** Maven repositories the plugins declare beyond Google's and Maven Central. */
 	repositories: string[];
 	/** The app's minimum SDK: the kit's, or the highest a plugin asks for. */
 	minSdk: number;
 	/** Dependency constraints the plugins declare. */
-	constraints: { configuration: 'implementation' | 'compileOnly' | 'runtimeOnly'; coords: string }[];
+	constraints: { configuration: 'implementation' | 'compileOnly' | 'runtimeOnly' | 'annotationProcessor'; coords: string }[];
 	/** Packaging excludes and pick-firsts the plugins declare. */
 	packaging: { excludes: string[]; pickFirsts: string[] };
 	/** R8 rules keeping every class the plugins ship: the app's code reaches them by name. */
@@ -132,9 +132,11 @@ export function pluginNativeAndroid(sources: PluginSource[], options: AndroidPlu
 	if (errors.length) throw new Error(`plugins' Android code that cannot be built yet:\n  ${errors.join('\n  ')}`);
 
 	const dependencies = includes.flatMap((i) => i.dependencies);
+	const sharedDeps = [...new Map(dependencies.filter((d) => d.configuration !== 'annotationProcessor').map((d) => [d.coords, d.coords])).values()];
+	const sharedRepos = [...new Set(includes.flatMap((i) => i.repositories))];
 	// A cached AAR is rebuilt when a dependency it declares is not in Gradle's cache: the translation reads its classes from there.
 	const stale = libraries.filter((l) => !existsSync(l.aar) || l.include?.dependencies.some((d) => !inGradleCache(d.coords)));
-	if (stale.length || fetches.length) buildLibraries([...stale, ...fetches], options);
+	if (stale.length || fetches.length) buildLibraries([...stale, ...fetches], options, sharedDeps, sharedRepos);
 	archives.push(...libraries.map((l) => l.aar));
 
 	return {
@@ -177,7 +179,7 @@ function inGradleCache(coords: string): boolean {
 }
 
 /** One Gradle build of every library not in the cache, a subproject each, with the kit's wrapper. */
-function buildLibraries(libraries: Library[], options: AndroidPluginOptions) {
+function buildLibraries(libraries: Library[], options: AndroidPluginOptions, sharedDeps: string[] = [], sharedRepos: string[] = []) {
 	const cache = options.cache ?? DEFAULT_CACHE;
 	mkdirSync(cache, { recursive: true });
 	const root = mkdtempSync(join(cache, '.build-'));
@@ -234,8 +236,10 @@ kotlin {
 repositories {
     google()
     mavenCentral()
+${sharedRepos.map((r) => `    maven { url = ${q(r)} }`).join('\n')}
 }
 
+${sharedDeps.length ? `dependencies {\n${sharedDeps.map((c) => `    implementation ${q(c)}`).join('\n')}\n}\n` : ''}
 ${l.include?.libraryBlocks.join('\n\n') ?? ''}
 `,
 			);
@@ -290,7 +294,7 @@ interface Token {
 	interpolated?: boolean;
 }
 
-const CONFIGURATIONS: Record<string, PluginNativeAndroid['dependencies'][number]['configuration']> = { implementation: 'implementation', api: 'implementation', compileOnly: 'compileOnly', runtimeOnly: 'runtimeOnly' };
+const CONFIGURATIONS: Record<string, PluginNativeAndroid['dependencies'][number]['configuration']> = { implementation: 'implementation', api: 'implementation', compileOnly: 'compileOnly', runtimeOnly: 'runtimeOnly', annotationProcessor: 'annotationProcessor' };
 const KNOWN_REPOSITORIES = new Set(['google', 'mavenCentral']);
 
 /**

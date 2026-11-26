@@ -316,7 +316,16 @@ export const statementsMethods = {
 			});
 		}
 		if (ts.isForInStatement(s)) {
-			const list = s.initializer as ts.VariableDeclarationList;
+			if (!ts.isVariableDeclarationList(s.initializer)) {
+				const k = this.fresh('__key');
+				const lines = this.assignIterated(s.initializer, k, this.checker.getStringType(), s.expression);
+				return this.loopBody(() => {
+					const label = this.takeLabel();
+					const body = this.block(s.statement);
+					return `${i}${label}for ${k} in ${this.tryPrefix(s.expression)}${RT.jsKeysOf}(${this.expr(s.expression)}) {\n${lines.map((l) => `${i}    ${l}`).join('\n')}\n${body.slice(2)}`;
+				});
+			}
+			const list = s.initializer;
 			const name = ident((list.declarations[0].name as ts.Identifier).text);
 			const mutable = assignsTo(s.statement, this.checker.getSymbolAtLocation(list.declarations[0].name), this.checker) ? 'var ' : '';
 			return this.loopBody(() => `${i}${this.takeLabel()}for ${mutable}${name} in ${this.tryPrefix(s.expression)}${RT.jsKeysOf}(${this.expr(s.expression)}) ${this.block(s.statement)}`);

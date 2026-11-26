@@ -153,10 +153,10 @@ function resolvePatterns(patterns: string[], filePath: string, appRoot: string |
 		let cwd = isRoot ? rootDir : fileDir;
 		let normalized = isRoot ? raw.slice(1) : raw.replace(/^\.\//, '');
 		let keyPrefix = isRoot ? '/' : './';
-		while (!isRoot && normalized.startsWith('../')) {
+		while (normalized.startsWith('../')) {
 			cwd = dirname(cwd);
 			normalized = normalized.slice(3);
-			keyPrefix = keyPrefix === './' ? '../' : `${keyPrefix}../`;
+			keyPrefix = isRoot ? `${keyPrefix}../` : keyPrefix === './' ? '../' : `${keyPrefix}../`;
 		}
 		// Narrow walk root to any static directory prefix before the first glob metacharacter.
 		const parts = normalized.split('/');

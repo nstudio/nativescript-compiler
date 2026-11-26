@@ -13,9 +13,8 @@ function tokenName(t: Translator, e: ts.Expression | ts.EntityName): string {
   return e.getText();
 }
 
-/** What `inject(token)` gives at `at`; a ViewContainerRef has no instance whose views would attach to the component's. */
+/** What `inject(token)` gives at `at`. */
 function injectedToken(t: Translator, token: string, at: ts.Node, decl?: ts.Declaration): string {
-  if (token === 'ViewContainerRef') throw t.error(at, 'an injected ViewContainerRef', 'view-container-ref');
   return injected('swift', token, at, decl && ts.isClassDeclaration(decl) ? injectableShared(decl, t.pluginFiles, t.checker) : undefined);
 }
 
@@ -208,7 +207,6 @@ function methodCall(t: Translator, owner: string, method: string, e: ts.CallExpr
     const rawArg0 = forwardRefTarget(e.arguments[0]);
     const tokTarget = ts.isExpressionWithTypeArguments(rawArg0) ? rawArg0.expression : rawArg0;
     const token = tokenName(t, tokTarget);
-    if (token === 'ViewContainerRef') throw t.error(e, 'an injected ViewContainerRef', 'view-container-ref');
     const tokenDecl = t.resolve(tokTarget)?.declarations?.[0];
     if ((KIT_TOKENS.includes(token) || isInjectableClass(tokenDecl, t.pluginFiles)) && e.arguments.length === 1 && t.throwsInfo.expr(e)) return injectedToken(t, token, e, tokenDecl);
     const raw = `${t.expr(target)}.get(${t.coerce(rawArg0, 'Any?')}${e.arguments[1] ? `, ${t.coerce(e.arguments[1], 'Any?')}` : ''}${e.arguments[2] ? `, ${t.coerce(e.arguments[2], 'Any?')}` : ''})`;
@@ -283,7 +281,7 @@ export const swiftHooks: TranslatorHooks<Translator> = {
       'KitHttpClient', 'KitActivatedRoute', 'KitRouter', 'KitNativeDialogRef', 'KitNativeDialogService',
       'HttpParams', 'HttpHeaders', 'HttpResponse', 'HttpErrorResponse', 'HttpRequest', 'HttpContext', 'HttpContextToken',
       'ParamMap', 'UrlSegment', 'UrlTree', 'DefaultUrlSerializer', 'ActivatedRouteSnapshot',
-      'ViewContainerRef', 'TemplateRef', 'ComponentRef', 'EmbeddedViewRef', 'ApplicationRef', 'Location'].map((n) => [n, { type: n, shim: true, metatype: true }])),
+      'ViewContainerRef', 'TemplateRef', 'ComponentRef', 'EmbeddedViewRef', 'ApplicationRef', 'Location', 'PendingTasks', 'Renderer2', 'RendererFactory2'].map((n) => [n, { type: n, shim: true, metatype: true }])),
   },
   globalCall,
   methodCall,
@@ -302,7 +300,7 @@ export const swiftHooks: TranslatorHooks<Translator> = {
     const ngImports = standaloneImports(cls, t.checker, t.compiles);
     return ngImports ? [`    static let jsNgImports: Any? = JSArray<Any?>([${ngImports.map((e) => t.coerce(e, 'Any?')).join(', ')}])`] : [];
   },
-  componentAsValue: (t, cls, type) => `ComponentFactory { ${t.rootView(cls, type, `try AngularView.construct { ${t.throwsInfo.initThrows(cls) ? 'try ' : ''}${type}() }.${t.components.get(cls.name!.text)!.members.render}()`)} }`,
+  componentAsValue: (t, cls, type) => `ComponentFactory(${type}.self) { ${t.rootView(cls, type, `try AngularView.construct { ${t.throwsInfo.initThrows(cls) ? 'try ' : ''}${type}() }.${t.components.get(cls.name!.text)?.members?.render ?? 'render'}()`)} }`,
   /** A component created as a root view (bootstrap, route, dialog): made and rendered in its standalone injector. */
   wrapRootView: (t, cls, type, make) => (standaloneImports(cls, t.checker, t.compiles) ? `try Injector.standalone(${type}.self, ${type}.jsNgImports) { ${make} }` : make),
   serviceClass(t, cls, name) {
@@ -322,6 +320,8 @@ export const swiftHooks: TranslatorHooks<Translator> = {
         ];
     return [`final class ${name}: JSInjectableType {`, core.swift.NONISOLATED_DEINIT, ...shared, '', ...members, '}'].join('\n');
   },
+  dynamicImport: (specifier) =>
+    specifier === '@angular/compiler' ? 'JSPromise<Any?>.reject(JSError("Dynamic import(\'@angular/compiler\') is not available in AOT release builds"))' : undefined,
   // An app's @Injectable class extending another class: translated as any class is, and made by the injector as a service is.
   afterClass: (t, cls, code) => (injectableRole(cls, t.pluginFiles) === 'based' && !injectableBase(t, cls) ? injectableStatics(t, cls, code, 'extension').join('\n') : undefined),
   classExtras(t, cls, name, code) {

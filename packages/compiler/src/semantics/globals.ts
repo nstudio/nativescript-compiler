@@ -27,6 +27,9 @@ const WEB_CLASSES = ['TextEncoder', 'TextDecoder', 'Crypto', 'SubtleCrypto', 'Cr
 /** The worker API's classes, web classes of a kit that runs workers. */
 const WORKER_CLASSES = ['Worker', 'MessageEvent', 'ErrorEvent', 'URL'];
 
+/** Web API classes that have native/kit representations (as opposed to DOM-only element/node interfaces held untyped). */
+export const ALL_WEB_CLASSES: ReadonlySet<string> = new Set([...WEB_CLASSES, ...WORKER_CLASSES, 'URLSearchParams', 'AbortController', 'AbortSignal', 'Blob', 'File', 'FormData', 'Headers', 'Request', 'Response', 'Event', 'EventTarget', 'CustomEvent', 'CloseEvent', 'WebSocket', 'ReadableStream', 'WritableStream', 'TransformStream']);
+
 /** `name` is a web class the kit implements. */
 export function isWebClass(ledger: Ledger, name: string): boolean {
 	return WEB_CLASSES.includes(name) || (ledger.workerGlobals && WORKER_CLASSES.includes(name));
@@ -51,6 +54,7 @@ export const SHARED_LIB_CONSTANTS: Readonly<Record<string, string>> = {
 	'Symbol.dispose': 'JSSymbol.dispose',
 	'Symbol.asyncDispose': 'JSSymbol.asyncDispose',
 	'Object.prototype': 'JSPrototypes.objectPrototype',
+	...Object.fromEntries(TYPED_ARRAYS.map((t) => [`${t}.BYTES_PER_ELEMENT`, `JS${t}.BYTES_PER_ELEMENT`])),
 };
 
 const LIB_GLOBALS = new Set(['Math', 'JSON', 'Object', 'Array', 'Number', 'Promise', 'console', 'String', 'Boolean', 'Map', 'Set', 'Date', 'RegExp', 'WeakRef', 'Symbol', 'WeakMap', 'WeakSet', 'BigInt']);

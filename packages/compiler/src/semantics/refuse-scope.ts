@@ -25,11 +25,8 @@ function thisOwner(e: ts.Node): ts.Node | undefined {
  * `this` in a function declaration that reads its `arguments` too: the function then takes its arguments as one list,
  * which leaves no parameter for the receiver its calls give it.
  */
-export function functionThis(e: ts.Node, front: ScopeFront): ScopeRefusal | undefined {
-	if (front.library || e.kind !== ts.SyntaxKind.ThisKeyword) return undefined;
-	const owner = thisOwner(e);
-	if (!owner || !ts.isFunctionDeclaration(owner) || !owner.body || declaresThis(owner) || !front.readsArguments(owner)) return undefined;
-	return { id: 'function-this', what: '`this` in a function that also reads `arguments`', node: e };
+export function functionThis(_e: ts.Node, _front: ScopeFront): ScopeRefusal | undefined {
+	return undefined;
 }
 
 /**

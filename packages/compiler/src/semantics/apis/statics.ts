@@ -55,9 +55,12 @@ export function isUnsupportedLibStatic(ctx: Pick<StateBackend, 'resolve'>, read:
 }
 
 /** Which first-class function value a library global member (`console.error`, `String.fromCharCode`, `Uint8Array.from`, …) lowers to. */
-export function libFunctionValueKind(owner: string, name: string): 'console' | 'fromCharCode' | 'typedArrayFrom' | 'isArray' | 'numberCheck' | null {
+export function libFunctionValueKind(owner: string, name: string): 'console' | 'fromCharCode' | 'fromCodePoint' | 'mathRandom' | 'mathVariadic' | 'typedArrayFrom' | 'isArray' | 'numberCheck' | null {
 	if (owner === 'console' && Object.hasOwn(CONSOLE, name)) return 'console';
 	if (owner === 'String' && name === 'fromCharCode') return 'fromCharCode';
+	if (owner === 'String' && name === 'fromCodePoint') return 'fromCodePoint';
+	if (owner === 'Math' && name === 'random') return 'mathRandom';
+	if (owner === 'Math' && (name === 'min' || name === 'max')) return 'mathVariadic';
 	if (TYPED_ARRAYS.includes(owner) && name === 'from') return 'typedArrayFrom';
 	if (owner === 'Array' && name === 'isArray') return 'isArray';
 	if (owner === 'Number' && ['isInteger', 'isSafeInteger', 'isFinite', 'isNaN'].includes(name)) return 'numberCheck';

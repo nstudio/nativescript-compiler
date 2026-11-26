@@ -520,14 +520,12 @@ export const builtinMethods = {
 				const fn = name === 'replace' ? RT.jsReplace : RT.jsReplaceAll;
 				// A function value: called with the match, each group (undefined where it took no part), the match's index and the string.
 				if (!(ts.isArrowFunction(second) || ts.isFunctionExpression(second)) && this.checker.getTypeAtLocation(second).getCallSignatures().length) {
-					if (name === 'replaceAll') throw this.error(e, 'replaceAll with a function');
 					// A conditional's branches are each held untyped: adapted to one function type, a rest would not take the arguments.
 					const bare = ts.skipOuterExpressions(second);
 					const f = ts.isConditionalExpression(bare) ? `(${this.cond(bare.condition)} ? ${this.coerce(bare.whenTrue, 'Any?')} : ${this.coerce(bare.whenFalse, 'Any?')})` : this.isAny(second) ? this.expr(second) : this.convert(this.expr(second), this.typeOf(second), 'Any?');
 					return `${fn}(${s}, ${r}) { (__m: JSMatch) throws -> String in ${RT.jsToString}(try ${RT.jsCall}(${f}, spread: __m.replacerArguments)) }`;
 				}
 				if (!(ts.isArrowFunction(second) || ts.isFunctionExpression(second))) return `${fn}(${s}, ${r}, ${this.str(second)})`;
-				if (name === 'replaceAll') throw this.error(e, 'replaceAll with a function');
 				// The replacer gets the match, then each group.
 				const m = this.fresh('__match');
 				// The match, each group (undefined where it took no part), the index, the input, then the groups object.

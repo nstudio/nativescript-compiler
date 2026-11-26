@@ -82,7 +82,7 @@ export interface KotlinCore {
 	isKitView(name: string): boolean;
 	/** A member of a kit type or a type it extends, as the kit declares it. */
 	kitMember(owner: string, name: string): { kind: string; type: string; params?: string; static: boolean } | null;
-	isKitMethod(callee: ts.Expression): boolean;
+	owner(e: ts.Expression): { name: string; isStatic: boolean } | null;
 	coreVariable?(e: ts.Identifier): string | null;
 	superArgs?(base: string, e: ts.CallExpression, args: string[]): string[];
 	kitExtends?(name: string, base: string): boolean;

@@ -126,11 +126,19 @@ export function lookupClass(module: string, jsClass: string): NativeClass | null
 
 export function lookupMember(module: string, jsClass: string, jsMember: string, isStatic: boolean): NativeMethod | NativeProperty | null {
 	const receiver = lookupClass(module, jsClass);
+	let readonlyProp: NativeProperty | null = null;
 	for (const [, c] of hierarchy(module, jsClass)) {
 		const members = isStatic ? c.static : c.instance;
 		const m = Object.hasOwn(members, jsMember) ? members[jsMember] : null;
-		if (m) return rehome(m, c, receiver);
+		if (m) {
+			if (m.kind === 'property' && m.readonly) {
+				readonlyProp ??= rehome(m, c, receiver);
+				continue;
+			}
+			return rehome(m, c, receiver);
+		}
 	}
+	if (readonlyProp) return readonlyProp;
 	if (!isStatic && !jsMember.startsWith('init') && cLong.test(jsMember)) return lookupMember(module, jsClass, jsMember.replace(cLong, 'LongLong'), false);
 	if (!isStatic) return jsMember.startsWith('init') ? lookupInit(module, jsClass, jsMember) : null;
 	// Swift drops a factory named after its class (`+[NSArray arrayWithArray:]`, `+[UIBezierPath bezierPath]`)

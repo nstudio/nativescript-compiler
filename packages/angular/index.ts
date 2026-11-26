@@ -36,6 +36,9 @@ const behaviour: TemplateBehaviour = {
     inputChanged: 'Zone.inputChanged',
     directiveHost: 'ElementRef.hosting',
     routerOutlet: { call: 'Router.shared.outlet', primary: 'primary' },
+    componentOutlet: 'ComponentOutlet.mount',
+    templateOutlet: 'TemplateOutlet.mount',
+    structuralScope: 'StructuralDirective.scope',
     embedded: { collect: 'EmbeddedViews.collect', later: 'EmbeddedViews.later' },
     everyCheck: { check: 'EveryCheck', content: 'ContentChecked', view: 'ViewChecked' },
     letSlot: 'LetSlot',
@@ -92,8 +95,8 @@ export default function adapter(core: CoreApi): FrameworkAdapter {
       // `provideNativeScriptNgZone`, which is `_internalProvideZoneChangeDetection` with its own NgZone) and not `provideZonelessChangeDetection`.
       const texts = [entryText, ...sources.map(read)];
       const zone = texts.some((t) => /\bprovide(ZoneChangeDetection|NativeScriptNgZone)\(/.test(t)) && !texts.some((t) => /\bprovideZonelessChangeDetection\(/.test(t));
-      // The pipes templates name: the app's and its libraries' `@Pipe` classes, and @angular/common's, in the build's Angular runtime module.
-      const pipes = angularPipes(sources, read);
+      // The pipes templates name: the app's and its libraries' `@Pipe` classes, published Angular library pipes (`ɵɵPipeDeclaration`), and @angular/common's.
+      const pipes = angularPipes([...(entry && !sources.includes(entry) ? [entry] : []), ...sources], read, app.nodeModules);
       // The app's own directives: a library's are written against the view internals a compiled template replaces.
       const directives = angularDirectives(sources.filter((f) => !libraries.includes(f)), read);
       // What each NgModule declares, imports and exports: a component's directives are those in its scope.
@@ -160,6 +163,17 @@ export default function adapter(core: CoreApi): FrameworkAdapter {
         root = (declaring && /bootstrap:\s*\[\s*(\w+)/.exec(declaring)?.[1]) ?? '';
       }
       if (!root) throw new Error(`${entry}: no bootstrapApplication(Component) or bootstrapModule(AppModule) with a bootstrap component`);
+      const hasComponentOutlet = (() => {
+        const visit = (nodes: readonly { kind: string; children?: unknown[]; body?: unknown[]; branches?: { body: unknown[] }[]; fallback?: unknown[]; slots?: Record<string, unknown[]> }[]): boolean =>
+          nodes.some((n) =>
+            n.kind === 'componentOutlet'
+            || (Array.isArray(n.children) && visit(n.children as typeof nodes))
+            || (Array.isArray(n.body) && visit(n.body as typeof nodes))
+            || (Array.isArray(n.branches) && n.branches.some((b) => visit(b.body as typeof nodes)))
+            || (Array.isArray(n.fallback) && visit(n.fallback as typeof nodes))
+            || (!!n.slots && Object.values(n.slots).some((s) => visit(s as typeof nodes))));
+        return components.some((c) => visit(c.template));
+      })();
       const zoneEnabled = zone ? '        Zone.enabled = true\n' : '';
       return {
         components,
@@ -169,18 +183,44 @@ export default function adapter(core: CoreApi): FrameworkAdapter {
         behaviour,
         elementClasses: new Set([...elements.values()].map((e) => e.name)),
         entry: {
-          swift: (ctx) => ({
-            setup: zoneEnabled,
-            beforeRoot: tree
-              ? `        Router.shared.config = ${swiftRouteConfig(tree.routes, '        ', ctx)}\n`
-              : `        Router.shared.routes = [${routes.map((r) => `Route(${JSON.stringify(r.path)}) { ${ctx.rootView(r.component, `try AngularView.construct { ${ctx.components.get(r.component)?.initThrows ? 'try ' : ''}${ctx.className(r.component)}() }.${ctx.components.get(r.component)!.members.render}()`)} }`).join(', ')}]\n        Router.shared.initial = ${JSON.stringify(initial)}\n`,
-          }),
-          kotlin: (ctx) => ({
-            setup: zoneEnabled,
-            beforeRoot: tree
-              ? `        Router.shared.config = ${kotlinRouteConfig(tree.routes, '        ', ctx)}\n`
-              : `        Router.shared.routes = listOf(${routes.map((r) => `Route(${ctx.string(r.path)}) { ${ctx.rootView(r.component, `AngularView.construct { ${r.component}() }.${ctx.components.get(r.component)!.members.render}()`)} }`).join(', ')})\n        Router.shared.initial = ${ctx.string(initial)}\n`,
-          }),
+          swift: (ctx) => {
+            const outlets = hasComponentOutlet
+              ? [...ctx.components.entries()]
+                  .filter(([, info]) => !(info.props ?? []).some((p) => !(info.optional ?? []).includes(p)))
+                  .map(([name, info]) => {
+                    const cls = ctx.className(name);
+                    const make = `try AngularView.construct { ${info.initThrows ? 'try ' : ''}${cls}() }`;
+                    const body = info.fragment ? `try ${make}.${info.members.render}(into: region)` : `region.set([try ${make}.${info.members.render}()])`;
+                    return `        ComponentOutlet.register(${cls}.self) { region, _ in ${body} }\n`;
+                  })
+                  .join('')
+              : '';
+            return {
+              setup: zoneEnabled,
+              beforeRoot: outlets + (tree
+                ? `        Router.shared.config = ${swiftRouteConfig(tree.routes, '        ', ctx)}\n`
+                : `        Router.shared.routes = [${routes.map((r) => `Route(${JSON.stringify(r.path)}) { ${ctx.rootView(r.component, `try AngularView.construct { ${ctx.components.get(r.component)?.initThrows ? 'try ' : ''}${ctx.className(r.component)}() }.${ctx.components.get(r.component)!.members.render}()`)} }`).join(', ')}]\n        Router.shared.initial = ${JSON.stringify(initial)}\n`),
+            };
+          },
+          kotlin: (ctx) => {
+            const outlets = hasComponentOutlet
+              ? [...ctx.components.entries()]
+                  .filter(([, info]) => !(info.props ?? []).some((p) => !(info.optional ?? []).includes(p)))
+                  .map(([name, info]) => {
+                    const cls = ctx.className(name);
+                    const make = `AngularView.construct { ${cls}() }`;
+                    const body = info.fragment ? `${make}.${info.members.render}(region)` : `region.set(listOf(${make}.${info.members.render}()))`;
+                    return `        ComponentOutlet.register(${cls}::class.java) { region, _ -> ${body} }\n`;
+                  })
+                  .join('')
+              : '';
+            return {
+              setup: zoneEnabled,
+              beforeRoot: outlets + (tree
+                ? `        Router.shared.config = ${kotlinRouteConfig(tree.routes, '        ', ctx)}\n`
+                : `        Router.shared.routes = listOf(${routes.map((r) => `Route(${ctx.string(r.path)}) { ${ctx.rootView(r.component, `AngularView.construct { ${r.component}() }.${ctx.components.get(r.component)!.members.render}()`)} }`).join(', ')})\n        Router.shared.initial = ${ctx.string(initial)}\n`),
+            };
+          },
         },
       };
     },

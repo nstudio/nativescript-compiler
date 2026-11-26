@@ -9,7 +9,7 @@ import { kitMember } from '../kit/kit-index.ts';
 import { runtimeKitIndex } from './core-index.ts';
 import { inheritsToString, toStringGivesNonString, uncheckedIteratorResult } from '../semantics/classes.ts';
 import { isUntyped, spelledType } from '../semantics/types.ts';
-import { isDisposerMember } from '../semantics/lang.ts';
+import { isDirectSymbolMethod } from '../semantics/lang.ts';
 
 export const classMethodsMethods = {
 	/**
@@ -63,8 +63,12 @@ export const classMethodsMethods = {
 		if (!m.body) return;
 		const keyed = this.symbolMember(m.name);
 		if (this.symbolMethodCode(k, m, keyed)) return;
-		if (keyed && isDisposerMember(keyed.member)) {
-			lines.push('    ' + this.func(m, keyed.member, memberOpen));
+		if (keyed && isDirectSymbolMethod(keyed.member)) {
+			if (isStatic(m)) {
+				this.indent = '        ';
+				k.statics.push('        ' + this.func(m, keyed.member));
+				this.indent = '    ';
+			} else lines.push('    ' + this.func(m, keyed.member, memberOpen));
 			return;
 		}
 		if (keyed) throw this.error(m.name, 'a method named by this symbol');

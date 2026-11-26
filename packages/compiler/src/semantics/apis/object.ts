@@ -1,7 +1,7 @@
 // `Object`'s functions.
 import { apiTable } from './api.ts';
 
-export type ObjectStatic = 'assign' | 'create' | 'defineProperties' | 'defineProperty' | 'entries' | 'freeze' | 'fromEntries' | 'getOwnPropertyDescriptor' | 'getOwnPropertyNames' | 'getOwnPropertySymbols' | 'getPrototypeOf' | 'groupBy' | 'hasOwn' | 'is' | 'isExtensible' | 'isFrozen' | 'isSealed' | 'keys' | 'preventExtensions' | 'seal' | 'values';
+export type ObjectStatic = 'assign' | 'create' | 'defineProperties' | 'defineProperty' | 'entries' | 'freeze' | 'fromEntries' | 'getOwnPropertyDescriptor' | 'getOwnPropertyNames' | 'getOwnPropertySymbols' | 'getPrototypeOf' | 'groupBy' | 'hasOwn' | 'is' | 'isExtensible' | 'isFrozen' | 'isSealed' | 'keys' | 'preventExtensions' | 'seal' | 'setPrototypeOf' | 'values';
 
 export const OBJECT_STATICS = apiTable<ObjectStatic>('static', {
 	assign: { arity: 2, rest: true, result: 'object' },
@@ -24,5 +24,6 @@ export const OBJECT_STATICS = apiTable<ObjectStatic>('static', {
 	keys: { arity: 1, result: 'object' },
 	preventExtensions: { arity: 1, result: 'object' },
 	seal: { arity: 1, result: 'object' },
+	setPrototypeOf: { arity: 2, result: 'object', throws: true, runtime: 'jsSetPrototypeOf', args: ['any', 'any'] },
 	values: { arity: 1, result: 'object' },
 });

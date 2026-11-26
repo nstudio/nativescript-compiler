@@ -55,6 +55,16 @@ export function addedDeclarations(decls: readonly ts.Declaration[]): boolean {
 	return decls.length > 0 && decls.every((d) => !isCoreDeclaration(d) && (!d.getSourceFile().isDeclarationFile || ts.isExternalModule(d.getSourceFile())));
 }
 
+/** Whether `callee` is an instance method declared on a kit type (`target.method`). */
+export function isKitInstanceMethod(
+	core: { owner(e: ts.Expression): { name: string; isStatic: boolean } | null; kitMember(owner: string, name: string): { kind: string } | null } | null | undefined,
+	callee: ts.Expression,
+): boolean {
+	if (!core || !ts.isPropertyAccessExpression(callee)) return false;
+	const owner = core.owner(callee.expression);
+	return !!owner && !owner.isStatic && core.kitMember(owner.name, callee.name.text)?.kind === 'func';
+}
+
 /** A property core's typings declare that the kit's class lacks and leaves to each object's own properties (see `CoreAPI.ownPropertyOnly`). */
 export function ownPropertyOnly(index: Map<string, KitType>, owner: string, name: ts.MemberName, sym: ts.Symbol | undefined): boolean {
 	if (kitMember(index, owner, name.text) || !kitMember(index, owner, 'jsExpando')) return false;

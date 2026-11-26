@@ -206,13 +206,61 @@ const reactive = (e: ts.Expression | undefined) => !!e && ((ts.isCallExpression(
 const BASE_META = new Set(['providers', 'viewProviders', 'host', 'inputs', 'outputs', 'queries', 'hostDirectives']);
 
 /**
+ * Whether `cls` extends a chain of concrete `@Directive` classes (none `@Component`, none `abstract`, none with
+ * required constructor parameters): those keep real Swift/Kotlin inheritance so `inject(Base)`, `useExisting`, and
+ * `instanceof Base` work natively at runtime without flattening.
+ */
+export function isRealDirectiveBaseChain(file: string, sf: ts.SourceFile, cls: ts.ClassDeclaration, read: Read = readFile, aliased?: Aliased): boolean {
+  if (!extendsOf(cls)) return false;
+  let curFile = file, curSf = sf, curCls: ts.ClassDeclaration | undefined = cls;
+  const seen = new Set<string>();
+  while (curCls && extendsOf(curCls)) {
+    const ext = extendsOf(curCls)!;
+    if (!ts.isIdentifier(ext.expression)) return false;
+    const b = classOfName(curFile, curSf, ext.expression.text, read, new Set(), aliased);
+    if (!b || seen.has(`${b.file}#${b.name}`)) return false;
+    seen.add(`${b.file}#${b.name}`);
+    const bSf = b.file === curFile ? curSf : parse(b.file, read(b.file));
+    const bCls = classIn(bSf, b.name);
+    if (!bCls || isAbstract(bCls)) return false;
+    const decs = decoratorsOf(bCls).map((d) => (ts.isCallExpression(d.expression) ? d.expression.expression.getText() : d.expression.getText()));
+    if (!decs.includes('Directive') || decs.includes('Component')) return false;
+    const ctor = bCls.members.find((m): m is ts.ConstructorDeclaration => ts.isConstructorDeclaration(m) && !!m.body);
+    if (ctor && ctor.parameters.length > 0) return false;
+    curFile = b.file; curSf = bSf; curCls = bCls;
+  }
+  return seen.size > 0;
+}
+
+/** Ancestor `@Directive` classes of `cls` (nearest base first) when `isRealDirectiveBaseChain` holds. */
+export function inheritedDirectiveClasses(file: string, sf: ts.SourceFile, cls: ts.ClassDeclaration, read: Read = readFile, aliased?: Aliased): { file: string; cls: ts.ClassDeclaration }[] {
+  const out: { file: string; cls: ts.ClassDeclaration }[] = [];
+  let curFile = file, curSf = sf, curCls: ts.ClassDeclaration | undefined = cls;
+  const seen = new Set<string>();
+  while (curCls && extendsOf(curCls)) {
+    const ext = extendsOf(curCls)!;
+    if (!ts.isIdentifier(ext.expression)) break;
+    const b = classOfName(curFile, curSf, ext.expression.text, read, new Set(), aliased);
+    if (!b || seen.has(`${b.file}#${b.name}`)) break;
+    seen.add(`${b.file}#${b.name}`);
+    const bSf = b.file === curFile ? curSf : parse(b.file, read(b.file));
+    const bCls = classIn(bSf, b.name);
+    if (!bCls) break;
+    out.push({ file: b.file, cls: bCls });
+    curFile = b.file; curSf = bSf; curCls = bCls;
+  }
+  return out;
+}
+
+/**
  * The file's text with the class `name` flattened: no `extends`, its bases' members its own. `null` when the class
- * extends nothing.
+ * extends nothing or extends a concrete `@Directive` chain that keeps real inheritance.
  */
 export function flattenComponent(path: string, text: string, name: string, read: Read = readFile, seen = new Set<string>(), aliased?: Aliased): string | null {
   let sf = parse(path, text);
   let cls = classIn(sf, name)!;
   if (!extendsOf(cls)) return null;
+  if (isRealDirectiveBaseChain(path, sf, cls, read, aliased)) return null;
   if (seen.has(`${path}#${name}`)) throw unsupported(path, `the class ${name} extending itself through its bases`);
   seen.add(`${path}#${name}`);
   const base = baseOf(path, sf, cls, read, aliased);
@@ -231,10 +279,15 @@ export function flattenComponent(path: string, text: string, name: string, read:
   const where = (n: ts.Node) => `${path}:${lineOf(n)}`;
   const bwhere = (n: ts.Node) => `${base.file}:${lineOf(n)}`;
 
+  const ownHasProviders = decoratorsOf(cls).some((d) => {
+    const meta = ts.isCallExpression(d.expression) ? d.expression.arguments[0] : undefined;
+    return !!meta && ts.isObjectLiteralExpression(meta) && meta.properties.some((p) => p.name && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) && p.name.text === 'providers');
+  });
   for (const d of decoratorsOf(B)) {
     const meta = ts.isCallExpression(d.expression) ? d.expression.arguments[0] : undefined;
     for (const p of meta && ts.isObjectLiteralExpression(meta) ? meta.properties : []) {
       const key = p.name && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) ? p.name.text : '';
+      if (key === 'providers' && ownHasProviders) continue;
       if (BASE_META.has(key)) throw unsupported(bwhere(p), `the ${key} of ${base.name}, a class the component ${C} extends,`);
     }
   }
@@ -254,13 +307,41 @@ export function flattenComponent(path: string, text: string, name: string, read:
   const mine = bindingsOf(path, sf, aliased);
   const theirs = bindingsOf(base.file, baseSf, aliased);
   const imports: string[] = [];
+  const localDecls: string[] = [];
+  const copiedLocals = new Set<string>();
   const mapped = new Map<string, string>();
+  const findLocalDecl = (n: string): ts.Statement | undefined => {
+    for (const st of baseSf.statements) {
+      if ((ts.isTypeAliasDeclaration(st) || ts.isInterfaceDeclaration(st) || ts.isEnumDeclaration(st) || ts.isFunctionDeclaration(st)) && st.name?.text === n) return st;
+      if (ts.isVariableStatement(st) && st.declarationList.declarations.some((d) => ts.isIdentifier(d.name) && d.name.text === n)) return st;
+    }
+    return undefined;
+  };
   const nameFor = (n: string, at: ts.Node): string => {
     if (sameFile) return n;
     if (mapped.has(n)) return mapped.get(n)!;
     const b = theirs.get(n)!;
-    if (!b.exported) throw unsupported(bwhere(at), `${base.name}'s members naming ${n}, which ${base.file} does not export, in the component ${C} that extends it,`);
-    const same = (x: Binding) => x.module === b.module && x.name === b.name;
+    if (!b.exported) {
+      const decl = findLocalDecl(n);
+      if (!decl) throw unsupported(bwhere(at), `${base.name}'s members naming ${n}, which ${base.file} does not export, in the component ${C} that extends it,`);
+      const local = mine.has(n) ? `${n}__${base.name}` : n;
+      mapped.set(n, local);
+      if (!copiedLocals.has(local)) {
+        copiedLocals.add(local);
+        mine.set(local, { ...b, name: local });
+        const nameEdits: Edit[] = [];
+        if (local !== n) {
+          if (ts.isVariableStatement(decl)) {
+            for (const d of decl.declarationList.declarations) if (ts.isIdentifier(d.name) && d.name.text === n) nameEdits.push({ start: d.name.getStart(), end: d.name.getEnd(), text: local });
+          } else if ((ts.isTypeAliasDeclaration(decl) || ts.isInterfaceDeclaration(decl) || ts.isEnumDeclaration(decl) || ts.isFunctionDeclaration(decl)) && decl.name) {
+            nameEdits.push({ start: decl.name.getStart(), end: decl.name.getEnd(), text: local });
+          }
+        }
+        localDecls.push(fromBase(decl, nameEdits, false));
+      }
+      return local;
+    }
+    const same = (x: Binding) => x.module === b.module && x.name === b.name && (!x.typeOnly || b.typeOnly);
     let local = mine.get(n) && same(mine.get(n)!) ? n : [...mine].find(([, x]) => same(x))?.[0];
     if (!local) {
       local = mine.has(n) || mapped.has(n) ? `${n}__${base.name}` : n;
@@ -519,7 +600,8 @@ export function flattenComponent(path: string, text: string, name: string, read:
   const others = cls.heritageClauses!.filter((h) => h !== ext);
   const head = text.slice(cls.getStart(), ext.getFullStart()) + (others.length ? ' ' + others.map((h) => h.getText()).join(' ') : '') + ' {';
   const flat = head + out.join('') + '\n}';
-  return (imports.length ? imports.join('\n') + '\n' : '') + text.slice(0, cls.getStart()) + flat + text.slice(cls.getEnd());
+  const preamble = [...imports, ...localDecls];
+  return (preamble.length ? preamble.join('\n') + '\n' : '') + text.slice(0, cls.getStart()) + flat + text.slice(cls.getEnd());
 }
 
 const QUERIES = /^(ViewChild|ViewChildren|ContentChild|ContentChildren|viewChild|viewChildren|contentChild|contentChildren)(\.required)?$/;
@@ -556,6 +638,7 @@ export function refuseBaseUses(files: string[], read: Read = readFile, aliased?:
     const sf = parse(f, text);
     for (const st of sf.statements) {
       if (!ts.isClassDeclaration(st) || !st.name || !decoratorsOf(st).some((d) => /^Component\b/.test(d.expression.getText()))) continue;
+      if (isRealDirectiveBaseChain(f, sf, st, read, aliased)) continue;
       let file = f, at = sf, cls: ts.ClassDeclaration | undefined = st;
       const seen = new Set<string>();
       const statics = new Map<string, InheritedStatic>();

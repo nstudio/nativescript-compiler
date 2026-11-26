@@ -142,7 +142,7 @@ export interface ComponentMembers {
 /** What entry code is written with. */
 export interface EntryContext {
 	/** The build's components, by name: the names of their generated members and whether construction throws. */
-	readonly components: ReadonlyMap<string, { members: ComponentMembers; initThrows?: boolean }>;
+	readonly components: ReadonlyMap<string, { members: ComponentMembers; initThrows?: boolean; fragment?: boolean; props?: string[]; optional?: string[] }>;
 	/** The code making a component's root view (`make`), wrapped as the translator wraps root views (`TranslatorHooks.wrapsRootViews`). */
 	rootView(component: string, make: string): string;
 	/** A program class's name in generated code, which may differ from its TypeScript name (a name the SDK also declares). */
@@ -254,6 +254,12 @@ export interface TemplateKit {
 	 * outlet `primary` names is the call's default.
 	 */
 	routerOutlet?: { call: string; primary: string };
+	/** Mounts a dynamic component into a region (`[ngComponentOutlet]` / `*ngComponentOutlet`). */
+	componentOutlet?: string;
+	/** Mounts a dynamic or recursive template into a region (`[ngTemplateOutlet]` / `*ngTemplateOutlet`). */
+	templateOutlet?: string;
+	/** Runs a custom structural directive with its `TemplateRef` and `ViewContainerRef` bound to its region. */
+	structuralScope?: string;
 	/** An attribute's bound value as the view takes it, under `slots`. */
 	attributeValue?: string;
 	/** A bound class name as the view takes it, under `slots`. */
@@ -454,6 +460,8 @@ export interface FrameworkModel {
 	calledByFramework?(cls: ts.ClassLikeDeclaration, m: ts.MethodDeclaration | ts.SetAccessorDeclaration, checker: ts.TypeChecker): boolean;
 	/** Whether a declared member may hold undefined at run time though its declared type leaves it out (e.g. `linkedSignal`'s `previous.source`). */
 	unsetMembers?(d: ts.PropertySignature | ts.PropertyDeclaration, checker: ts.TypeChecker): boolean;
+	/** Whether a generic class managed by the framework's DI / template factory erases its type parameters on reified backends (Swift). */
+	erasesGenericClass?(cls: ts.ClassDeclaration): boolean;
 }
 
 /** A component's field the framework's call makes a prop of (`input(0)`): its value's type and the default a parent may leave it at. */
@@ -485,6 +493,8 @@ export interface TranslatorHooks<V extends TranslatorView = TranslatorView> exte
 	serviceClass?(t: V, cls: ts.ClassDeclaration, name: string): string;
 	/** What a class's translation adds for the framework; `code` is the class's so far. */
 	classExtras?(t: V, cls: ts.ClassDeclaration, name: string, code: string): ClassExtras | undefined;
+	/** A dynamic `import(specifier)` the framework handles itself (e.g. rejecting JIT-only compiler imports); undefined for any other. */
+	dynamicImport?(specifier: string): string | undefined;
 	/** Code following a class's translation (`code`), as a Swift extension of it. */
 	afterClass?(t: V, cls: ts.ClassDeclaration, code: string): string | undefined;
 }

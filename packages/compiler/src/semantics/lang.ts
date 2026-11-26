@@ -158,7 +158,7 @@ export function jsKeyOrder(keys: string[]): string[] {
 }
 
 /** The kit's names for members a well-known symbol names (`[Symbol.iterator]`, `__@iterator@12` in the checker). */
-export const WELL_KNOWN_MEMBERS: Record<string, string> = { iterator: 'jsSymbolIterator', asyncIterator: 'jsSymbolAsyncIterator', toPrimitive: 'jsToPrimitive', toStringTag: 'jsToStringTag', dispose: 'jsSymbolDispose', asyncDispose: 'jsSymbolAsyncDispose' };
+export const WELL_KNOWN_MEMBERS: Record<string, string> = { iterator: 'jsSymbolIterator', asyncIterator: 'jsSymbolAsyncIterator', toPrimitive: 'jsToPrimitive', toStringTag: 'jsToStringTag', dispose: 'jsSymbolDispose', asyncDispose: 'jsSymbolAsyncDispose', hasInstance: 'jsHasInstance' };
 
 /** A property's name as the checker spells a well-known symbol's (`__@iterator@12`): the kit's member name. */
 export function wellKnownMember(name: string): string | null {
@@ -204,6 +204,21 @@ export function isDomGlobalDeclaration(name: string, decls: readonly ts.Declarat
 /** Whether a well-known symbol member is a disposer (`[Symbol.dispose]` / `[Symbol.asyncDispose]`). */
 export function isDisposerMember(member: string): boolean {
 	return member === 'jsSymbolDispose' || member === 'jsSymbolAsyncDispose';
+}
+
+/** Well-known symbol methods emitted directly on the class without a dynamic symbol dispatch table (`Symbol.dispose`, `Symbol.asyncDispose`, `Symbol.hasInstance`). */
+export function isDirectSymbolMethod(member: string): boolean {
+	return isDisposerMember(member) || member === 'jsHasInstance';
+}
+
+/** Framework-hooked dynamic `import('...')` call; null if unhandled. */
+export function hookedDynamicImport(e: ts.CallExpression, hooks: { dynamicImport?(specifier: string): string | null | undefined }): string | null {
+	return e.expression.kind === ts.SyntaxKind.ImportKeyword && e.arguments[0] && ts.isStringLiteral(e.arguments[0]) ? (hooks.dynamicImport?.(e.arguments[0].text) ?? null) : null;
+}
+
+/** Whether the non-nullable form of `t` is an uninstantiated type parameter (`{} as TContext`). */
+export function isTypeParameterType(t: ts.Type, checker: ts.TypeChecker): boolean {
+	return !!(checker.getNonNullableType(t).flags & ts.TypeFlags.TypeParameter);
 }
 
 /** A protocol/interface method's native name, mapping `[Symbol.iterator]` and `[Symbol.asyncIterator]` to their runtime names. */

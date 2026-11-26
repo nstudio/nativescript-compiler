@@ -160,6 +160,10 @@ public class RxSubject<T>: RxObservable<T> {
         for observer in observers { observer.next(value) }
     }
 
+    public func complete() {
+        observers.removeAll()
+    }
+
     public func asObservable() -> RxObservable<T> { RxObservable { next in self.subscribe(next) } }
 }
 

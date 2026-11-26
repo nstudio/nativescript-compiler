@@ -50,6 +50,7 @@ import { check, finish, KotlinTranslator as Translator, nativeBuild, SwiftTransl
 import { buildKotlinRuntime, buildSwiftRuntime, kotlinc, kotlinStdlib, modulesDir, swiftc, swiftMain, translateKotlin, translateSwift } from '../native-build.ts';
 import ts from 'typescript';
 import { BuildContext } from '../../src/program/build-context.ts';
+import { desugarClassMixins } from '../../src/program/class-mixins.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -1694,6 +1695,129 @@ export async function runGlob(): Promise<string> {
         ktGot = errors ? errors[0] : spawnSync('java', ['-cp', [join(dir, 'classes-glob'), runtime, kotlinStdlib()].join(':'), 'org.example.glob.__MainKt'], { encoding: 'utf8' }).stdout.trim();
       } catch (e) { ktGot = String(e); }
       check(ktGot === expectedGlob, `import.meta.glob() compiles and runs identically (Kotlin${ktGot === expectedGlob ? '' : `: ${ktGot.slice(0, 300)}`})`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+})();
+
+// ---- Wave 3: .json imports, class-mixins AST desugaring, tuple spreads, recursive named fn expr, Object.setPrototypeOf, replaceAll replacer, this+arguments, Symbol.hasInstance ----
+(() => {
+  const dir = mkdtempSync(join(tmpdir(), 'ns-release-checks-wave3-'));
+  try {
+    // 1. AST-based class-mixins desugaring: never touches strings, comments, or member names.
+    const loopSrc = `import { getViewClass, getViewMeta, registerElement } from '@nativescript/angular';
+import { CSSType } from '@nativescript/core';
+const VIEWS = ['ListPicker', 'ListView', 'Repeater'] as const;
+export function reg() {
+  for (const tag of VIEWS) {
+    const Base = getViewClass(tag) as new () => object;
+    const items = { label: 'Base tag items' };
+    @CSSType(tag)
+    class Wrap extends Base {
+      get items(): unknown { return items.label + ':' + tag; }
+      set items(v: unknown) { (items as any).v = v; }
+    }
+    registerElement(tag, () => Wrap as never, getViewMeta(tag));
+  }
+}
+`;
+    const unrolled = desugarClassMixins(loopSrc, join(dir, 'core-elements.ts'));
+    check(
+      unrolled.includes('class __local_Wrap_Repeater extends __nsCore_Repeater') &&
+        unrolled.includes("label: 'Base tag items'") &&
+        unrolled.includes('get items(): unknown { return __local_items_Repeater.label') &&
+        unrolled.includes('set items(v: unknown) { (__local_items_Repeater as any).v = v; }'),
+      'desugarClassMixins unrolls Repeater loop using AST edits without altering strings or accessor names',
+    );
+
+    // 2. Full Swift + Kotlin native execution of Wave 3 language features.
+    writeFileSync(join(dir, 'config.json'), JSON.stringify({ title: 'wave3', count: 42 }) + '\n');
+    writeFileSync(
+      join(dir, 'mixin.ts'),
+      `export function withTag<T extends new (...args: any[]) => { kind: string }>(Base: T) {
+  return class Tagged extends Base {
+    constructor(...args: any[]) {
+      super(...args);
+    }
+    // Base in comment stays untouched; "Base" in string stays untouched
+    describe(): string { return 'Base:' + this.kind; }
+  };
+}
+`,
+    );
+    const app = join(dir, 'wave3.ts');
+    writeFileSync(
+      app,
+      `import cfg from './config.json';
+import { withTag } from './mixin';
+
+class Widget {
+  kind = 'btn';
+}
+class TaggedWidget extends withTag(Widget) {}
+
+function collect(this: { tag: string }, ..._rest: unknown[]): string {
+  return this.tag + ':' + arguments.length + ':' + String(arguments[0]);
+}
+
+class CustomCheck {
+  static [Symbol.hasInstance](x: unknown): boolean {
+    return typeof x === 'string';
+  }
+}
+
+const fact = function f(n: number): number {
+  return n <= 1 ? 1 : n * f(n - 1);
+};
+
+const pair: [number, string] = [7, 'ok'];
+const triple: [number, string, boolean] = [...pair, true];
+const proto = { greet(): string { return 'hello'; } };
+const child: any = {};
+Object.setPrototypeOf(child, proto);
+const replaced = 'a1b2'.replaceAll(/\\d/g, (m) => String(Number(m) * 10));
+const thisArgs = collect.call({ tag: 'T' }, 'x', 'y');
+const w = new TaggedWidget();
+console.log([
+  cfg.title + ':' + cfg.count,
+  w.describe(),
+  String(fact(5)),
+  triple[0] + '-' + triple[1] + '-' + triple[2],
+  child.greet(),
+  replaced,
+  thisArgs,
+  String(Uint16Array.BYTES_PER_ELEMENT),
+  String.fromCodePoint(65, 66),
+  String(('yes' as unknown) instanceof CustomCheck) + ':' + String((42 as unknown) instanceof CustomCheck),
+].join('|'));
+`,
+    );
+
+    const expected = 'wave3:42|Base:btn|120|7-ok-true|hello|a10b20|T:2:x|2|AB|true:false';
+    {
+      let swGot = '';
+      try {
+        buildSwiftRuntime(nativeBuild, '-Onone');
+        const out = join(dir, 'swift-wave3');
+        const mods = translateSwift([app], out);
+        writeFileSync(join(out, 'main.swift'), swiftMain(mods));
+        const errors = swiftc(readdirSync(out).map((f) => join(out, f)), join(dir, 'main-wave3'), nativeBuild, '-Onone');
+        swGot = errors ? errors.slice(0, 3).join(' ; ') : spawnSync(join(dir, 'main-wave3'), { encoding: 'utf8' }).stdout.trim();
+      } catch (e) { swGot = String(e); }
+      check(swGot === expected, `Wave 3 compiler features (.json, mixin, recursive fn expr, tuple spread, setPrototypeOf, replaceAll fn, this+arguments, Symbol.hasInstance) run natively (Swift${swGot === expected ? '' : `: ${swGot.slice(0, 300)}`})`);
+    }
+    {
+      let ktGot = '';
+      try {
+        const out = join(dir, 'kotlin-wave3');
+        const mods = translateKotlin([app], out, 'org.example.wave3');
+        writeFileSync(join(out, '__Main.kt'), `package org.example.wave3\nimport org.nativescript.kit.*\nfun main() {\n${mods.map((m) => (m.init ? `    ${m.init}()\n` : '')).join('')}}\n`);
+        const runtime = buildKotlinRuntime(nativeBuild);
+        const errors = kotlinc(readdirSync(out).filter((f) => f.endsWith('.kt')).map((f) => join(out, f)), join(dir, 'classes-wave3'), [runtime]);
+        ktGot = errors ? errors.slice(0, 3).join(' ; ') : spawnSync('java', ['-cp', [join(dir, 'classes-wave3'), runtime, kotlinStdlib()].join(':'), 'org.example.wave3.__MainKt'], { encoding: 'utf8' }).stdout.trim();
+      } catch (e) { ktGot = String(e); }
+      check(ktGot === expected, `Wave 3 compiler features (.json, mixin, recursive fn expr, tuple spread, setPrototypeOf, replaceAll fn, this+arguments, Symbol.hasInstance) run natively (Kotlin${ktGot === expected ? '' : `: ${ktGot.slice(0, 300)}`})`);
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });

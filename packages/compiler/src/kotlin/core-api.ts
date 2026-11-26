@@ -9,6 +9,7 @@ import type { KotlinCore, Translator } from './translator.ts';
 import { KIT_ANDROID } from '../driver/paths.ts';
 import type { AdapterKit } from '../api/adapter-api.ts';
 import { rethrowUnlessRefused } from '../semantics/refusals.ts';
+import { isMixinOwnMember } from '../semantics/classes.ts';
 import { isUntyped, spelledType } from '../semantics/types.ts';
 import { kotlinKitIndex, TOP_LEVEL, NATIVE_MEMBERS, SCRIPT_OBJECTS, KIT } from './core-index.ts';
 
@@ -140,13 +141,6 @@ export class CoreKotlin extends KitTypes implements KotlinCore {
 		return null;
 	}
 
-	/** Whether `target.method` is a method the kit declares on target's class (an optional call of it is a plain call). */
-	isKitMethod(callee: ts.Expression): boolean {
-		if (!ts.isPropertyAccessExpression(callee)) return false;
-		const owner = this.owner(callee.expression);
-		return !!owner && !owner.isStatic && kitMember(this.index, owner.name, callee.name.text)?.kind === 'func';
-	}
-
 	owner(e: ts.Expression): { name: string; isStatic: boolean } | null {
 		const found = this.declaredOwner(e);
 		if (!found) return found;
@@ -247,7 +241,7 @@ export class CoreKotlin extends KitTypes implements KotlinCore {
 	 * (`Utils.android` of utils/index is utils/native-helper's): that module's object.
 	 */
 	private ownerOf(target: ts.Expression, name: ts.MemberName): { name: string; isStatic: boolean } | null {
-		let owner = this.mixinOwn(name) ? null : (this.owner(target) ?? this.inheritedOwner(target, name));
+		let owner = isMixinOwnMember(name, this.t.checker, (s) => this.t.mixinOf(s)) ? null : (this.owner(target) ?? this.inheritedOwner(target, name));
 		if (owner && !kitMember(this.index, owner.name, name.text)) owner = this.renamedOwner(owner, name.text) ?? owner;
 		if (!owner || !owner.isStatic || !owner.name.startsWith('Core_') || kitMember(this.index, owner.name, name.text)) return owner;
 		// A namespace core's declarations give where its platform file declares a class of statics (`AndroidHelper`): the class.
@@ -271,12 +265,6 @@ export class CoreKotlin extends KitTypes implements KotlinCore {
 		const cls = c.getNonNullableType(c.getTypeAtLocation(target)).getSymbol()?.valueDeclaration;
 		const root = cls && ts.isClassLike(cls) && !cls.getSourceFile().isDeclarationFile ? this.t.kitRootOf(cls) : null;
 		return root ? { name: root, isStatic: false } : null;
-	}
-
-	/** A member a mixin class declares: the extension it becomes has it by name. */
-	private mixinOwn(name: ts.MemberName): boolean {
-		const decl = this.t.checker.getSymbolAtLocation(name)?.valueDeclaration;
-		return !!decl && ts.isClassDeclaration(decl.parent) && !!this.t.mixinOf(this.t.checker.getSymbolAtLocation(decl.parent.name!));
 	}
 
 	/**

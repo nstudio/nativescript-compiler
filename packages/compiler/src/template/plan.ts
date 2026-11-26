@@ -151,6 +151,11 @@ export type Step =
 	| { kind: 'setSlot'; component: string; name: string; scope: Scope | null; viewMark: boolean; body: Block }
 	/** Content projection site (`<ng-content>`) rendering the parent's slot into `host`, or `fallback` if none was supplied. */
 	| { kind: 'slot'; name: string; host: Host; fallback: Block | null }
+	/** Dynamic component outlet (`[ngComponentOutlet]` / `*ngComponentOutlet`) mounted into `host`. */
+	| { kind: 'componentOutlet'; host: Host; call: string; component: Call; injector: Call | null; inputs: Call | null }
+	| { kind: 'templateOutlet'; host: Host; call: string; template: Call; context: Call | null }
+	| { kind: 'bindTemplate'; field: string; scope: Scope | null; viewMark: boolean; ctxParam: string; body: Block }
+	| { kind: 'structural'; region: string; call: string; tplName: string; scope: Scope | null; viewMark: boolean; ctxParam: string; body: Block; steps: Step[] }
 	| {
 			kind: 'choose';
 			host: Host;
@@ -499,8 +504,10 @@ export function renderPlan(c: ComponentIR, components: ReadonlyMap<string, Compo
 			} else {
 				say({ kind: 'createView', view, component: cv, member: members(node.name).create, update: u });
 				queried(node.queries, loops, view, cv);
+				const { end: endDir } = directed(node.directives, loops, view);
 				events();
 				attach(view, parent, region, 'created');
+				endDir();
 			}
 			props();
 			if (!info.fragment) fallThrough();
@@ -610,9 +617,59 @@ export function renderPlan(c: ComponentIR, components: ReadonlyMap<string, Compo
 				say({ kind: 'slot', name: node.name, host: { region: r }, fallback });
 				continue;
 			}
+			if (node.kind === 'componentOutlet') {
+				if (!parent) throw new Error(`${c.name}: a component outlet at the root of a non-fragment template`);
+				const r = `r${n++}`;
+				say({ kind: 'region', name: r, parent, detached: false });
+				(passes ? binding : say)({
+					kind: 'componentOutlet',
+					host: { region: r },
+					call: kit('componentOutlet'),
+					component: call(node.component, loops),
+					injector: node.injector ? call(node.injector, loops) : null,
+					inputs: node.inputs ? call(node.inputs, loops) : null,
+				});
+				continue;
+			}
+			if (node.kind === 'templateOutlet') {
+				if (!parent) throw new Error(`${c.name}: a template outlet at the root of a non-fragment template`);
+				const r = `r${n++}`;
+				say({ kind: 'region', name: r, parent, detached: false });
+				(passes ? binding : say)({
+					kind: 'templateOutlet',
+					host: { region: r },
+					call: kit('templateOutlet'),
+					template: call(node.template, loops),
+					context: node.context ? call(node.context, loops) : null,
+				});
+				continue;
+			}
+			if (node.kind === 'bindTemplate') {
+				const f = `f${n++}`;
+				const innerLoops = [...loops, { item: node.ctxParam, itemExpr: node.ctxParam }];
+				const b = template(block([], f, viewMark(node.body)), () => emit(node.body, innerLoops, f, null), false);
+				say({ kind: 'bindTemplate', field: node.field, scope: scoped('region'), viewMark: b.viewMark, ctxParam: node.ctxParam, body: b });
+				continue;
+			}
+			if (node.kind === 'structural') {
+				if (!parent) throw new Error(`${c.name}: a structural directive at the root of a non-fragment template`);
+				const r = `r${n++}`;
+				const tplName = `tpl${n++}`;
+				const f = `f${n++}`;
+				say({ kind: 'region', name: r, parent, detached: false });
+				const innerLoops = [...loops, { item: node.ctxParam, itemExpr: node.ctxParam }];
+				const tplBody = template(block([], f, viewMark(node.body)), () => emit(node.body, innerLoops, f, null), false);
+				const dirSteps: Step[] = [];
+				out.push(dirSteps);
+				const { end: endDir } = directed([node.directive], loops, parent);
+				out.pop();
+				endDir();
+				say({ kind: 'structural', region: r, call: kit('structuralScope'), tplName, scope: scoped('region'), viewMark: tplBody.viewMark, ctxParam: node.ctxParam, body: tplBody, steps: dirSteps });
+				continue;
+			}
 			if (!parent) throw new Error(`${c.name}: an if/for at the root of a template`);
 			// A component whose views join its parent (no single root) is a region of the body it is in.
-			const nested = (body: TNode[]) => withoutLocals(body).some((x) => x.kind === 'if' || x.kind === 'for' || x.kind === 'slot' || (x.kind === 'component' && !!components.get(x.name)?.fragment));
+			const nested = (body: TNode[]) => withoutLocals(body).some((x) => x.kind === 'if' || x.kind === 'for' || x.kind === 'slot' || x.kind === 'componentOutlet' || x.kind === 'templateOutlet' || x.kind === 'structural' || (x.kind === 'component' && !!components.get(x.name)?.fragment));
 			const nestedBody = node.kind === 'if' ? node.branches.some((b) => nested(b.body)) : nested(node.body);
 			// A framework that inserts top-down puts a branch's views in place as it builds them; a body with regions of its own attaches as a fragment.
 			const live = insertion !== 'built' && !nestedBody ? `r${n++}` : null;
@@ -745,6 +802,14 @@ export function renderPlan(c: ComponentIR, components: ReadonlyMap<string, Compo
 		members: members(c.name),
 		...(passes ? { passes: rootHooks() } : {}),
 	};
+	const emitTemplates = () => {
+		for (const t of c.templates ?? []) {
+			const f = `f${n++}`;
+			const innerLoops = [{ item: t.ctxParam, itemExpr: t.ctxParam }];
+			const b = template(block([], f, viewMark(t.body)), () => emit(t.body, innerLoops, f, null), false);
+			say({ kind: 'bindTemplate', field: t.field, scope: scoped('region'), viewMark: b.viewMark, ctxParam: t.ctxParam, body: b });
+		}
+	};
 	if (c.page) {
 		// A routed component's template is its page's content: the action bar and the view.
 		const content = ledger.pageContentLayout ? behaviour.pageContentAttrs : undefined;
@@ -754,6 +819,7 @@ export function renderPlan(c: ComponentIR, components: ReadonlyMap<string, Compo
 			template(
 				body,
 				() => {
+					emitTemplates();
 					emit(c.template.filter(isBar), [], 'page', null);
 					say({ kind: 'create', view: 'content', tag: 'FlexboxLayout' });
 					for (const [name, value] of Object.entries(content)) say({ kind: 'setAttr', view: 'content', name, value });
@@ -766,17 +832,17 @@ export function renderPlan(c: ComponentIR, components: ReadonlyMap<string, Compo
 				},
 				true,
 			);
-		} else template(body, () => emit(c.template, [], 'page', null), true);
+		} else template(body, () => { emitTemplates(); emit(c.template, [], 'page', null); }, true);
 		return { ...plan, root: { kind: 'page', host: c.host ?? null, body, content: content ? 'content' : null } };
 	}
-	if (fragment) return { ...plan, root: { kind: 'fragment', body: template(block(), () => emit(c.template, [], 'root', null), true) } };
+	if (fragment) return { ...plan, root: { kind: 'fragment', body: template(block(), () => { emitTemplates(); emit(c.template, [], 'root', null); }, true) } };
 	const roots: string[] = [];
-	const body = template(block(roots), () => emit(c.template, [], null, roots), true);
+	const body = template(block(roots), () => { emitTemplates(); emit(c.template, [], null, roots); }, true);
 	if (roots.length !== 1) throw new Error(`${c.name}: a template needs exactly one root element`);
 	return { ...plan, root: { kind: 'view', body, view: roots[0] } };
 }
 
 /** Whether a template holds an `if`, `for`, or projected slot content of its own (not inside an item template). */
 function hasRegion(nodes: TNode[]): boolean {
-	return withoutLocals(nodes).some((n) => n.kind === 'if' || n.kind === 'for' || (n.kind === 'component' && !!n.slots && Object.keys(n.slots).length > 0) || (n.kind === 'slot' && !!n.fallback && hasRegion(n.fallback)) || (n.kind === 'element' && !TEMPLATE_HOSTS.has(n.tag) && hasRegion(n.children)));
+	return withoutLocals(nodes).some((n) => n.kind === 'if' || n.kind === 'for' || n.kind === 'componentOutlet' || n.kind === 'templateOutlet' || n.kind === 'structural' || (n.kind === 'component' && !!n.slots && Object.keys(n.slots).length > 0) || (n.kind === 'slot' && !!n.fallback && hasRegion(n.fallback)) || (n.kind === 'element' && !TEMPLATE_HOSTS.has(n.tag) && hasRegion(n.children)));
 }

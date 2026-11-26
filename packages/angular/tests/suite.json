@@ -1,6 +1,6 @@
 {
   "adapter": "angular",
-  "hostRuntime": ["AngularChangeDetection", "AngularCore", "AngularHttp", "AngularRouterValues"],
+  "hostRuntime": ["AngularChangeDetection", "AngularCore", "AngularHttp", "AngularRouterValues", "AngularRx"],
   "nodePorts": {
     "forms-port": { "specifier": "@angular/forms", "file": "runtime/angular-forms.ts" }
   },

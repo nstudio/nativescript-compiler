@@ -35,8 +35,8 @@ export const resultsMethods = {
 	inNativeClass(this: Translator, fn: ts.Node): boolean {
 		const cls = fn.parent;
 		if (!cls || !ts.isClassLike(cls)) return false;
-		for (let t: ts.Type | undefined = this.checker.getTypeAtLocation(cls); t;) {
-			const base: ts.Type | undefined = this.checker.getBaseTypes(t as ts.InterfaceType)[0];
+		for (let t: ts.Type | undefined = this.checker.getTypeAtLocation(cls); t?.isClassOrInterface();) {
+			const base: ts.Type | undefined = this.checker.getBaseTypes(t)[0];
 			if (!base) return false;
 			if (base.getSymbol()?.declarations?.every((d) => d.getSourceFile().isDeclarationFile) && this.native.type(base)) return true;
 			t = base;

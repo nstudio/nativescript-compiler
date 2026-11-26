@@ -341,10 +341,12 @@ export class Router {
   }
 }
 
+export type RedirectFunction = (redirectData: { params: Params; queryParams: Params; [key: string]: any }) => string | UrlTree;
+export type RouterFeatures = any;
 export interface Route {
   path?: string;
   component?: any;
-  redirectTo?: string;
+  redirectTo?: string | RedirectFunction;
   pathMatch?: string;
   outlet?: string;
   data?: Record<string, any>;
@@ -431,6 +433,23 @@ export { NativeDialogService as NativeDialog };
 
 export const NativeDialogModule: any = undefined;
 export function registerElement(_name: string, _resolver: () => any, _meta?: any): void {}
+export function getViewClass(_elementName: string): any { return undefined; }
+export function getViewMeta(_nodeName: string): any { return undefined; }
+export function isKnownView(_elementName: string): boolean { return false; }
+export class ModalDialogParams {
+  context: any;
+  closeCallback: (...args: any[]) => any;
+  constructor(context: any, closeCallback: (...args: any[]) => any) {
+    this.context = context;
+    this.closeCallback = closeCallback;
+  }
+}
+export class ModalDialogService {
+  static readonly shared = new ModalDialogService();
+  showModal(_type: any, _options: any): Promise<any> {
+    return Promise.resolve(undefined);
+  }
+}
 /** A release build never restores routes for hot module replacement. */
 export function isAngularHmrRestoringRoute(): boolean {
   return false;
@@ -462,7 +481,9 @@ export function platformNativeScript(): { bootstrapModule(module: any, options?:
 }
 export const PageRouterOutlet: any = undefined;
 export const RouterOutlet: any = undefined;
-export const RouterLink: any = undefined;
+export class RouterLink {
+  [key: string]: any;
+}
 export const RouterLinkActive: any = undefined;
 export const NSRouterLink: any = undefined;
 export const NSRouterLinkActive: any = undefined;
@@ -493,6 +514,21 @@ export function toObservable<T>(source: Signal<T>, _options?: { injector?: any }
     subject.complete();
   });
   return subject.asObservable();
+}
+
+export function outputToObservable<T>(ref: { subscribe(fn: (value: T) => void): { unsubscribe(): void } }): Observable<T> {
+  return new Observable<T>((subscriber) => {
+    const sub = ref.subscribe((v) => subscriber.next(v));
+    return () => sub.unsubscribe();
+  });
+}
+
+export function outputFromObservable<T>(observable: Observable<T>, _opts?: any): { subscribe(fn: (value: T) => void): { unsubscribe(): void } } {
+  return {
+    subscribe(fn: (value: T) => void) {
+      return observable.subscribe(fn);
+    },
+  };
 }
 
 export function takeUntilDestroyed<T>(destroyRef?: DestroyRef): OperatorFunction<T, T> {

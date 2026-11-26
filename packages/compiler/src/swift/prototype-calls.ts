@@ -137,13 +137,26 @@ export const prototypeCallsMethods = {
 			return this.convert(this.marks.tryCode(`${RT.jsCallMethod}(${[this.coerce(thisArg, 'Any?'), JSON.stringify(source.name.text), ...rest.map((x) => this.coerce(x, 'Any?'))].join(', ')})`), 'Any?', this.typeOf(e));
 		}
 		// A method taken from its object (`const f = obj.method`) stays bound to it in Swift: called with that object, it is the same call.
-		if (source && ts.isPropertyAccessExpression(source) && !(thisArg && source.expression.getText() === thisArg.getText())) throw this.error(e, `${method} of a method taken from its object, with another receiver`);
+		const sourceExpr = source && ts.isPropertyAccessExpression(source) ? ts.skipOuterExpressions(source.expression) : undefined;
+		const dynamicReceiverCall = (): string => {
+			const call = this.marks.tryCode(`${RT.jsCallValue}(${this.coerce(target, 'Any?')}, this: ${thisArg ? this.coerce(thisArg, 'Any?') : 'nil'}, optional: ${!!e.questionDotToken || (ts.isPropertyAccessExpression(e.expression) && !!e.expression.questionDotToken)}, [${rest.map((x) => this.coerce(x, 'Any?')).join(', ')}])`);
+			const rt = this.typeOf(e);
+			return rt === 'Void' || isUntyped(spelledType(rt)) ? call : this.fromAnyCode(call, rt, true);
+		};
+		const isDescriptorMember = (d: ts.Declaration | undefined) => !!d && ts.isInterfaceDeclaration(d.parent) && d.parent.name.text === 'PropertyDescriptor';
+		if (source && ts.isPropertyAccessExpression(source)) {
+			const srcDecl = this.resolve(source.name)?.declarations?.[0];
+			const fromPrototype = !!sourceExpr && ts.isPropertyAccessExpression(sourceExpr) && sourceExpr.name.text === 'prototype';
+			if (method === 'call' && (isDescriptorMember(srcDecl) || fromPrototype)) return dynamicReceiverCall();
+			if (!(thisArg && sourceExpr!.getText() === thisArg.getText())) throw this.error(e, `${method} of a method taken from its object, with another receiver`);
+		}
 		const plain = (x: ts.Expression): boolean => x.kind === ts.SyntaxKind.ThisKeyword || ts.isIdentifier(x) || (ts.isPropertyAccessExpression(x) ? plain(x.expression) : this.pure(x));
 		let held: ts.Expression = target;
 		// `(ctx.fillText as (text: string, x: number, y: number) => void).call(ctx, …)`: the method itself, with its own signature.
 		while (ts.isParenthesizedExpression(held) || ts.isNonNullExpression(held) || ts.isAsExpression(held)) held = held.expression;
 		const sym = ts.isPropertyAccessExpression(held) || ts.isIdentifier(held) ? this.resolve(ts.isPropertyAccessExpression(held) ? held.name : held) : undefined;
 		const decl = sym?.declarations?.find((d): d is ts.MethodDeclaration | ts.FunctionDeclaration => (ts.isMethodDeclaration(d) || ts.isFunctionDeclaration(d)) && !!d.body) ?? sym?.valueDeclaration;
+		if (method === 'call' && isDescriptorMember(decl)) return dynamicReceiverCall();
 		const bound = !!decl && (ts.isMethodDeclaration(decl) || ts.isMethodSignature(decl) || (ts.isFunctionDeclaration(decl) && thisNodes(decl).length > 0));
 		const kitCall = this.kitPrototypeCall(held, e, method);
 		if (kitCall) return kitCall;

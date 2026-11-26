@@ -436,7 +436,7 @@ export const frontMethods = traceMethods('front', {
 	 * accessor): JavaScript gives it the receiver it is called on, so it takes `this` as its first parameter.
 	 */
 	implicitThis(this: Front, fn: ts.Node): boolean {
-		if (!this.ledger.implicitThisUnconstructed) return ts.isFunctionDeclaration(fn) && !!fn.body && !fn.parameters.some((q) => ts.isIdentifier(q.name) && q.name.text === 'this') && thisNodes(fn).length > 0 && !frontMethods.readsArguments.call(this, fn);
+		if (!this.ledger.implicitThisUnconstructed) return ts.isFunctionDeclaration(fn) && !!fn.body && !fn.parameters.some((q) => ts.isIdentifier(q.name) && q.name.text === 'this') && thisNodes(fn).length > 0;
 		if (!ts.isFunctionDeclaration(fn) || !fn.body || !fn.name || declaresThis(fn) || fn.parameters[0]?.name.getText() === 'this' || !thisNodes(fn).length) return false;
 		const name = fn.name.text;
 		let constructed = false;

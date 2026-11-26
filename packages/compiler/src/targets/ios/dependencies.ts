@@ -45,6 +45,17 @@ export function swiftPackages(app: string, stubbed: ReadonlySet<string> = new Se
 			if (typeof p.path === 'string') {
 				pkg.path = resolve(app, p.path);
 				if (plugin && !existsSync(pkg.path) && existsSync(resolve(dir, p.path))) pkg.path = resolve(dir, p.path);
+				// In a hoisted monorepo, `node_modules/<pkg>/...` may live in an ancestor workspace directory or relative to the plugin's own directory.
+				if (!existsSync(pkg.path) && p.path.startsWith('node_modules/')) {
+					for (let cur = dirname(app); ; cur = dirname(cur)) {
+						const probe = resolve(cur, p.path);
+						if (existsSync(probe)) {
+							pkg.path = probe;
+							break;
+						}
+						if (dirname(cur) === cur) break;
+					}
+				}
 				if (!existsSync(pkg.path)) throw new Error(`${relative(app, join(dir, 'nativescript.config.ts')) || 'nativescript.config.ts'}: the Swift package ${name} is not at ${pkg.path}`);
 				// The JavaScript engine's headers, which a plugin binding the engine ships: no engine runs a compiled app.
 				if (boundToEngine(pkg.path)) continue;

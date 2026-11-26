@@ -223,6 +223,7 @@ const SHARED = [
 	'jsSearch',
 	'jsSet',
 	'jsSetInterval',
+	'jsSetPrototypeOf',
 	'jsSetTimeout',
 	'jsShiftLeft',
 	'jsShiftRight',

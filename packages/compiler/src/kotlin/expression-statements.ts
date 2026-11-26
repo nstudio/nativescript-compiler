@@ -37,9 +37,11 @@ export const exprStatementsMethods = {
 		const replaced = this.patterns.prototypeMethod(e);
 		if (replaced) {
 			// A Page's native view made by a plugin (gesturehandler's PageLayout): the kit's factory hook, `this` the page.
-			if (replaced.target !== 'Page' || replaced.method !== 'createNativeView') throw this.error(e, `replacing ${replaced.target}.prototype.${replaced.method}`);
-			const ret = this.returnTypeOf(replaced.fn);
-			return `Page.nativeViewFactory = fun Page.(): ${ret} ${this.functionBody(replaced.fn, ret, this.indent)}`;
+			if (replaced.target === 'Page' && replaced.method === 'createNativeView') {
+				const ret = this.returnTypeOf(replaced.fn);
+				return `Page.nativeViewFactory = fun Page.(): ${ret} ${this.functionBody(replaced.fn, ret, this.indent)}`;
+			}
+			return `JSPrototypes.of(${replaced.target}::class.java)[${kotlinString(replaced.method)}] = ${this.coerce(replaced.fn, 'Any?')}`;
 		}
 		// Assigning a class alias its class (`PageLayout = com.….PageLayout`): its uses already name the class.
 		if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isIdentifier(e.left)) {

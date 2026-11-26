@@ -4,6 +4,7 @@ import { TYPED_ARRAYS } from '../semantics/globals.ts';
 import { ident, isFunctionType, optionalType, swiftString, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { literalKey, statementLevel, undefinedLiteral } from '../semantics/lang.ts';
+import { arrayFromLengthInit } from '../semantics/ast.ts';
 import { assignsArrayIntoObject, definesDuringConstruction, restrictsField, definedField } from '../semantics/shapes.ts';
 import { CONSOLE } from '../semantics/apis/console.ts';
 import { staticFunction } from '../semantics/apis/statics.ts';
@@ -97,16 +98,16 @@ export const staticCallsMethods = {
 				if (method === 'isArray') return `JSArray<Any?>.isArray(${this.restArgument(e, arg(0), 'Any?')})`;
 				if (method === 'from' && e.arguments.length === 1) return `${T()}.from(${this.iterable(arg(0))})`;
 				if (method === 'from' && (e.arguments.length === 2 || e.arguments.length === 3) && ts.isObjectLiteralExpression(arg(0))) {
-					const length = (arg(0) as ts.ObjectLiteralExpression).properties.find((p) => p.name?.getText() === 'length');
+					const lenInit = arrayFromLengthInit(arg(0) as ts.ObjectLiteralExpression);
 					const fn = arg(1);
-					if (!length || !ts.isPropertyAssignment(length) || !(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn))) throw this.error(e, 'Array.from of this object');
+					if (!lenInit || !(ts.isArrowFunction(fn) || ts.isFunctionExpression(fn))) throw this.error(e, 'Array.from of this object');
 					const el = T().replace(/^JSArray<(.*)>$/, '$1');
 					const params = fn.parameters.filter((p) => !(ts.isIdentifier(p.name) && p.name.text === 'this'));
 					const index = params[1] ? ident((params[1].name as ts.Identifier).text) : '_';
 					const value = params[0] && ts.isIdentifier(params[0].name) && params[0].name.text !== '_' ? `let ${ident(params[0].name.text)}: Any? = nil; ` : '';
 					return this.ignoringThisArg(e, arg(0), () => {
 						const body = ts.isBlock(fn.body) ? this.functionBody(fn, el, this.indent).slice(1, -1) : ` return ${this.marks.tryBefore(this.tryPrefix(fn.body), this.coerce(fn.body, el))} `;
-						return `${T()}.from(length: ${this.expr(length.initializer)}) { (${index}: Double) ${this.throwsInfo.fn(fn) ? 'throws ' : ''}-> ${el} in ${value}${body}}`;
+						return `${T()}.from(length: ${this.expr(lenInit)}) { (${index}: Double) ${this.throwsInfo.fn(fn) ? 'throws ' : ''}-> ${el} in ${value}${body}}`;
 					});
 				}
 				if (method === 'from' && (e.arguments.length === 2 || e.arguments.length === 3)) return this.ignoringThisArg(e, arg(0), () => `JSArray<${this.elementTypeOf(arg(0))}>.from(${this.iterable(arg(0))}).map(${this.expr(arg(1))})`);
@@ -137,6 +138,8 @@ export const staticCallsMethods = {
 			case 'String':
 				if (method === 'fromCharCode' && e.arguments.some(ts.isSpreadElement)) return `${RT.jsFromCharCode}(codes: ${this.packed(e.arguments, 'JSArray<Double>')}.storage)`;
 				if (method === 'fromCharCode') return `${RT.jsFromCharCode}(${a().join(', ')})`;
+				if (method === 'fromCodePoint' && e.arguments.some(ts.isSpreadElement)) return `${RT.jsFromCodePoint}(codes: ${this.packed(e.arguments, 'JSArray<Double>')}.storage)`;
+				if (method === 'fromCodePoint') return `${RT.jsFromCodePoint}(${e.arguments.map((x) => this.restArgument(e, x, 'Double')).join(', ')})`;
 				break;
 			case 'BigInt':
 				if (method === 'asIntN' || method === 'asUintN') return `JSBigInt.${method}(${this.toNumber(arg(0))}, ${this.expr(arg(1))})`;
