@@ -23,7 +23,7 @@ Official nStudio NativeScript CLI plugin (`ns compile`) and framework adapters t
 ## Quick Start (End Users)
 
 ```sh
-# 1. Install the NativeScript CLI extension (requires nativescript CLI >= 9.1.3 / PR #6215)
+# 1. Install the NativeScript CLI extension (npm install -g nativescript@next, nativescript CLI >= 9.2.0 / PR #6215)
 ns extension install @nstudio/nativescript-compiler@alpha
 
 # 2. (Framework apps only) Install the matching adapter in your project
