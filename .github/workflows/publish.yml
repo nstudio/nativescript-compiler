@@ -309,11 +309,11 @@ jobs:
 
           TARGETS=()
           if [[ "${{ inputs.scope }}" != "adapters-only" ]]; then
-            TARGETS+=("@nstudio/nativescript-compiler|packed/nstudio-nativescript-compiler-${VERSION}.tgz")
+            TARGETS+=("@nstudio/nativescript-compiler|./packed/nstudio-nativescript-compiler-${VERSION}.tgz")
           fi
           if [[ "${{ inputs.scope }}" != "compiler-only" ]]; then
             for fw in angular vue svelte react solid octane; do
-              TARGETS+=("@nstudio/nativescript-compiler-${fw}|packed/nstudio-nativescript-compiler-${fw}-${VERSION}.tgz")
+              TARGETS+=("@nstudio/nativescript-compiler-${fw}|./packed/nstudio-nativescript-compiler-${fw}-${VERSION}.tgz")
             done
           fi
 
