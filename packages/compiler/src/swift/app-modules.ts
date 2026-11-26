@@ -27,7 +27,7 @@ export function translateModules(translator: Translator, program: ts.Program, fi
 	for (const file of ordered) {
 		const sf = program.getSourceFile(file)!;
 		let name = basename(file)
-			.replace(/\.tsx?$/, '')
+			.replace(/\.(tsx?|m?js)$/, '')
 			.replace(/\W/g, '_');
 		while (used.has(name.toLowerCase())) name += '_';
 		used.add(name.toLowerCase());

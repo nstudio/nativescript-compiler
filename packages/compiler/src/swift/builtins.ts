@@ -681,6 +681,8 @@ export const builtinMethods = {
 				return `${t}.${adopt ? 'thenAdopt' : 'then'}(${[onFulfilled, hasRejected && this.rejectionHandler(g, f && !nullFulfilled && (ts.isArrowFunction(f) || ts.isFunctionExpression(f)) ? this.returnTypeOf(f) : nullFulfilled ? value : undefined)].filter(Boolean).join(', ')})`;
 			}
 			case 'catch': {
+				// `promise.catch()` with no handler (or null/undefined) passes the promise through unchanged.
+				if (!f || isNullish(f)) return t;
 				// An optional chain's promise (`a?.animate().catch(…)`) settles with the same values.
 				const result = this.typeOf(e)
 					.replace(/[?!]$/, '')

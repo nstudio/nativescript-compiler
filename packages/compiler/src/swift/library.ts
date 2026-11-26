@@ -5,7 +5,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { KIT_APPLE_SOURCES } from '../driver/paths.ts';
 import { adapterRuntimeFiles } from '../kit/manifest.ts';
 import { buildCache } from '../program/build-caches.ts';
-import { BUFFER_TYPES } from '../semantics/globals.ts';
+import { BUFFER_TYPES, SHARED_LIB_CONSTANTS } from '../semantics/globals.ts';
 import type { MathOp } from '../semantics/apis/math.ts';
 import { RT } from './syntax.ts';
 
@@ -85,12 +85,7 @@ export const LIB_CONSTANTS: Record<string, string> = {
 	'Number.POSITIVE_INFINITY': 'Double.infinity',
 	'Number.NEGATIVE_INFINITY': '-Double.infinity',
 	'Number.NaN': 'Double.nan',
-	'Symbol.iterator': 'JSSymbol.iterator',
-	'Symbol.asyncIterator': 'JSSymbol.asyncIterator',
-	'Symbol.toPrimitive': 'JSSymbol.toPrimitive',
-	'Symbol.toStringTag': 'JSSymbol.toStringTag',
-	'Symbol.hasInstance': 'JSSymbol.hasInstance',
-	'Object.prototype': 'JSPrototypes.objectPrototype',
+	...SHARED_LIB_CONSTANTS,
 	'Date.now': '({ () throws -> Double in JSDate.now() } as () throws -> Double)',
 };
 

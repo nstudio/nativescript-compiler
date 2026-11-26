@@ -135,10 +135,11 @@ export const conversionMethods = {
 				params.push(`var ${n}: ${f.type}${spelledOptional(heldOf(spelledType(f.type))) ? ' = null' : ''}`);
 				continue;
 			}
-			if (a.get) params.push(`private val __get_${f.name}: (${name}) -> ${f.type}`);
-			if (a.set) params.push(`private val __set_${f.name}: (${name}, ${a.value}) -> Unit`);
-			body.push(`    ${a.set ? 'var' : 'val'} ${n}: ${f.type}`, `        get() = ${a.get ? `__get_${f.name}(this)` : 'null'}`);
-			if (a.set) body.push(`        set(v) { __set_${f.name}(this, v${a.get ? '' : '!!'}) }`);
+			const ak = n.replace(/`/g, '');
+			if (a.get) params.push(`private val __get_${ak}: (${name}) -> ${f.type}`);
+			if (a.set) params.push(`private val __set_${ak}: (${name}, ${a.value}) -> Unit`);
+			body.push(`    ${a.set ? 'var' : 'val'} ${n}: ${f.type}`, `        get() = ${a.get ? `__get_${ak}(this)` : 'null'}`);
+			if (a.set) body.push(`        set(v) { __set_${ak}(this, v${a.get ? '' : '!!'}) }`);
 		}
 		const lines = [`class ${name}(${[...params, 'private val jsOrder: List<String>? = null'].join(', ')}) : JSDynamic, JSAccessorKeyed {`, ...body];
 		lines.push(`    override val jsKeys: List<String> get() = jsOrder ?: listOf(${fields.map((f) => kotlinString(f.name)).join(', ')})`);

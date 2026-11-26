@@ -16,7 +16,7 @@ import { located, type Refusal, type RefusalId, rethrowUnlessRefused } from '../
 import { ShapeMap, type ShapeFacts } from '../semantics/shapes.ts';
 import type { SwiftTranslatorView } from '../api/adapter-api.ts';
 import { Throws, isStatic } from '../semantics/throws.ts';
-import { assertedOperand, implementedInterfaces, uncheckedMatch } from '../semantics/lang.ts';
+import { assertedOperand, implementedInterfaces, substitutedExpr, uncheckedMatch } from '../semantics/lang.ts';
 import { unsetGroupTyping, type UnsetGroupTyping } from '../semantics/regexp.ts';
 import { strictFile, type TrustScope } from '../semantics/trust.ts';
 import { ValueStates } from '../semantics/states/value-states.ts';
@@ -698,7 +698,9 @@ export class Translator implements AsyncTranslator {
 			nullishSlotType: (d) => this.nullishSlotType(d),
 			before: (e, target) => {
 				const held = this.heldValues.get(e);
-				return held !== undefined ? this.convert(this.subst.get(e)!, held, target) : null;
+				if (held !== undefined) return this.convert(this.subst.get(e)!, held, target);
+				const sub = substitutedExpr(this.subst, e, true);
+				return sub ? this.convert(sub.code, this.typeOf(sub.bare), target) : null;
 			},
 			untypedRoot: (e, code) => (!this.library && (this.isObjectShape(this.typeOf(e).replace(/[?!]$/, '')) || functionValueCall(e, (n) => this.resolve(n)) || typedButHeldUntyped(this.checker, e, this.typeOf(e))) && untypedContext(this.checker, e) && !code.startsWith(`${RT.jsIdentity}(`) ? `${RT.jsIdentity}(${code})` : code),
 			after: (e, target) => {

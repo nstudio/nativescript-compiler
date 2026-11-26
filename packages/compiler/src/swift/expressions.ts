@@ -4,7 +4,7 @@ import { propertyKeyCode, templateSubstitution } from '../semantics/apis/operato
 import { awaitedCell, conditionCell, nullishField, type ConditionCell } from '../semantics/placement.ts';
 import { assignmentValue, functionParts, isCompoundAssignment, isFunctionType, isNullish, isOptional, metatype, negation, numberLiteral, optionalType, postfixOnly, sameClass, swiftString, RT, lenientReader } from './syntax.ts';
 import type { Translator } from './translator.ts';
-import { globalProxyUse, isStringRaw, readWrite, statementLevel, templateParts, isSelf } from '../semantics/lang.ts';
+import { globalProxyUse, isStringRaw, readWrite, statementLevel, substitutedExpr, templateParts, isSelf } from '../semantics/lang.ts';
 import { readKeyOf } from '../semantics/nullish.ts';
 import { notedField } from '../semantics/shapes.ts';
 import { isWriteTarget } from '../semantics/ast.ts';
@@ -40,6 +40,8 @@ export const expressionsMethods = {
 
 	/** A condition: Swift needs a Bool where JavaScript tests truthiness. */
 	cond(this: Translator, e: ts.Expression, cell?: ConditionCell): string {
+		const sub = substitutedExpr(this.subst, e);
+		if (sub) return this.typeOf(sub.bare) === 'Bool' ? sub.code : `${RT.jsTruthy}(${sub.code})`;
 		if (cell === undefined) cell = conditionCell(this.conditions, e);
 		const code = this.truthy(cell);
 		// A closure called in place (`{ () -> Bool in … }()`) would be read as an `if`'s or `while`'s body.
@@ -136,8 +138,12 @@ export const expressionsMethods = {
 			// Lenient code holds an object variable implicitly unwrapped, which `(x = null)` leaves nil; `(x = new C())` never.
 			const declared = this.declaredTypeOf(a.left) ?? this.typeOf(a.left);
 			const t = this.lenientRef(declared) !== declared ? optionalType(declared) : declared;
+			const exprType = this.typeOf(a);
+			const rt = isUntyped(spelledType(t)) && !isUntyped(spelledType(exprType)) && exprType !== 'Void' ? exprType : t;
 			const tp = this.tryPrefix(a);
-			return `({ () ${tp ? 'throws ' : ''}-> ${t} in ${tp}${this.binary(a)}; return ${this.expr(a.left)} }())`;
+			const retVal = rt !== t ? this.fromAnyCode(this.expr(a.left), rt, true) : this.expr(a.left);
+			const retThrows = tp || /\btry\b/.test(retVal);
+			return `({ () ${retThrows ? 'throws ' : ''}-> ${rt} in ${tp}${this.binary(a)}; return ${retVal} }())`;
 		}
 		if (ts.isParenthesizedExpression(e)) {
 			const inner = this.expr(e.expression);
@@ -146,7 +152,8 @@ export const expressionsMethods = {
 		// `(info.name = v)` as a value: the value assigned, evaluated once (Swift's assignment has none).
 		if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.EqualsToken && !statementLevel(e) && !ts.isArrayLiteralExpression(e.left) && !this.subst.has(e.right)) {
 			const stored = this.storedLiteralType(e);
-			const t = stored ?? (this.typeOf(e.right) === 'Void' ? 'Any?' : this.typeOf(e.right));
+			const outerTarget = isNullish(e.right) && ts.isBinaryExpression(e.parent) && e.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken && e.parent.right === e ? (this.declaredTypeOf(e.parent.left) ?? this.typeOf(e.parent.left)) : null;
+			const t = stored ?? (outerTarget && isOptional(outerTarget) ? outerTarget : this.typeOf(e.right) === 'Void' ? 'Any?' : this.typeOf(e.right));
 			const v = this.fresh('__assigned');
 			const tp = this.tryPrefix(e);
 			const value = `${this.marks.tryBefore(this.tryPrefix(e.right), this.stored(e.right, e.left, t))}`;
@@ -304,6 +311,14 @@ export const expressionsMethods = {
 		if (ts.isPostfixUnaryExpression(e)) {
 			const member = this.untypedMember(e.operand);
 			if (member) return `${RT.jsPostUpdate}(${member.object}, ${member.key}, ${e.operator === ts.SyntaxKind.PlusPlusToken ? '1' : '-1'})`;
+			if (ts.isIdentifier(e.operand)) {
+				const top = this.resolve(e.operand)?.valueDeclaration;
+				if (top && ts.isVariableDeclaration(top) && this.facts.tdzBindings().has(top) && !(top.parent.flags & ts.NodeFlags.Const)) {
+					const raw = (this.globalAlias(e.operand) ?? this.refName(e.operand)).replace(/`/g, '');
+					const step = e.operator === ts.SyntaxKind.PlusPlusToken ? '+' : '-';
+					return this.marks.ownTried(`{ () throws -> Double in let __old = try __tdz_get_${raw}(); try __tdz_set_${raw}(__old ${step} 1); return __old }()`);
+				}
+			}
 			const held = this.optionalNumberUpdate(e);
 			if (held) return held;
 			const fn = e.operator === ts.SyntaxKind.PlusPlusToken ? RT.jsPostIncrement : RT.jsPostDecrement;

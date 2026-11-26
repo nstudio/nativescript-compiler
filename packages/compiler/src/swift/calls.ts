@@ -5,7 +5,7 @@ import { isLibGlobal } from '../semantics/globals.ts';
 import { comparedToNullish, functionParts, hasTopLevelArrow, ident, isFunctionType, isOptional, isSymbolAsyncIterator, openSwiftChain, optionalType, swiftString, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { assertedReceiverCell, nullishField } from '../semantics/placement.ts';
-import { intlConstructor, isObjectToStringCall, mergedInterfaceMemberOf, statementLevel, isArguments, isSelf } from '../semantics/lang.ts';
+import { intlConstructor, isDomGlobalDeclaration, isObjectToStringCall, mergedInterfaceMemberOf, statementLevel, isArguments, isSelf } from '../semantics/lang.ts';
 import { isLibDeclaration, isSymbolIterator } from '../semantics/ast.ts';
 import { isStatic } from '../semantics/throws.ts';
 import { callableSignal, mayBeUnset } from '../semantics/signals.ts';
@@ -35,7 +35,7 @@ export const callsMethods = {
 		const decls = this.resolve(e)?.declarations ?? [];
 		// A plugin's name nothing declares here (`window` where its own build had the DOM's typings): the global object's, undefined.
 		if (!decls.length) return this.pluginFiles.has(e.getSourceFile().fileName) && !isArguments(e, this.checker) && !['undefined', 'NaN', 'Infinity'].includes(e.text);
-		return decls.every((d) => /[\\/]lib\.(dom|webworker)[\w.]*\.d\.ts$/.test(d.getSourceFile().fileName) && (ts.isVariableDeclaration(d) || ts.isFunctionDeclaration(d)));
+		return isDomGlobalDeclaration(e.text, decls);
 	},
 
 	isGlobalThis(this: Translator, e: ts.Node): boolean {

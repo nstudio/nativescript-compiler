@@ -598,12 +598,11 @@ export async function compile(o: CompileOptions, build: BuildContext = new Build
 	});
 }
 
-/** `const { A, B } = await import('./x')` as a destructuring of names imported from './x' (appended: imports hoist), positions kept where the text fits. */
-function staticImports(text: string, appSpecifier: (spec: string) => boolean): string {
+/** `const { A, B } = await import('./x')` or `await import('pkg/sub')` as a destructuring of names imported statically (appended: imports hoist), positions kept where the text fits. */
+function staticImports(text: string, _appSpecifier: (spec: string) => boolean): string {
 	let n = 0;
 	const added: string[] = [];
 	const out = text.replace(/\{([\w\s,]+)\}(\s*=\s*)await\s+import\((\s*['"]([^'"]+)['"]\s*)\)/g, (whole, names: string, eq: string, _arg: string, spec: string) => {
-		if (!appSpecifier(spec)) return whole;
 		const list = names
 			.split(',')
 			.map((x) => x.trim())
@@ -615,7 +614,6 @@ function staticImports(text: string, appSpecifier: (spec: string) => boolean): s
 	});
 	// `const tests = await import('./x')`, read only as `tests.member`: an object of the members read, each imported by name.
 	const whole = out.replace(/\b(const|let|var)(\s+)(\w+)(\s*=\s*)await\s+import\((\s*['"]([^'"]+)['"]\s*)\)/g, (match, kw: string, sp: string, name: string, eq: string, _arg: string, spec: string) => {
-		if (!appSpecifier(spec)) return match;
 		const reads = [...out.matchAll(new RegExp(`\\b${name}\\.(\\w+)`, 'g'))].map((m) => m[1]);
 		if (!reads.length || new RegExp(`\\b${name}\\b(?!\\s*[.=])`, 'g').exec(out.replace(match, ''))) return match;
 		const list = [...new Set(reads)];

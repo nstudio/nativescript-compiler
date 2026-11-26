@@ -9,7 +9,7 @@ import { isStatic } from './throws.ts';
 import type { Ledger } from './ledger.ts';
 
 /** The library globals' members that are constants (`Math.PI`, `Symbol.iterator`). */
-export const LIBRARY_CONSTANTS: ReadonlySet<string> = new Set(['Math.PI', 'Math.E', 'Math.LN2', 'Math.LN10', 'Math.LOG2E', 'Math.LOG10E', 'Math.SQRT2', 'Math.SQRT1_2', 'Number.MAX_SAFE_INTEGER', 'Number.MIN_SAFE_INTEGER', 'Number.EPSILON', 'Number.MAX_VALUE', 'Number.MIN_VALUE', 'Number.POSITIVE_INFINITY', 'Number.NEGATIVE_INFINITY', 'Number.NaN', 'Symbol.iterator', 'Symbol.asyncIterator', 'Symbol.toPrimitive', 'Symbol.toStringTag', 'Symbol.hasInstance', 'Object.prototype']);
+export const LIBRARY_CONSTANTS: ReadonlySet<string> = new Set(['Math.PI', 'Math.E', 'Math.LN2', 'Math.LN10', 'Math.LOG2E', 'Math.LOG10E', 'Math.SQRT2', 'Math.SQRT1_2', 'Number.MAX_SAFE_INTEGER', 'Number.MIN_SAFE_INTEGER', 'Number.EPSILON', 'Number.MAX_VALUE', 'Number.MIN_VALUE', 'Number.POSITIVE_INFINITY', 'Number.NEGATIVE_INFINITY', 'Number.NaN', 'Symbol.iterator', 'Symbol.asyncIterator', 'Symbol.toPrimitive', 'Symbol.toStringTag', 'Symbol.hasInstance', 'Symbol.dispose', 'Symbol.asyncDispose', 'Object.prototype']);
 
 export interface ConstantHost {
 	readonly checker: ts.TypeChecker;

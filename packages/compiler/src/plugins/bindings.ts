@@ -75,21 +75,19 @@ export function appBindings(app: string, platform: 'ios' | 'android', stubbed: R
 	return out;
 }
 
-/** Whether a plugin's iOS code binds the JavaScript engine (V8's headers, or code written against them). */
-function bindsEngine(pluginDir: string): boolean {
-	const ios = join(pluginDir, 'platforms', 'ios');
-	return (
-		existsSync(ios) &&
-		readdirSync(ios)
-			.sort()
-			.some((f) => statSync(join(ios, f)).isDirectory() && boundToEngine(join(ios, f)))
-	);
+/** Whether a plugin's native code for `platform` binds the JavaScript engine (V8/Node-API headers or sources written against them). */
+function bindsEngine(pluginDir: string, platform: 'ios' | 'android'): boolean {
+	const dir = join(pluginDir, 'platforms', platform);
+	if (!existsSync(dir)) return false;
+	return readdirSync(dir)
+		.sort()
+		.some((f) => statSync(join(dir, f)).isDirectory() && boundToEngine(join(dir, f)));
 }
 
 /** The app's plugins whose native code binds the JavaScript engine and that no binding stands in for. */
 export function unboundEnginePlugins(app: string, platform: 'ios' | 'android', bindings: readonly Binding[], stubbed: ReadonlySet<string> = new Set()): string[] {
 	return productionPlugins(app, platform, stubbed)
-		.filter((p) => !bindings.some((b) => b.package === p.name && b[platform]) && bindsEngine(p.dir))
+		.filter((p) => !bindings.some((b) => b.package === p.name && b[platform]) && bindsEngine(p.dir, platform))
 		.map((p) => `${p.name} installs objects into the JavaScript engine from its native code, and a compiled app has no engine: a compiled build needs a binding of ${p.name} for ${platform}, a package whose package.json declares nativescript.compilerBinding for it, installed for the app`);
 }
 

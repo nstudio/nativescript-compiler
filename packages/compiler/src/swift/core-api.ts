@@ -105,6 +105,8 @@ export class CoreAPI extends KitTypes {
 			const module = this.moduleOwner(e);
 			if (module) return { name: module, isStatic: true };
 			const sym = this.t.resolve(e);
+			// `globalThis`: the program's global object, which core's global-types.d.ts augments with a namespace declaration.
+			if (sym?.name === 'globalThis' && sym.flags & ts.SymbolFlags.ValueModule) return null;
 			const decl = sym?.declarations?.[0];
 			if (sym && isCoreDeclaration(decl) && sym.flags & (ts.SymbolFlags.Class | ts.SymbolFlags.ValueModule | ts.SymbolFlags.Variable) && !this.t.compiledCounterpart(sym)) {
 				if (sym.flags & ts.SymbolFlags.ValueModule) return { name: e.text, isStatic: true };

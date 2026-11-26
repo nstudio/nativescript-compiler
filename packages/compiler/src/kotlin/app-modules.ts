@@ -52,7 +52,7 @@ function moduleFileNames(files: string[], named?: (file: string) => string): Map
 		files.map((f) => [
 			f,
 			(named ? named(f) : f)
-				.replace(/\.tsx?$/, '')
+				.replace(/\.(tsx?|m?js)$/, '')
 				.split(/[\\/]/)
 				.filter((p) => p && p !== '.' && p !== '..' && !p.startsWith('@')),
 		]),

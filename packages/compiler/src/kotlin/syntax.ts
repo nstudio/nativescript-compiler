@@ -5,6 +5,7 @@ import ts from 'typescript';
 import type { AsyncSyntax } from '../semantics/async.ts';
 import { KOTLIN_RUNTIME } from '../semantics/runtime.ts';
 import { ERROR_CLASS, isKit, isUntyped, spelledType, type NativeKind, type NativeType, type Spelling } from '../semantics/types.ts';
+import { dollarIdent } from '../semantics/lang.ts';
 
 const KEYWORDS = new Set(['as', 'break', 'class', 'continue', 'do', 'else', 'false', 'for', 'fun', 'if', 'in', 'interface', 'is', 'null', 'object', 'package', 'return', 'super', 'this', 'throw', 'true', 'try', 'typealias', 'typeof', 'val', 'var', 'when', 'while']);
 
@@ -145,8 +146,10 @@ export const OBJECT_TO_STRING = '__toString';
 
 export function ident(name: string): string {
 	if (name === '_') return '__underscore';
-	// Kotlin reserves names of underscores alone.
+	// Kotlin reserves names of underscores alone, and `$`-only names (`$`, `$$`) would collapse to them.
 	if (/^_+$/.test(name)) return `__underscore${name.length}`;
+	const dollar = dollarIdent(name);
+	if (dollar) return dollar;
 	// A name of punctuation alone (`'+'`, `'!'` keys) spells its characters, or every such name would be `_`.
 	if (!/[\w$#]/.test(name)) return '__k' + [...name].map((c) => c.codePointAt(0)!.toString(16)).join('_');
 	const n = name

@@ -65,6 +65,10 @@ public func jsSame(_ a: Any?, _ b: Any?) -> Bool { jsSameValue(a, b) }
 @discardableResult public func jsPostDecrement(_ x: inout Double) -> Double { let old = x; x -= 1; return old }
 @discardableResult public func jsPreIncrement(_ x: inout Double) -> Double { x += 1; return x }
 @discardableResult public func jsPreDecrement(_ x: inout Double) -> Double { x -= 1; return x }
+@discardableResult public func jsPostIncrement(_ x: inout Any?) -> Double { let old = jsToNumber(x); x = old + 1; return old }
+@discardableResult public func jsPostDecrement(_ x: inout Any?) -> Double { let old = jsToNumber(x); x = old - 1; return old }
+@discardableResult public func jsPreIncrement(_ x: inout Any?) -> Double { let next = jsToNumber(x) + 1; x = next; return next }
+@discardableResult public func jsPreDecrement(_ x: inout Any?) -> Double { let next = jsToNumber(x) - 1; x = next; return next }
 
 /// `a ?? b` for an untyped value: null and undefined both give way.
 public func jsNullishCoalesce(_ a: Any?, _ b: @autoclosure () throws -> Any?) rethrows -> Any? {

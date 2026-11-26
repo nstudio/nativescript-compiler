@@ -8,6 +8,7 @@ import { isStatic } from '../semantics/throws.ts';
 import { programBase, uncheckedIteratorResult } from '../semantics/classes.ts';
 import { namesMembersBySymbol } from '../semantics/read-sites.ts';
 import { fixedKey } from '../semantics/translator-methods.ts';
+import { isDisposerMember } from '../semantics/lang.ts';
 import type { SymbolMethod } from './translator-types.ts';
 type NativeSetter = { property: string; method: string; param: string; throws: boolean };
 
@@ -123,6 +124,10 @@ export const classMethodsMethods = {
 				if (this.library || k.kitRoot || k.expando || this.inheritsSymbolPlain(k)) symbolMethods.push(entry);
 				else if (!m.typeParameters?.length && !m.parameters.some((p) => p.dotDotDotToken) && !this.readsArguments(m)) k.symbolMethods.push(entry);
 			}
+			return;
+		}
+		if (keyed && isDisposerMember(keyed.member)) {
+			lines.push('    ' + this.memberFunc(m, keyed.member));
 			return;
 		}
 		if (keyed) throw this.error(m.name, 'a method named by this symbol');

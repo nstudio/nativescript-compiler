@@ -15,7 +15,7 @@ import type { ModuleThread } from '../semantics/threading.ts';
 import { recognizePatterns, type Patterns } from '../program/patterns.ts';
 import type { Refusal, RefusalId } from '../semantics/refusals.ts';
 import { ShapeMap, type ShapeFacts } from '../semantics/shapes.ts';
-import { assertedOperand, implementedInterfaces, uncheckedMatch } from '../semantics/lang.ts';
+import { assertedOperand, implementedInterfaces, substitutedExpr, uncheckedMatch } from '../semantics/lang.ts';
 import { unsetGroupTyping, type UnsetGroupTyping } from '../semantics/regexp.ts';
 import { strictFile, type TrustScope } from '../semantics/trust.ts';
 import { ValueStates } from '../semantics/states/value-states.ts';
@@ -562,6 +562,8 @@ export class Translator implements AsyncTranslator {
 				return t.states;
 			},
 			before: (e, target) => {
+				const sub = substitutedExpr(this.subst, e, true);
+				if (sub) return this.convert(sub.code, this.typeOf(sub.bare), target);
 				const inner = /^Signal<(.*)>\??$/.exec(target)?.[1];
 				return inner && this.isComputedProperty(e) ? `Signal.computing { ${this.coerce(e, inner)} }` : null;
 			},

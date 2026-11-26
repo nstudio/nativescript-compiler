@@ -3,6 +3,7 @@ import { heldLoss } from '../semantics/losses.ts';
 import ts from 'typescript';
 import type { NulledRead } from '../semantics/states/value-states.ts';
 import { anyArguments, branch, cast, functionTypeParts, ident, isDeclarationName, isFunctionType, isNullable, isThisParameter, kotlinString, lambda, negated, nullishType, optionalType, returnsNull, slotFunctionParts, wrapsWhole, RT, adaptOf } from './syntax.ts';
+import { substitutedExpr } from '../semantics/lang.ts';
 import type { Translator } from './translator.ts';
 import { conditionCell } from '../semantics/placement.ts';
 import type { ConditionCell } from '../semantics/placement.ts';
@@ -180,6 +181,10 @@ export const placementMethods = {
 		if (isUntyped(spelledType(target)) && !isWriteTarget(e)) {
 			const adapted = this.untypedFunctionValue(e);
 			if (adapted) return adapted;
+		}
+		if (ts.isConditionalExpression(bare)) {
+			const fixed = this.staticTruth(bare.condition);
+			if (fixed !== undefined) return this.coerce(fixed ? bare.whenTrue : bare.whenFalse, target);
 		}
 		// A conditional's branches each placed in a shape slot: a class's object is read into the shape by itself, and
 		// neither branch is held untyped on the way. Library mode: a literal of another shape is made as the slot's class,
@@ -664,6 +669,8 @@ export const placementMethods = {
 	},
 
 	condition(this: Translator, e: ts.Expression, c?: ConditionCell): string {
+		const sub = substitutedExpr(this.subst, e);
+		if (sub) return this.typeOf(sub.bare) === 'Boolean' ? sub.code : `${RT.jsTruthy}(${sub.code})`;
 		if (c === undefined) c = conditionCell(this.conditions, e);
 		switch (c.step) {
 			case 'fixed':

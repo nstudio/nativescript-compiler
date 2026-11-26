@@ -1,4 +1,6 @@
 import ts from 'typescript';
+import { isSymbolAsyncIterator, isSymbolIterator } from './ast.ts';
+import { SHIM_GLOBAL_OBJECT_VARS } from './globals.ts';
 export { evolvingArrayRead, evolvingArrayType, evolvingElementContext, spreadOperand, openSpreadType, intersectionAliasMembers, iterationThrows, iteratedType, iteratesCheckedResult } from './lang/arrays.ts';
 export { unsafeReceiver, uncheckedMatch, leadingNeverRead, redeclaredBeside, thisArgCall, withoutThisArg, thisArgBound, takesReceiver, ignoresThisArg } from './lang/this-args.ts';
 export type { ThisArgUse } from './lang/this-args.ts';
@@ -156,7 +158,7 @@ export function jsKeyOrder(keys: string[]): string[] {
 }
 
 /** The kit's names for members a well-known symbol names (`[Symbol.iterator]`, `__@iterator@12` in the checker). */
-export const WELL_KNOWN_MEMBERS: Record<string, string> = { iterator: 'jsSymbolIterator', asyncIterator: 'jsSymbolAsyncIterator', toPrimitive: 'jsToPrimitive', toStringTag: 'jsToStringTag' };
+export const WELL_KNOWN_MEMBERS: Record<string, string> = { iterator: 'jsSymbolIterator', asyncIterator: 'jsSymbolAsyncIterator', toPrimitive: 'jsToPrimitive', toStringTag: 'jsToStringTag', dispose: 'jsSymbolDispose', asyncDispose: 'jsSymbolAsyncDispose' };
 
 /** A property's name as the checker spells a well-known symbol's (`__@iterator@12`): the kit's member name. */
 export function wellKnownMember(name: string): string | null {
@@ -191,4 +193,43 @@ export function boxedReplacement(name: string, call: ts.CallExpression, checker:
 	const t = checker.getTypeAtLocation(pattern);
 	const regexp = (x: ts.Type) => x.getSymbol()?.name === 'RegExp' || isRegExpProtocol(x);
 	return !(t.isUnion() ? t.types.every(regexp) : regexp(t)) || assertedPattern(pattern, checker);
+}
+
+/** Whether `decls` describe a browser/web global value whose runtime value lives on `jsGlobalThis`. */
+export function isDomGlobalDeclaration(name: string, decls: readonly ts.Declaration[]): boolean {
+	if (SHIM_GLOBAL_OBJECT_VARS.has(name) && decls.some((d) => d.getSourceFile().fileName === '/__shims__/globals.d.ts') && decls.every((d) => d.getSourceFile().isDeclarationFile)) return true;
+	return decls.every((d) => /[\\/](?:lib\.(dom|webworker)[\w.]*\.d\.ts|@types[\\/]node[\\/]web-globals[\\/].*\.d\.ts)$/.test(d.getSourceFile().fileName) && (ts.isVariableDeclaration(d) || ts.isFunctionDeclaration(d)));
+}
+
+/** Whether a well-known symbol member is a disposer (`[Symbol.dispose]` / `[Symbol.asyncDispose]`). */
+export function isDisposerMember(member: string): boolean {
+	return member === 'jsSymbolDispose' || member === 'jsSymbolAsyncDispose';
+}
+
+/** A protocol/interface method's native name, mapping `[Symbol.iterator]` and `[Symbol.asyncIterator]` to their runtime names. */
+export function protocolMethodName(name: ts.PropertyName, checker: ts.TypeChecker, escape: (raw: string) => string): string {
+	if (ts.isComputedPropertyName(name)) {
+		if (isSymbolIterator(name.expression, checker)) return 'jsSymbolIterator';
+		if (isSymbolAsyncIterator(name.expression, checker)) return 'jsSymbolAsyncIterator';
+	}
+	return escape(name.getText());
+}
+
+/** Dollar-only JS identifiers (`$`, `$$`) mapped clear of Swift/Kotlin wildcard `_`. */
+export function dollarIdent(name: string): string | null {
+	return /^\$+$/.test(name) ? (name.length === 1 ? '__dollar' : `__dollar${name.length}`) : null;
+}
+
+/** Strips backtick keyword escaping so a name can be embedded in synthetic identifiers (`__get_<k>`, `__tdz_get_<k>`). */
+export function unquoted(name: string): string {
+	return name.replace(/`/g, '');
+}
+
+/** An expression already hoisted into `subst` (e.g. an `await`-bearing branch); null if not substituted. */
+export function substitutedExpr(subst: ReadonlyMap<ts.Node, string>, e: ts.Expression, branchingOnly = false): { bare: ts.Expression; code: string } | null {
+	const bare = ts.skipOuterExpressions(e, ts.OuterExpressionKinds.Parentheses);
+	const code = subst.get(bare);
+	if (code === undefined) return null;
+	if (branchingOnly && !ts.isConditionalExpression(bare) && !ts.isBinaryExpression(bare)) return null;
+	return { bare, code };
 }

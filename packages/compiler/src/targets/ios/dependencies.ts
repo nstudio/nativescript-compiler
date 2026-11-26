@@ -466,11 +466,11 @@ function swiftClassName(symbol: string): string | null {
 	return part() !== null ? part() : null;
 }
 
-/** A directory of the V8 engine's headers, or of sources written against them. */
+/** A directory of the V8 / Node-API engine's headers, or of native sources written against them. */
 export function boundToEngine(dir: string): boolean {
 	if (basename(dir) === 'NativeScriptV8' || existsSync(join(dir, 'include', 'v8.h'))) return true;
-	const sources = (readdirSync(dir, { recursive: true }).sort() as string[]).filter((f) => /\.(cpp|cc|mm)$/.test(f));
-	return sources.length > 0 && sources.some((f) => /\bv8::|#include\s*[<"]v8\.h[>"]/.test(readFileSync(join(dir, f), 'utf8')));
+	const sources = (readdirSync(dir, { recursive: true }).sort() as string[]).filter((f) => /\.(cpp|cc|mm|h|hpp)$/.test(f));
+	return sources.length > 0 && sources.some((f) => /\bv8::|#include\s*[<"](?:v8|node_api|js_native_api)\.h[>"]/.test(readFileSync(join(dir, f), 'utf8')));
 }
 
 function filesUnder(dir: string): string[] {

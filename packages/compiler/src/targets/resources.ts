@@ -92,6 +92,26 @@ export function appResourcesDir(app: string): string {
 	return resolve(app, (readConfig(app).appResourcesPath as string | undefined) ?? 'App_Resources');
 }
 
+export function localFilePackages(dir: string): Map<string, string> {
+	const out = new Map<string, string>();
+	const pkgPath = join(dir, 'package.json');
+	if (!existsSync(pkgPath)) return out;
+	let pkg: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+	try {
+		pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+	} catch {
+		return out;
+	}
+	for (const group of [pkg.devDependencies, pkg.dependencies]) {
+		for (const [name, spec] of Object.entries(group ?? {})) {
+			if (typeof spec !== 'string' || !spec.startsWith('file:')) continue;
+			const target = resolve(dir, spec.slice(5));
+			if (existsSync(join(target, 'package.json'))) out.set(name, target);
+		}
+	}
+	return out;
+}
+
 /**
  * The CLI's `getAllProductionPlugins`: the packages the app's production
  * dependencies bring in, transitively, that declare `nativescript` in their
@@ -105,10 +125,10 @@ export function productionPlugins(app: string, platform: 'ios' | 'android', stub
 	const queue: { from: string; deps: Record<string, string> }[] = [{ from: app, deps: JSON.parse(readFileSync(join(app, 'package.json'), 'utf8')).dependencies ?? {} }];
 	while (queue.length) {
 		const { from, deps } = queue.shift()!;
-		for (const name of Object.keys(deps)) {
+		for (const [name, spec] of Object.entries(deps)) {
 			// A plugin the app replaces or the build stubs brings none of its native pieces, nor its own dependencies'.
 			if (stubbed.has(name) || replaced[name]) continue;
-			const dir = locatePackage(from, name);
+			const dir = locatePackage(from, name, spec);
 			if (!dir || seen.has(dir)) continue;
 			seen.add(dir);
 			const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
@@ -119,7 +139,11 @@ export function productionPlugins(app: string, platform: 'ios' | 'android', stub
 	return out;
 }
 
-function locatePackage(from: string, name: string): string | null {
+function locatePackage(from: string, name: string, spec?: string): string | null {
+	if (typeof spec === 'string' && spec.startsWith('file:')) {
+		const target = resolve(from, spec.slice(5));
+		if (existsSync(join(target, 'package.json'))) return target;
+	}
 	for (let dir = from; ; dir = dirname(dir)) {
 		const candidate = join(dir, 'node_modules', name);
 		if (existsSync(join(candidate, 'package.json'))) return candidate;

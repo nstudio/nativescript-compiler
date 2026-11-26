@@ -5,7 +5,7 @@ import { LIB_CONSTANTS } from './library.ts';
 import { ident, isFunctionType, isNullable, isThisParameter, kotlinString, moduleProperty, optionalType, reportedInit, RT } from './syntax.ts';
 import type { ShapeField, Translator } from './translator.ts';
 import { boundNames, hasModifier, isLibDeclaration, implementationOf, moduleBlockVars, redeclaredVar } from '../semantics/ast.ts';
-import { intersectionAliasMembers, isRegExpProtocol, prototypeAlias } from '../semantics/lang.ts';
+import { intersectionAliasMembers, isRegExpProtocol, protocolMethodName, prototypeAlias } from '../semantics/lang.ts';
 import { refusedStatements } from '../semantics/nullish.ts';
 import { isStatic } from '../semantics/throws.ts';
 import { programSymbolKey } from '../program/stable-names.ts';
@@ -651,7 +651,8 @@ export const modulesMethods = {
 		});
 		const methods = members.filter(ts.isMethodSignature).map((m) => {
 			const params = m.parameters.map((p, k) => ({ name: ts.isIdentifier(p.name) ? ident(p.name.text) : `p${k}`, type: this.requirementParamType(p), undefinedDefault: !!p.questionToken && this.states.nullishHeld(p) }));
-			return { name: ident(m.name.getText()), key: m.name.getText(), params, ret: this.returnTypeOf(m) };
+			const methodName = protocolMethodName(m.name, this.checker, ident);
+			return { name: methodName, key: m.name.getText(), params, ret: this.returnTypeOf(m) };
 		});
 		// The interface's own declaration gives an omitted `JSNullish` argument its undefined; overrides inherit it.
 		const signature = (m: (typeof methods)[0], declared = false) => `fun ${m.name}(${m.params.map((p) => `${p.name}: ${p.type}${declared && p.undefinedDefault ? ' = JSNullish.Undefined' : ''}`).join(', ')})${m.ret === 'Unit' ? '' : `: ${m.ret}`}`;

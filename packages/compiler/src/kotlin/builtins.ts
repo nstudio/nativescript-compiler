@@ -500,6 +500,8 @@ export const builtinMethods = {
 				return `${t}.${adopt ? 'thenAdopt' : 'then'}<${result}>(${[onF, g && this.rejectionHandler(g, ret)].filter(Boolean).join(', ')})`;
 			}
 			case 'catch': {
+				// `promise.catch()` with no handler (or null/undefined) passes the promise through unchanged.
+				if (!f || f.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(f) && f.text === 'undefined')) return t;
 				const adopt = returnsPromise(this, f);
 				if (result === value) return `${t}.${adopt ? 'catchAdopt' : 'catch'}(${this.rejectionHandler(f, adopt ? this.adoptedResult([f], result) : result)})`;
 				if (isUntyped(spelledType(result)) && !adopt) return `${t}.catchAny(${this.rejectionHandler(f, 'Any?')})`;

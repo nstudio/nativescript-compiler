@@ -239,7 +239,7 @@ export const fieldsMethods = {
 		const forms = this.forms();
 		if (forms.fixedSlot(d)) return false;
 		const form = forms.formOfSlot(d);
-		if (this.backend.library || this.backend.lenient) {
+		if (this.backend.library || !this.backend.trust.strictFile(d.getSourceFile())) {
 			return literal && forms.groupOf(d).some((m) => ts.isPropertyAssignment(m) && ((x) => (ts.isIdentifier(x) && x.text === 'undefined') || ts.isVoidExpression(x))(ts.skipOuterExpressions(m.initializer)));
 		}
 		if (!this.appCode(d) || this.nullish().held.has(d) || this.nullishHeld(d)) return false;

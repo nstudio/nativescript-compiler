@@ -11,7 +11,7 @@ import type { StructuralFacts } from '../semantics/conversion.ts';
 import { boundNames, hasModifier, isLibDeclaration, moduleBlockVars, redeclaredVar } from '../semantics/ast.ts';
 import { enteredGuard, onMainThread } from './native/bridging.ts';
 import { givenBy, onlyNullOrPresent, refusedStatements } from '../semantics/nullish.ts';
-import { intersectionAliasMembers, prototypeAlias } from '../semantics/lang.ts';
+import { intersectionAliasMembers, protocolMethodName, prototypeAlias } from '../semantics/lang.ts';
 import { isStatic } from '../semantics/throws.ts';
 import { isCoreDeclaration } from '../program/core-facts.ts';
 import { programSymbolKey } from '../program/stable-names.ts';
@@ -630,7 +630,8 @@ export const modulesMethods = {
 			this.currentFile = m.getSourceFile().fileName;
 			try {
 				const ret = this.returnTypeOf(m);
-				return { name: ident(m.name.getText()), key: m.name.getText(), params, ret: ret === 'Void' ? ret : this.lenientRef(ret) };
+				const methodName = protocolMethodName(m.name, this.checker, ident);
+				return { name: methodName, key: m.name.getText(), params, ret: ret === 'Void' ? ret : this.lenientRef(ret) };
 			} finally {
 				this.currentFile = saved;
 			}

@@ -9,7 +9,7 @@ import { ambientAddedMemberOf, ambientBase, augmentedPropertyRead, evolvingArray
 import { nullishSignalType } from '../semantics/signals.ts';
 import { hasModifier, isLibDeclaration, isSymbolIterator, isWriteTarget, implementationOf, declaresThis } from '../semantics/ast.ts';
 import { isCoreDeclaration } from '../program/core-facts.ts';
-import { coreTypeKind, eventDataTypeLiteral, isKit, isUntyped, libraryNativeType, libraryType, parseNativeType, spelledType } from '../semantics/types.ts';
+import { coreTypeKind, eventDataTypeLiteral, isJsDocConstructorFunction, isKit, isLibObjectType, isUntyped, libraryNativeType, libraryType, mappedOrErasedType, nonNullableInner, nonOptionalSpelling, parseNativeType, spelledType } from '../semantics/types.ts';
 import { keepsIdentity } from '../semantics/conversion.ts';
 import { extendedClass, isEventData } from '../semantics/classes.ts';
 import { otherPlatformTypings } from '../semantics/platform-globals.ts';
@@ -178,11 +178,9 @@ export const typesMethods = {
 		if (coreType) return coreType === 'void-promise' ? 'JSPromise<Void>' : 'Any?';
 		const library = name === undefined ? null : libraryType(name, sym, this.ledger);
 		if (library) return spell(libraryNativeType(library, (k) => parseNativeType(arg(k)), SPELLING, this.ledger));
-		if (name === 'NonNullable' && t.aliasSymbol && args().length === 1) {
-			const inner = this.type(args()[0], where);
-			return isUntyped(spelledType(inner)) ? inner : inner.replace(/\?$/, '');
-		}
-		if (name === 'Object' && sym?.declarations?.every((d) => /[\\/]typescript[\\/]lib[\\/]/.test(d.getSourceFile().fileName))) return 'Any?';
+		const nn = nonNullableInner(t, name, args());
+		if (nn) return nonOptionalSpelling(this.type(nn, where));
+		if (isLibObjectType(name, sym)) return 'Any?';
 		// `typeof UIGestureRecognizer`: the native class as a value.
 		if (sym && sym.flags & ts.SymbolFlags.Class && t.getConstructSignatures().length && !t.getCallSignatures().length && sym.declarations?.every((d) => d.getSourceFile().isDeclarationFile)) {
 			const instance = this.native.type(c.getDeclaredTypeOfSymbol(sym));
@@ -199,13 +197,8 @@ export const typesMethods = {
 		if (index && !t.getProperties().length) return `JSRecord<${heldType(this.type(index, where))}>`;
 		// A literal with computed keys beside named ones (`{ [k]: 1, a: 2 }`): its keys are known only when it runs.
 		if (index && sym?.getName() === '__object') return 'Any?';
-		// A mapped type (`Partial<…>`, `{ [k in Side]: number }`) is read by computed keys: an untyped object.
-		if (name && ['Partial', 'Required', 'Readonly', 'Pick', 'Omit'].includes(name) && t.aliasSymbol) {
-			const of = t.aliasTypeArguments?.[0];
-			if (of && of.getSymbol()?.flags! & ts.SymbolFlags.Class) return this.type(of, where);
-			return 'Any?';
-		}
-		if ((t as ts.ObjectType).objectFlags & ts.ObjectFlags.Mapped) return 'Any?';
+		const erasedType = mappedOrErasedType(t, name, sym);
+		if (erasedType) return erasedType === 'any' ? 'Any?' : this.type(erasedType, where);
 		// Library mode: a constructor held as a value (`PropertyBag: { new (): Bag }`) is constructed untyped.
 		if (this.library && t.getConstructSignatures().length && !t.getCallSignatures().length && !((sym?.flags ?? 0) & ts.SymbolFlags.Class)) return 'Any?';
 		const calls = t.getCallSignatures();
@@ -274,6 +267,7 @@ export const typesMethods = {
 		if (!this.ledger.appClassValuesUntyped && sym && sym.flags & ts.SymbolFlags.Class && t.getConstructSignatures().length && classDecl && !classDecl.getSourceFile().isDeclarationFile) return `${this.topNames().get(classDecl) ?? (classDecl as ts.ClassDeclaration).name?.text ?? name}.Type`;
 		const tokenBase = tokenClassBase(t, c, this.pluginFiles);
 		if (tokenBase) return this.type(c.getTypeAtLocation(tokenBase), where);
+		if (isJsDocConstructorFunction(sym)) return 'Any?';
 		const renamed = sym && this.topNames().get(sym.valueDeclaration ?? sym.declarations?.[0]!);
 		if (renamed) {
 			if (sym.declarations?.some((d) => !d.getSourceFile().isDeclarationFile)) this.used.add(renamed);
@@ -330,11 +324,11 @@ export const typesMethods = {
 		return augmentedPropertyRead(e, this.checker) ? `${RT.jsGet}(${this.expr(e.expression)}, ${swiftString(e.name.text)})` : this.core.augmentedRead(e);
 	},
 
-	/** `type ItemView = View & ViewItemIndex`: what the program's interface adds to a class's objects, kept as script adds it. */
+	/** `type ItemView = View & ViewItemIndex` or `RxDatabaseBase & { heroes: RxCollection }`: what an intersection adds to a class's objects, kept as script adds it. */
 	isAddedMember(this: Translator, e: ts.PropertyAccessExpression): boolean {
 		const decl = this.checker.getSymbolAtLocation(e.name)?.declarations?.[0];
 		const target = this.checker.getNonNullableType(this.checker.getTypeAtLocation(e.expression));
-		if (!decl || !ts.isPropertySignature(decl) || !ts.isInterfaceDeclaration(decl.parent) || decl.getSourceFile().isDeclarationFile || !target.isIntersection()) return false;
+		if (!decl || !ts.isPropertySignature(decl) || !(ts.isInterfaceDeclaration(decl.parent) || ts.isTypeLiteralNode(decl.parent)) || decl.getSourceFile().isDeclarationFile || !target.isIntersection()) return false;
 		return target.types.some((t) => !!(t.getSymbol()?.flags! & ts.SymbolFlags.Class) && !t.getProperty(e.name.text));
 	},
 	/**

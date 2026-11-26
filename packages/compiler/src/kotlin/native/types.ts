@@ -306,24 +306,26 @@ export const nativeTypesMethods = {
 	},
 
 	/** The one class among several every other one extends (`AppCompatActivity | Activity` is an Activity). */
-	commonClass(this: AndroidNativeAPI, parts: ts.Type[]): string | null {
-		const names = parts.map((p) => this.classesOf(p)?.[0]);
+	commonClass(this: AndroidNativeAPI, parts: ts.Type[], seen = new Set<ts.Type>()): string | null {
+		const names = parts.map((p) => this.classesOf(p, seen)?.[0]);
 		if (!names.length || names.some((n) => !n)) return null;
 		return names.find((c) => names.every((o) => this.classpath.distance(o!, c!) !== null)) ?? null;
 	},
 
 	/** The Java classes a TypeScript type's values are: a native class, or an app class's native base and the Java interfaces it implements. */
-	classesOf(this: AndroidNativeAPI, type: ts.Type): string[] | null {
+	classesOf(this: AndroidNativeAPI, type: ts.Type, seen = new Set<ts.Type>()): string[] | null {
 		const c = this.t.checker;
 		type = c.getNonNullableType(type);
+		if (seen.has(type)) return null;
+		seen.add(type);
 		if (type.isUnion()) {
-			const common = this.commonClass(type.types);
+			const common = this.commonClass(type.types, seen);
 			return common ? [common] : null;
 		}
 		// A Java class with members the app's type adds (`NumberPicker & { valueChangedListener: … }`): the class's.
 		if (type.isIntersection()) {
 			// `T & {}` (a type parameter made non-null) names no class: the other parts only.
-			const classes = type.types.filter((x) => !(x.flags & ts.TypeFlags.TypeParameter)).flatMap((x) => this.classesOf(x) ?? []);
+			const classes = type.types.filter((x) => !(x.flags & ts.TypeFlags.TypeParameter)).flatMap((x) => this.classesOf(x, seen) ?? []);
 			return classes.length ? classes : null;
 		}
 		const sym = type.getSymbol();
@@ -341,7 +343,7 @@ export const nativeTypesMethods = {
 		// An interface of the program's adding fields to Java classes (`interface OwnerSeekBar extends android.widget.SeekBar`): those classes.
 		const own = sym.declarations?.find((d): d is ts.InterfaceDeclaration => ts.isInterfaceDeclaration(d) && !d.getSourceFile().isDeclarationFile);
 		if (own && sym.flags & ts.SymbolFlags.Interface && !(sym.flags & ts.SymbolFlags.Class)) {
-			const bases = (own.heritageClauses ?? []).flatMap((h) => h.types.map((x) => this.classesOf(c.getTypeAtLocation(x)) ?? []).flat());
+			const bases = (own.heritageClauses ?? []).flatMap((h) => h.types.map((x) => this.classesOf(c.getTypeAtLocation(x), seen) ?? []).flat());
 			if (bases.length) return bases;
 		}
 		return null;

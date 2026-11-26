@@ -8,7 +8,7 @@ import { ambientBase, evolvingArrayRead, evolvingArrayType, isAmbientClass, isRe
 import { nullishSignalType } from '../semantics/signals.ts';
 import { hasModifier, isLibDeclaration, thisNodes, isWriteTarget, implementationOf, takesOwnThis } from '../semantics/ast.ts';
 import { isCoreDeclaration } from '../program/core-facts.ts';
-import { coreTypeKind, eventDataTypeLiteral, isKit, isNamed, isUntyped, libraryNativeType, libraryType, parseNativeType, spelledType } from '../semantics/types.ts';
+import { coreTypeKind, eventDataTypeLiteral, isJsDocConstructorFunction, isKit, isLibObjectType, isNamed, isUntyped, libraryNativeType, libraryType, mappedOrErasedType, nonNullableInner, nonOptionalSpelling, parseNativeType, spelledType } from '../semantics/types.ts';
 import { isStatic } from '../semantics/throws.ts';
 import { literalOverArray, membersOverTypeParameter, untypedResultBinding, untypedResultField } from '../semantics/shapes.ts';
 import { extendedClass, isEventData } from '../semantics/classes.ts';
@@ -180,11 +180,9 @@ export const typesMethods = {
 		if (coreType) return coreType === 'void-promise' ? 'JSPromise<Unit>' : 'Any?';
 		const library = name === undefined ? null : libraryType(name, sym, this.ledger);
 		if (library) return spell(libraryNativeType(library, (k) => parseNativeType(arg(k)), SPELLING, this.ledger));
-		if (name === 'NonNullable' && t.aliasSymbol && args().length === 1) {
-			const inner = this.type(args()[0], where);
-			return isUntyped(spelledType(inner)) ? inner : inner.replace(/\?$/, '');
-		}
-		if (name === 'Object' && sym?.declarations?.every((d) => /[\\/]typescript[\\/]lib[\\/]/.test(d.getSourceFile().fileName))) return 'Any?';
+		const nonNull = nonNullableInner(t, name, args());
+		if (nonNull) return nonOptionalSpelling(this.type(nonNull, where));
+		if (isLibObjectType(name, sym)) return 'Any?';
 		const native = this.native?.type(t);
 		if (native) return native;
 		// Library mode: a native type no class file has, untyped.
@@ -195,13 +193,8 @@ export const typesMethods = {
 		if (index && !t.getProperties().length) return `JSRecord<${this.type(index, where)}>`;
 		// A literal with computed keys beside named ones (`{ [k]: 1, a: 2 }`): its keys are known only when it runs.
 		if (index && sym?.getName() === '__object') return 'Any?';
-		// A mapped type (`Partial<…>`, `{ [k in Side]: number }`) is read by computed keys: an untyped object.
-		if (name && ['Partial', 'Required', 'Readonly', 'Pick', 'Omit'].includes(name) && t.aliasSymbol) {
-			const of = t.aliasTypeArguments?.[0];
-			if (of && of.getSymbol()?.flags! & ts.SymbolFlags.Class) return this.type(of, where);
-			return 'Any?';
-		}
-		if ((t as ts.ObjectType).objectFlags & ts.ObjectFlags.Mapped) return 'Any?';
+		const erased = mappedOrErasedType(t, name, sym);
+		if (erased) return erased === 'any' ? 'Any?' : this.type(erased, where);
 		// `{}` (what `unknown` narrows to once tested truthy) is any value but null and undefined, a native object included.
 		const appClass = !!sym && !!(sym.flags & ts.SymbolFlags.Class) && !!sym.valueDeclaration && ts.isClassLike(sym.valueDeclaration) && !sym.valueDeclaration.getSourceFile().isDeclarationFile;
 		if (!t.getProperties().length && !t.getCallSignatures().length && !t.getConstructSignatures().length && !index && !appClass) return 'Any?';
@@ -276,6 +269,7 @@ export const typesMethods = {
 		if (name && Object.hasOwn(KIT_NAMES_ANDROID, name) && isCoreDeclaration(sym?.declarations?.[0])) return KIT_NAMES_ANDROID[name];
 		const tokenBase = tokenClassBase(t, c, this.pluginFiles);
 		if (tokenBase) return this.type(c.getTypeAtLocation(tokenBase), where);
+		if (isJsDocConstructorFunction(sym)) return 'Any?';
 		const renamed = sym?.valueDeclaration && this.topNames().get(sym.valueDeclaration);
 		if (renamed) return `${renamed}${this.declaredTypeArguments(t, sym!.valueDeclaration!, where)}`;
 		const renamedType = sym && !sym.valueDeclaration && sym.declarations?.[0] ? this.topNames().get(sym.declarations[0]) : undefined;

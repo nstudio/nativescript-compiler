@@ -27,6 +27,9 @@ import { appImports, reachedFrom, tsconfigIncluded } from '../../src/program/app
 import { foldPlatform } from '../../src/program/platform.ts';
 import { runtimeFile } from '../../src/plugins/resolve.ts';
 import { PluginSources, verify, verifyBundle } from '../../src/plugins/source.ts';
+import { unboundEnginePlugins } from '../../src/plugins/bindings.ts';
+import { localFilePackages } from '../../src/targets/resources.ts';
+import { reachability } from '../../src/program/reach.ts';
 import { manifest, ownTypings, pluginNative, scopedImports, usedImports, xcodegenLines, type ModuleTypes } from '../../src/plugins/native-ios.ts';
 import { translateModules } from '../../src/swift/app-modules.ts';
 import { programClassName } from '../../src/semantics/top-names.ts';
@@ -44,7 +47,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { kitProjectDir } from '../../src/targets/android/build.ts';
 import { KIT_ANDROID } from '../../src/driver/paths.ts';
 import { check, finish, KotlinTranslator as Translator, nativeBuild, SwiftTranslator } from './checks.ts';
-import { buildKotlinRuntime, buildSwiftRuntime, kotlinc, kotlinStdlib, modulesDir, swiftc, translateKotlin, translateSwift } from '../native-build.ts';
+import { buildKotlinRuntime, buildSwiftRuntime, kotlinc, kotlinStdlib, modulesDir, swiftc, swiftMain, translateKotlin, translateSwift } from '../native-build.ts';
 import ts from 'typescript';
 import { BuildContext } from '../../src/program/build-context.ts';
 
@@ -91,7 +94,7 @@ for (const platform of ['ios', 'android'] as const) (() => {
       args: ['export const f = function () { return arguments.length; };', 'function-arguments'],
       member: ["export const s = 'a'.normalize();", 'library-member'],
       proxy: ['export const p = new Proxy({}, {});', 'proxy'],
-      value: ['export const L = console.log;', 'function-value'],
+      value: ['export const L = JSON.stringify;', 'function-value'],
       klass: ['export const o = new (class { x = 1; })();', 'class-expression'],
       object: ['export const c = Object(5);', 'object-call'],
       base: ['class N extends null {} export const n = N;', 'unsupported-base'],
@@ -1388,6 +1391,199 @@ fun main() {
   }
   check(got === expected, "a value whose read throws is its type's neutral value (undefined, zero, false, empty), and a type with none lets the error through (Kotlin)");
   if (got !== expected) console.log(`    got: ${got.slice(0, 500)}`);
+})();
+
+// ---- Monorepo workspaces, pure-JS ESM packages, bundler verification, and ecosystem hardening ----
+(() => {
+  const dir = mkdtempSync(join(tmpdir(), 'ns-release-checks-hardening-'));
+  try {
+    // 1. Monorepo `file:` dependencies, tsconfig `extends` + out-of-app `paths`, and ESM exports preference.
+    const workspace = join(dir, 'mono');
+    const appDir = join(workspace, 'apps', 'demo');
+    const sharedLib = join(workspace, 'libs', 'shared');
+    const localPkg = join(workspace, 'dist', 'packages', 'my-plugin');
+    mkdirSync(join(appDir, 'src'), { recursive: true });
+    mkdirSync(sharedLib, { recursive: true });
+    mkdirSync(join(localPkg, 'esm'), { recursive: true });
+    mkdirSync(join(localPkg, 'cjs'), { recursive: true });
+    writeFileSync(join(workspace, 'tsconfig.base.json'), JSON.stringify({
+      compilerOptions: { baseUrl: '.', paths: { '@demo/shared': ['libs/shared/index.ts'] } },
+    }));
+    writeFileSync(join(appDir, 'tsconfig.json'), JSON.stringify({ extends: '../../tsconfig.base.json' }));
+    writeFileSync(join(sharedLib, 'index.ts'), 'export const SHARED = 42;\n');
+    writeFileSync(join(localPkg, 'package.json'), JSON.stringify({
+      name: '@acme/my-plugin',
+      version: '1.0.0',
+      main: 'cjs/index.js',
+      module: 'esm/index.js',
+      exports: { '.': { node: './cjs/index.js', browser: './esm/index.js', default: './cjs/index.js' } },
+    }));
+    writeFileSync(join(localPkg, 'cjs', 'index.js'), 'module.exports = { answer: 1 };\n');
+    writeFileSync(join(localPkg, 'esm', 'index.js'), 'export const answer = 1;\n');
+    writeFileSync(join(appDir, 'package.json'), JSON.stringify({
+      name: 'demo',
+      dependencies: { '@acme/my-plugin': 'file:../../dist/packages/my-plugin' },
+    }));
+    const locals = localFilePackages(appDir);
+    check(locals.get('@acme/my-plugin') === resolve(localPkg), 'localFilePackages resolves monorepo file: dependencies');
+    const alias = pathAliases(appDir);
+    check(alias('@demo/shared') === join(sharedLib, 'index.ts'), 'pathAliases follows tsconfig extends and resolves out-of-app workspace aliases');
+    const rt = runtimeFile('@acme/my-plugin', join(appDir, 'node_modules'), 'ios', locals);
+    check(rt?.file === join(resolve(localPkg), 'esm', 'index.js'), `runtimeFile prefers exports.browser ESM over node/CJS for file: packages (${rt?.file})`);
+
+    // 2. Platform-aware engine-binding detection (Android V8/N-API vs clean iOS).
+    const nativeApp = join(dir, 'native-app');
+    const sqlitePkg = join(nativeApp, 'node_modules', 'demo-sqlite');
+    mkdirSync(join(sqlitePkg, 'platforms', 'android', 'cpp'), { recursive: true });
+    mkdirSync(join(sqlitePkg, 'platforms', 'ios', 'src'), { recursive: true });
+    writeFileSync(join(nativeApp, 'package.json'), JSON.stringify({ name: 'native-app', dependencies: { 'demo-sqlite': '1.0.0' } }));
+    writeFileSync(join(sqlitePkg, 'package.json'), JSON.stringify({ name: 'demo-sqlite', version: '1.0.0', main: 'index.js', nativescript: {} }));
+    writeFileSync(join(sqlitePkg, 'platforms', 'android', 'cpp', 'sqlite.cpp'), '#include <v8.h>\nvoid init(v8::Isolate* isolate) {}\n');
+    writeFileSync(join(sqlitePkg, 'platforms', 'ios', 'src', 'Sqlite.m'), '#import <Foundation/Foundation.h>\n');
+    check(unboundEnginePlugins(nativeApp, 'ios', []).length === 0, 'unboundEnginePlugins allows a plugin whose iOS native code does not bind a JS engine');
+    check(unboundEnginePlugins(nativeApp, 'android', []).some((m) => m.includes('demo-sqlite')), 'unboundEnginePlugins flags a plugin whose Android C++ uses v8::Isolate');
+
+    // 3. Pure-JS ESM package compilation, CommonJS refusal, shipped .ts without .js.map, and esbuild/Rollup verification.
+    const jsApp = join(dir, 'js-app');
+    const esmPkg = join(jsApp, 'node_modules', 'pure-esm');
+    const cjsPkg = join(jsApp, 'node_modules', 'pure-cjs');
+    const tsNoMapPkg = join(jsApp, 'node_modules', 'ts-nomap');
+    mkdirSync(esmPkg, { recursive: true });
+    mkdirSync(cjsPkg, { recursive: true });
+    mkdirSync(join(tsNoMapPkg, 'lib'), { recursive: true });
+    mkdirSync(join(tsNoMapPkg, 'build', 'lib'), { recursive: true });
+    writeFileSync(join(jsApp, 'package.json'), JSON.stringify({ name: 'js-app', dependencies: { 'pure-esm': '1.0.0', 'pure-cjs': '1.0.0', 'ts-nomap': '1.0.0' } }));
+    writeFileSync(join(esmPkg, 'package.json'), JSON.stringify({ name: 'pure-esm', version: '1.0.0', type: 'module', main: 'index.js' }));
+    writeFileSync(join(esmPkg, 'index.js'), 'export function twice(x) { return x * 2; }\n');
+    writeFileSync(join(cjsPkg, 'package.json'), JSON.stringify({ name: 'pure-cjs', version: '1.0.0', main: 'index.js' }));
+    writeFileSync(join(cjsPkg, 'index.js'), 'module.exports = function () { return 1; };\n');
+    writeFileSync(join(tsNoMapPkg, 'package.json'), JSON.stringify({ name: 'ts-nomap', version: '1.0.0', main: 'build/lib/index.js' }));
+    writeFileSync(join(tsNoMapPkg, 'lib', 'index.ts'), 'export function triple(x: number): number { return x * 3; }\n');
+    writeFileSync(join(tsNoMapPkg, 'build', 'lib', 'index.js'), 'export function triple(x) { return x * 3; }\n');
+    const sources = new PluginSources({ app: jsApp, platform: 'ios', cache: join(dir, 'cache') });
+    sources.get(esmPkg);
+    check(sources.sourceOf(join(esmPkg, 'index.js')) === join(resolve(esmPkg), 'index.js'), 'PluginSources maps a pure-JS ESM package directly without cloning');
+    let cjsError = '';
+    try {
+      sources.get(cjsPkg);
+      sources.sourceOf(join(cjsPkg, 'index.js'));
+    } catch (e) { cjsError = (e as Error).message; }
+    check(/CommonJS/.test(cjsError) && /pluginReplacements/.test(cjsError), `PluginSources refuses a CommonJS-only JS package with replacement guidance (${cjsError.slice(0, 120)})`);
+    sources.get(tsNoMapPkg);
+    check(sources.sourceOf(join(tsNoMapPkg, 'build', 'lib', 'index.js')) === join(resolve(tsNoMapPkg), 'lib', 'index.ts'), 'PluginSources maps build/lib/*.js to shipped lib/*.ts without .js.map');
+
+    const vDir = join(dir, 'verify-esbuild');
+    mkdirSync(vDir, { recursive: true });
+    const vSrc = join(vDir, 'a.ts');
+    const vJsOk = join(vDir, 'a.js');
+    const vJsBad = join(vDir, 'b.js');
+    writeFileSync(vSrc, 'export function f(a: number) { const x = 255; const y = 1000000; const o = { a: a }; return a === undefined ? void 0 : x + y + o.a; }\n');
+    writeFileSync(vJsOk, 'export function f(a) { const x = 0xff; const y = 1e6; const o = { a }; return a === void 0 ? undefined : x + y + o.a; }\n');
+    writeFileSync(vJsBad, 'export function f(a) { const x = 0xff; const y = 1e6; const o = { a }; return a === void 0 ? undefined : x * y + o.a; }\n');
+    let esbuildOk = true;
+    let esbuildErr = '';
+    try { verify('esbuild-ok', vJsOk, vSrc); } catch (e) { esbuildOk = false; esbuildErr = (e as Error).message; }
+    check(esbuildOk, `verify accepts esbuild/Rollup normalizations (hex, scientific, void 0, shorthand)${esbuildOk ? '' : `: ${esbuildErr.slice(0, 200)}`}`);
+    let tamperedCaught = false;
+    try { verify('esbuild-bad', vJsBad, vSrc); } catch { tamperedCaught = true; }
+    check(tamperedCaught, 'verify still rejects genuine behavioral differences');
+
+    // 4. ShorthandPropertyAssignment closed-world reachability (`export const ops = { helper }`).
+    const reachDir = join(dir, 'reach');
+    mkdirSync(reachDir, { recursive: true });
+    const reachPlug = join(reachDir, 'plug.ts');
+    const reachApp = join(reachDir, 'app.ts');
+    writeFileSync(reachPlug, 'function helper(x: number): number { return x + 1; }\nfunction unused(): number { return 0; }\nexport const ops = { helper };\n');
+    writeFileSync(reachApp, "import { ops } from './plug';\nexport const out = ops.helper(5);\n");
+    const rp = createProgram([reachApp], new Map(), 'ios', modulesDir);
+    const reach = reachability(rp.program, rp.resolved, [reachApp], new Set([reachPlug]), 'ios');
+    const plugSf = rp.program.getSourceFile(reachPlug)!;
+    const helperDecl = plugSf.statements.find((s) => ts.isFunctionDeclaration(s) && s.name?.text === 'helper')!;
+    const unusedDecl = plugSf.statements.find((s) => ts.isFunctionDeclaration(s) && s.name?.text === 'unused')!;
+    check(reach.keeps(helperDecl) && !reach.keeps(unusedDecl), 'reachability retains functions referenced via ShorthandPropertyAssignment and drops unreferenced ones');
+
+    // 5. Feature-detection dead-branch folding (preflight + Swift & Kotlin) and runtime/translator hardening.
+    const featureFile = join(dir, 'hardening.ts');
+    writeFileSync(featureFile, `
+export const registry = typeof FinalizationRegistry === 'function' ? new FinalizationRegistry((_: string) => {}) : undefined;
+export const b64 = typeof (Uint8Array as any).fromBase64 === 'function' ? (Uint8Array as any).fromBase64('AA==') : new Uint8Array(0);
+class Base {
+  id = 1;
+  [Symbol.dispose]() { return 'disposed'; }
+  async [Symbol.asyncDispose]() { return 'async-disposed'; }
+}
+type WithExtra = Base & { extra: number };
+export function readExtra(x: WithExtra): number { return x.extra; }
+type OnlyStr = Extract<string | number, string>;
+export function erased(a: OnlyStr, r: RegExpConstructor): any { return [a, r]; }
+interface Rec { next?: Rec; items: Rec[]; }
+export function touchRec(r: Rec): number { return r.items.length; }
+export const fns = {
+  err: console.error,
+  fromCode: String.fromCharCode,
+  fromBytes: Uint8Array.from,
+  isArr: Array.isArray,
+  isInt: Number.isInteger,
+};
+export const objWithDollar = { get $() { return 7; } };
+export function testAll(): string {
+  const $ = 3;
+  const $$ = 4;
+  const p = Promise.resolve(1).catch();
+  const d = new DOMException('oops', 'AbortError');
+  const fromCode = String.fromCharCode;
+  const isArr = Array.isArray;
+  const isInt = Number.isInteger;
+  return [$ + $$, objWithDollar.$, d.name, d.message, fromCode(65, 66), isArr([1]), isInt(4), isInt(4.5), registry === undefined, b64.length, p !== undefined].join('|');
+}
+console.log(testAll());
+`);
+    for (const platform of ['ios', 'android'] as const) {
+      const fp = createProgram([featureFile], new Map(), platform, modulesDir);
+      const findings = preflight(fp.checker, fp.files);
+      check(findings.length === 0, `preflight folds guarded FinalizationRegistry feature probe without errors (${platform}${findings.length ? `: ${findings[0].what}` : ''})`);
+    }
+    // Verify recursive type does not stack-overflow AndroidNativeAPI.classesOf.
+    {
+      const ap = createProgram([featureFile], new Map(), 'android', modulesDir);
+      const at = new Translator(ap.checker, new Map(), ap.files, { appModule: 'org.example.app', native: (t) => new AndroidNativeAPI(t, androidClassPath(null, { archives: [], dependencies: [] })) });
+      let ok = true;
+      try { translateKotlinModules(at, ap.program, [featureFile]); } catch (e) { ok = false; console.log('    android err:', String(e).slice(0, 300)); }
+      check(ok, 'recursive TS types + feature probes + lib function values + Symbol.dispose translate cleanly with AndroidNativeAPI');
+    }
+    // Compile & run on BOTH Swift and Kotlin runtimes and check exact output matches Node!
+    const expectedLine = '7|7|AbortError|oops|AB|true|true|false|true|0|true';
+    {
+      let swGot = '';
+      try {
+        buildSwiftRuntime(nativeBuild, '-Onone');
+        const out = join(dir, 'swift-hardening');
+        const modules = translateSwift([featureFile], out);
+        writeFileSync(join(out, 'main.swift'), swiftMain(modules));
+        const errors = swiftc(readdirSync(out).map((f) => join(out, f)), join(dir, 'main-hardening'), nativeBuild, '-Onone');
+        swGot = errors ? errors[0] : spawnSync(join(dir, 'main-hardening'), { encoding: 'utf8' }).stdout.trim();
+      } catch (e) {
+        swGot = (e as Error).message.split('\n')[0];
+      }
+      check(swGot === expectedLine, `hardening suite (feature probes, lib fn values, $, DOMException, catch(), Symbol.dispose) compiles & runs identically (Swift${swGot === expectedLine ? '' : `: ${swGot.slice(0, 300)}`})`);
+    }
+    {
+      let ktGot = '';
+      try {
+        const out = join(dir, 'kotlin-hardening');
+        const modules = translateKotlin([featureFile], out, 'org.example.hardening');
+        writeFileSync(join(out, '__Main.kt'), `package org.example.hardening\nimport org.nativescript.kit.*\nfun main() {\n${modules.map((m) => (m.init ? `    ${m.init}()\n` : '')).join('')}}\n`);
+        const runtime = buildKotlinRuntime(nativeBuild);
+        const errors = kotlinc(readdirSync(out).filter((f) => f.endsWith('.kt')).map((f) => join(out, f)), join(dir, 'classes-hardening'), [runtime]);
+        ktGot = errors ? errors[0] : spawnSync('java', ['-cp', [join(dir, 'classes-hardening'), runtime, kotlinStdlib()].join(':'), 'org.example.hardening.__MainKt'], { encoding: 'utf8' }).stdout.trim();
+      } catch (e) {
+        ktGot = (e as Error).message.split('\n')[0];
+      }
+      check(ktGot === expectedLine, `hardening suite (feature probes, lib fn values, $, DOMException, catch(), Symbol.dispose) compiles & runs identically (Kotlin${ktGot === expectedLine ? '' : `: ${ktGot.slice(0, 300)}`})`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 })();
 
 finish();

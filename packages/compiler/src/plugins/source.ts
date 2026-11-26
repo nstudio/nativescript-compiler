@@ -1,7 +1,7 @@
 import ts from 'typescript';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, readFileSync, lstatSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, lstatSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import type { ActiveAdapter } from '../adapters/active.ts';
 import { releaseOptions } from '../targets/resources.ts';
@@ -108,7 +108,9 @@ export class PluginSources {
 		for (const src of sources) {
 			for (const source of this.packages.values()) {
 				// A bundle is checked when any source it bundles is compiled: its entry may be an index that only re-exports.
-				const js = [...source.files].find(([j, s]) => s === src || !!source.bundles.get(j)?.files.includes(src))?.[0];
+				// When a dual-format package ships both CJS and ESM outputs for the same source, prefer the ESM output.
+				const matches = [...source.files].filter(([j, s]) => s === src || !!source.bundles.get(j)?.files.includes(src)).map(([j]) => j);
+				const js = matches.find((j) => isEsModule(j)) ?? matches[0];
 				if (js && !source.checked.has(js) && source.verified === 'shipped') verifyMap(source.name, js, this.options.app, source.version);
 				if (!js) continue;
 				if (!source.checked.has(js) && source.verified === 'published') {
@@ -131,7 +133,10 @@ export class PluginSources {
 /** Why an installed file has no source to compile; for a bundle, which of its sources the checkout lacks. */
 function noSource(source: PluginSource, js: string): string {
 	const bundle = source.bundles.get(js);
-	if (!bundle) return `has no TypeScript source in ${source.root}; point release.pluginSources['${source.name}'] at a checkout of its source, or replace the package with a TypeScript module of the app in release.pluginReplacements['${source.name}']`;
+	if (!bundle) {
+		if (isCommonJsModule(js)) return `is a CommonJS-only JavaScript module with no TypeScript or ES module source; replace the package with a TypeScript module of the app in release.pluginReplacements['${source.name}']`;
+		return `has no TypeScript source in ${source.root}; point release.pluginSources['${source.name}'] at a checkout of its source, or replace the package with a TypeScript module of the app in release.pluginReplacements['${source.name}']`;
+	}
 	const found = bundle.files.filter(Boolean).length;
 	return `bundles ${bundle.listed.length} sources, ${found ? `${found} of them in ${source.root} but not its entry` : `none of them in ${source.root}`}; point release.pluginSources['${source.name}'] at a checkout of its source`;
 }
@@ -155,6 +160,7 @@ const writtenStrictness = buildCache(new Map<string, boolean>());
  */
 export function writtenStrict(file: string, adapter?: ActiveAdapter): boolean {
 	if (adapter?.isRuntimeSource(file)) return true;
+	if (/\.m?js$/.test(file)) return false;
 	const strictness = writtenStrictness;
 	for (let dir = dirname(file); dirname(dir) !== dir; dir = dirname(dir)) {
 		const config = join(dir, 'tsconfig.json');
@@ -180,11 +186,15 @@ function acquire(dir: string, options: SourceOptions): PluginSource {
 	let repo: string | null = null;
 	let rev: string | null = null;
 	const shipped = !override && shipsSource(dir, pkg);
+	const shippedJs = !override && !shipped && shipsJsSource(dir, pkg);
+	const workspaceRoot = !override && !shipped && !shippedJs ? localWorkspaceSourceRoot(dir, pkg) : null;
 	if (override) {
 		if (!existsSync(override)) throw new Error(`${name}: the source configured in release.pluginSources (${override}) does not exist`);
 		root = override;
-	} else if (shipped) {
+	} else if (shipped || shippedJs) {
 		root = dir;
+	} else if (workspaceRoot) {
+		root = workspaceRoot;
 	} else {
 		repo = repositoryOf(pkg);
 		if (!repo) throw new Error(`${name}@${version}: package.json names no repository; point release.pluginSources['${name}'] at a checkout of its source`);
@@ -198,7 +208,7 @@ function acquire(dir: string, options: SourceOptions): PluginSource {
 	const repoFiles = listFiles(root);
 	const packageDir = sourcePackageDir(repoFiles, name);
 	const bundles = new Map<string, BundleSources>();
-	let files = mapFiles(dir, root, repoFiles, packageDir, bundles);
+	let files = mapFiles(dir, root, repoFiles, packageDir, bundles, pkg);
 
 	// Source-level patches apply to a copy of the package's directory (or repo root when sources live in `src/<pkg>` outside `packages/<pkg>`).
 	const patch = sourcePatch(options.app, `${name.replace(/\//g, '+')}+${version}.patch`);
@@ -240,20 +250,121 @@ function acquire(dir: string, options: SourceOptions): PluginSource {
 		options.platform,
 		root,
 	);
-	say(`${name}@${version}: source from ${override ? `${override} (not verified: a configured source)` : shipped ? 'the package (it ships its TypeScript)' : `${repo} @ ${rev!.slice(0, 7)}`}`);
-	return { name, version, dir, root, repo, rev, files, bundles, typings, checked: new Set(), verified: override ? 'override' : shipped ? 'shipped' : 'published' };
+	say(`${name}@${version}: source from ${override ? `${override} (not verified: a configured source)` : shipped ? 'the package (it ships its TypeScript)' : shippedJs ? 'the package (pure JavaScript ES modules)' : workspaceRoot ? `${workspaceRoot} (local workspace source)` : `${repo} @ ${rev!.slice(0, 7)}`}`);
+	return { name, version, dir, root, repo, rev, files, bundles, typings, checked: new Set(), verified: override ? 'override' : shipped || shippedJs || workspaceRoot ? 'shipped' : 'published' };
 }
 
-/** Whether the package's own TypeScript is installed with it (a `src/` folder): its main file's map names a source inside the package. */
+/**
+ * When a local workspace-built package (`file:../../dist/packages/foo`, whose real path is outside `node_modules`)
+ * emits source maps pointing to its live TypeScript sources on disk (`../../../packages/foo/index.ts`), returns
+ * that workspace package's directory so the compiler compiles the local source directly instead of cloning a remote.
+ */
+function localWorkspaceSourceRoot(dir: string, pkg: any): string | null {
+	let real: string;
+	try {
+		real = realpathSync(dir);
+	} catch {
+		return null;
+	}
+	if (real.includes(`${sep}node_modules${sep}`)) return null;
+	const main = typeof pkg.main === 'string' ? pkg.main.replace(/\.js$/, '') : 'index';
+	const candidates = [
+		`${main}.js.map`,
+		`${main}.ios.js.map`,
+		`${main}.android.js.map`,
+		'index.js.map',
+		'index.ios.js.map',
+		'index.android.js.map',
+	].map((f) => resolve(real, f));
+	for (const map of candidates) {
+		if (!existsSync(map)) continue;
+		try {
+			const first = JSON.parse(readFileSync(map, 'utf8')).sources?.[0];
+			if (typeof first !== 'string' || !/\.tsx?$/.test(first)) continue;
+			const src = resolve(dirname(map), first);
+			if (!existsSync(src) || src.includes(`${sep}node_modules${sep}`)) continue;
+			for (let d = dirname(src); dirname(d) !== d; d = dirname(d)) {
+				const manifest = join(d, 'package.json');
+				if (!existsSync(manifest)) continue;
+				try {
+					if (JSON.parse(readFileSync(manifest, 'utf8')).name === pkg.name) return d;
+				} catch {
+					/* invalid json */
+				}
+			}
+			return dirname(src);
+		} catch {
+			/* ignore malformed map */
+		}
+	}
+	return null;
+}
+
+/** Whether the package's own TypeScript is installed with it (via its main file's source map, or a matching `.ts` source beside/under `src/`/`lib/`). */
 function shipsSource(dir: string, pkg: any): boolean {
 	const main = resolve(dir, typeof pkg.main === 'string' ? pkg.main : 'index.js');
 	const map = (main.endsWith('.js') ? main : main + '.js') + '.map';
-	if (!existsSync(map)) return false;
+	if (existsSync(map)) {
+		try {
+			const first = JSON.parse(readFileSync(map, 'utf8')).sources?.[0];
+			if (typeof first === 'string' && /\.tsx?$/.test(first)) {
+				const src = resolve(dirname(map), first);
+				if (src.startsWith(dir + sep) && existsSync(src)) return true;
+			}
+		} catch {
+			/* ignore malformed map */
+		}
+	}
+	const rel = relative(dir, main).replace(/\.m?js$/, '');
+	const stripped = rel.replace(/^(?:dist|lib|build|out|esm|cjs|mjs)(?:[\\/](?:esm|esm5|cjs|mjs|es|es5|es2015|es2020|es2022|node|browser|src))?[\\/]/, '');
+	const candidates = stripped !== rel ? [rel, join('src', stripped), stripped] : [rel, join('src', rel)];
+	return candidates.some((base) => ['.ts', '.tsx'].some((ext) => {
+		const p = join(dir, base + ext);
+		return !p.endsWith('.d.ts') && existsSync(p) && lstatSync(p).isFile();
+	}));
+}
+
+/**
+ * Whether an installed package is pure JavaScript (ships `src/*.js`, or ships JS with no repository to clone
+ * and no `.ts`/`.tsx` sources or TypeScript source maps), so its installed ES modules can be compiled directly.
+ */
+function shipsJsSource(dir: string, pkg: any): boolean {
+	const files = listFiles(dir);
+	if (files.some((f) => /\.tsx?$/.test(f) && !f.endsWith('.d.ts'))) return false;
+	const srcDir = join(dir, 'src');
+	const hasJsInSrc = existsSync(srcDir) && lstatSync(srcDir).isDirectory() && files.some((f) => f.startsWith(srcDir + sep) && /\.m?js$/.test(f));
+	const hasAnyJs = hasJsInSrc || (!repositoryOf(pkg) && files.some((f) => /\.m?js$/.test(f)));
+	if (!hasAnyJs) return false;
+	for (const f of files) {
+		if (!f.endsWith('.js.map')) continue;
+		try {
+			const sources: unknown[] = JSON.parse(readFileSync(f, 'utf8')).sources ?? [];
+			if (sources.some((s) => typeof s === 'string' && /\.tsx?$/.test(s))) return false;
+		} catch {
+			/* ignore malformed map */
+		}
+	}
+	return true;
+}
+
+/** Whether a JavaScript file uses CommonJS syntax (`require(...)` or `module.exports`/`exports.`). */
+function isCommonJsModule(js: string): boolean {
 	try {
-		const first = JSON.parse(readFileSync(map, 'utf8')).sources?.[0];
-		if (typeof first !== 'string' || !/\.tsx?$/.test(first)) return false;
-		const src = resolve(dirname(map), first);
-		return src.startsWith(dir + sep) && existsSync(src);
+		const text = readFileSync(js, 'utf8');
+		if (/(?:^|\n)\s*(?:import\s|export\s)/.test(text)) return false;
+		return /\b(?:module\.exports|exports\.[A-Za-z_$]|require\s*\()/.test(text);
+	} catch {
+		return false;
+	}
+}
+
+/** Whether a JavaScript file can be compiled directly as an ES module (not CommonJS). */
+function isEsModule(js: string, pkg?: any): boolean {
+	try {
+		const text = readFileSync(js, 'utf8');
+		if (js.endsWith('.mjs')) return true;
+		if (/\b(?:module\.exports|exports\.[A-Za-z_$]|require\s*\()/.test(text) && !/(?:^|\n)\s*(?:import\s|export\s)/.test(text)) return false;
+		return pkg?.type === 'module' || /(?:^|\n)\s*(?:import\s|export\s)/.test(text);
 	} catch {
 		return false;
 	}
@@ -380,11 +491,17 @@ function fetch(checkout: string, primaryRepo: string, pkg: any, pkgDir: string, 
 				const ref = `origin/${branch}`;
 				const own = treeHasPackage(dir, ref, pkg);
 				if (!rev && own) {
+					// Read recent package.json diffs in a single git invocation (avoids per-commit network fetches on blobless clones).
+					const versionNeedle = `"version": "${pkg.version}"`;
 					for (const scope of [ref, '--all']) {
-						const commits = git(dir, ['log', '--format=%H', `-S"version": "${pkg.version}"`, scope, '--', own])
-							.split('\n')
-							.filter(Boolean);
-						for (const c of commits.reverse()) {
+						const log = git(dir, ['log', '-n', '100', '-p', '--format=__COMMIT__%H', scope, '--', own]);
+						const matches: string[] = [];
+						let current = '';
+						for (const line of log.split('\n')) {
+							if (line.startsWith('__COMMIT__')) current = line.slice('__COMMIT__'.length).trim();
+							else if (current && line.startsWith('+') && line.includes(versionNeedle)) matches.push(current);
+						}
+						for (const c of matches.reverse()) {
 							try {
 								if (JSON.parse(git(dir, ['show', `${c}:${own}`])).version === pkg.version) {
 									rev = c;
@@ -400,7 +517,7 @@ function fetch(checkout: string, primaryRepo: string, pkg: any, pkgDir: string, 
 					if (!rev) {
 						const pkgSubdir = dirname(own);
 						const major = String(pkg.version).split('.')[0];
-						const candidates = git(dir, ['log', '--format=%H', ref, '--', pkgSubdir === '.' ? own : pkgSubdir])
+						const candidates = git(dir, ['log', '-n', '25', '--format=%H', ref, '--', pkgSubdir === '.' ? own : pkgSubdir])
 							.split('\n')
 							.filter(Boolean)
 							.filter((c) => {
@@ -495,11 +612,35 @@ function sourcePackageDir(files: string[], name: string): string | null {
  * Each runtime JavaScript file of the installed package → the TypeScript file it was compiled from. A file whose source
  * map lists several sources is a bundle of them, compiled from its entry.
  */
-function mapFiles(dir: string, root: string, repoFiles: string[], packageDir: string | null, bundles: Map<string, BundleSources>): Map<string, string | null> {
+function mapFiles(dir: string, root: string, repoFiles: string[], packageDir: string | null, bundles: Map<string, BundleSources>, pkg?: any): Map<string, string | null> {
 	const sources = repoFiles.filter((f) => /\.tsx?$/.test(f) && !f.endsWith('.d.ts'));
 	const out = new Map<string, string | null>();
 	const installed = listFiles(dir).filter((f) => /\.m?js$/.test(f) && !f.includes(`${sep}platforms${sep}`) && !/\.(config|webpack)\.js$/.test(f));
-	for (const js of installed) {
+	// Pure-JavaScript package (no TypeScript source in package or checkout): compile installed ES modules directly.
+	if (sources.length === 0) {
+		for (const js of installed) out.set(js, isEsModule(js, pkg) ? js : null);
+		return out;
+	}
+	const reexportTarget = (js: string): string | null => {
+		try {
+			const text = readFileSync(js, 'utf8');
+			if (text.length > 512) return null;
+			const m = /^(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\n]*)*export\s*(?:\*|\{[^}]*\})\s*from\s*['"](\.[^'"]+)['"];?\s*$/.exec(text);
+			if (!m) return null;
+			const target = resolve(dirname(js), m[1]);
+			for (const candidate of [target, target + '.js', target + '.mjs', join(target, 'index.js'), join(target, 'index.mjs')]) {
+				if (candidate.startsWith(dir + sep) && existsSync(candidate) && lstatSync(candidate).isFile()) return candidate;
+			}
+		} catch {
+			/* unreadable */
+		}
+		return null;
+	};
+	const resolved = new Map<string, string | null>();
+	const resolveOne = (js: string, seen = new Set<string>()): string | null => {
+		if (resolved.has(js)) return resolved.get(js)!;
+		if (seen.has(js)) return null;
+		seen.add(js);
 		const jsInSubdir = dirname(relative(dir, js)) !== '.';
 		const bySuffix = (suffix: string) => {
 			if (jsInSubdir && !suffix.includes(sep)) return null;
@@ -534,12 +675,23 @@ function mapFiles(dir: string, root: string, repoFiles: string[], packageDir: st
 				src = bundleEntry(bundle, js, inSource);
 			}
 		}
+		// A thin ESM/CJS barrel (`export * from '../../dist/esm/.../index.js'`) without its own source map: follow to the real compiled module.
+		if (!src) {
+			const target = reexportTarget(js);
+			if (target) src = resolveOne(target, seen);
+		}
 		if (!src) {
 			const rel = relative(dir, js).replace(/\.m?js$/, '');
-			for (const ext of ['.ts', '.tsx']) src ??= bySuffix(rel + ext);
+			const stripped = rel.replace(/^(?:dist|lib|build|out|esm|cjs|mjs)(?:[\\/](?:esm|esm5|cjs|mjs|es|es5|es2015|es2020|es2022|node|browser|src))?[\\/]/, '');
+			const bases = stripped !== rel ? [rel, join('src', stripped), stripped] : [rel];
+			for (const base of bases) {
+				for (const ext of ['.ts', '.tsx']) src ??= bySuffix(base + ext);
+			}
 		}
-		out.set(js, src);
-	}
+		resolved.set(js, src);
+		return src;
+	};
+	for (const js of installed) out.set(js, resolveOne(js));
 	return out;
 }
 
@@ -747,14 +899,41 @@ function normalize(text: string, file: string, jsReference?: string): string[] {
 		return true;
 	});
 	const printer = ts.createPrinter({ removeComments: true });
+	const singleLine = (st: ts.Statement): string => {
+		const raw = printer.printNode(ts.EmitHint.Unspecified, st, sf);
+		// Collapse continuation newlines inside a single statement (e.g. multi-line ternary/logical expressions vs esbuild single-line output)
+		// while preserving statement/block boundaries (`;`, `{`, `}`).
+		const outLines: string[] = [];
+		for (const line of raw.split('\n')) {
+			const trimmed = line.trim();
+			if (!trimmed) continue;
+			if (outLines.length && ((!/[;{}]$/.test(outLines[outLines.length - 1]) && !/^(?:case |default:)/.test(outLines[outLines.length - 1]) && !/^[{}]/.test(trimmed)) || (/^\}\s*$/.test(outLines[outLines.length - 1]) && /^:\s*\{$/.test(trimmed)))) {
+				outLines[outLines.length - 1] += (trimmed.startsWith('.') ? '' : ' ') + trimmed;
+			} else {
+				outLines.push(trimmed);
+			}
+		}
+		return outLines.join('\n');
+	};
 	// Decorator metadata (`__metadata("design:paramtypes", [])`), which a build with emitDecoratorMetadata adds.
 	const printed = kept
-		.map((st) => printer.printNode(ts.EmitHint.Unspecified, st, sf))
+		.map(singleLine)
 		.join('\n')
 		.replace(/,?\s*(?:\b(?:tslib_\d+|tslib)\.)?__metadata\("design:\w+",\s*(?:\[[^\]]*\]|[\w.$]+|void 0)\)/g, '');
 	return printed
 		.split('\n')
-		.map((l) => l.trim().replace(/\b(tslib_\d+|tslib)\.(__\w+)/g, '$2'))
+		.map((l) =>
+			l
+				.trim()
+				.replace(/\b(tslib_\d+|tslib)\.(__\w+)/g, '$2')
+				.replace(/\bvoid 0\b/g, 'undefined')
+				.replace(/\b0[xX][0-9a-fA-F]+\b/g, (h) => String(parseInt(h, 16)))
+				.replace(/\b\d+(?:\.\d+)?[eE][+-]?\d+\b/g, (n) => String(Number(n)))
+				.replace(/,\s*([}\]])/g, ' $1')
+				.replace(/,$/, '')
+				.replace(/^var ([A-Za-z_$][\w$]*) = \(\(\1\d*\) => \{$/, '(function ($1) {')
+				.replace(/^\}\)\(([A-Za-z_$][\w$]*) \|\| \{\}\);$/, '})($1 || ($1 = {}));'),
+		)
 		.filter((l) => l && !l.startsWith('//# sourceMappingURL') && l !== 'export {};' && l !== '"use strict";' && l !== "'use strict';" && !/^var (?:_[a-z],\s*)*_[a-z];$/.test(l));
 }
 
@@ -765,17 +944,21 @@ function unexplained(a: string[], b: string[]): string[] {
 	// Inlined enum members and emitter temp aliases (`_a`, `_b`): a line whose only difference is `E.Member` against a literal or `_a` vs `_b`.
 	const shape = (l: string) =>
 		l
-			.replace(/^export\s+(?=(?:function|const|let|var)\s+)/, '')
+			.replace(/^export\s+(?=(?:async\s+|function|class|const|let|var)\s+)/, '')
 			.replace(/^__exportStar\(require\(([^)]+)\),\s*exports\);$/, '__export(require($1));')
 			.replace(/^\}\)\((\w+)\s*\|\|\s*\(exports\.\1\s*=\s*\1\s*=\s*\{\}\)\);$/, '})($1 = exports.$1 || (exports.$1 = {}));')
 			.replace(/\(([A-Za-z_$][\w$]*)\)\s*=>/g, '$1 =>')
+			.replace(/(?<=^|[{,\s])([A-Za-z_$][\w$]*)\s*:\s*\1(?=\s*[,}]|$)/g, '$1')
 			.replace(/^(?:const|let)\s+\{\s*(\w+)\s*\}\s*=\s*(\w+);$/, 'var $1 = $2.$1;')
 			.replace(/(?:^|(?<=for\s*\(\s*))(?:const|let)\s+/, 'var ')
 			.replace(/`[^`]*`|"[^"]*"\.concat\([^)]*\)/g, '"#"')
 			.replace(/\s*\{\s*$/, '')
-			.replace(/\((_[a-z])\s*=\s*([A-Za-z_$][\w$]*)\)\s*!==\s*null\s*&&\s*\1\s*!==\s*void 0\s*\?\s*\1\s*:/g, '$2 !== null && $2 !== void 0 ? $2 :')
+			.replace(/\((_[a-z])\s*=\s*([A-Za-z_$][\w$]*)\)\s*!==\s*null\s*&&\s*\1\s*!==\s*undefined\s*\?\s*\1\s*:/g, '$2 !== null && $2 !== undefined ? $2 :')
 			.replace(/\b_[a-z]\b/g, '_a')
 			.replace(/\b[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)+\b|-?\b\d+(\.\d+)?\b|"[^"]*"|'[^']*'/g, '#');
+	const stripParens = (s: string) => s.replace(/[()]/g, '').replace(/\s+/g, ' ').trim();
+	const stripShadowSuffix = (s: string) => s.replace(/\b([A-Za-z$](?:[A-Za-z_$]*[A-Za-z$])?)\d+(_\d+)?\b/g, '$1$2');
+	const isImportOrReexport = (l: string) => /^(?:import\b|export\s+(?:\*|\{))/.test(l);
 	for (let i = 0; i < ops.length;) {
 		if (ops[i].op === '=') {
 			i++;
@@ -787,14 +970,15 @@ function unexplained(a: string[], b: string[]): string[] {
 			(ops[i].op === '-' ? del : add).push(ops[i].line);
 			i++;
 		}
-		const filteredAdd = add.filter((l) => l !== '}' && !/^export \{[^}]*\};?$/.test(l));
-		for (let k = 0; k < Math.max(del.length, filteredAdd.length); k++) {
-			const x = del[k],
+		const filteredDel = del.filter((l) => l !== '}' && !/^export var [A-Za-z_$][\w$]*;$/.test(l) && !isImportOrReexport(l));
+		const filteredAdd = add.filter((l) => l !== '}' && !isImportOrReexport(l) && !/^return [A-Za-z_$][A-Za-z_$]*\d+;$/.test(l));
+		for (let k = 0; k < Math.max(filteredDel.length, filteredAdd.length); k++) {
+			const x = filteredDel[k],
 				y = filteredAdd[k];
-			if (x !== undefined && y !== undefined && shape(x) === shape(y)) continue;
-			// Imports and re-exports a whole-program build elides as type-only.
+			if (x !== undefined && y !== undefined && (shape(x) === shape(y) || stripShadowSuffix(stripParens(shape(x))) === stripShadowSuffix(stripParens(shape(y))))) continue;
+			// Imports and re-exports a whole-program build elides as type-only, or esbuild/rollup rewrites (`export { x } from './y'` -> `import { x as x2 } from './y'`).
 			if (x !== undefined && y === undefined && /^(import|export) \{?/.test(x) && !/^export (default |const |let |var |function |class |async )/.test(x)) continue;
-			if (x !== undefined && y !== undefined && /^import\b/.test(x) && /^import\b/.test(y)) continue;
+			if (x !== undefined && y !== undefined && /^(import|export)\b/.test(x) && /^import\b/.test(y)) continue;
 			const names = (l: string) =>
 				/^export \{([^}]*)\}/
 					.exec(l)?.[1]
@@ -806,7 +990,27 @@ function unexplained(a: string[], b: string[]): string[] {
 			if (y !== undefined) bad.push(`+ ${y}`);
 		}
 	}
-	return bad;
+	// Cancel out constructor parameter-property assignments (`this.x = x;`) reordered around private-field initializers by esbuild vs tsc.
+	const movedProp = /^([+-]) (this\.[A-Za-z_$][\w$]* = [A-Za-z_$][\w$]*;)$/;
+	const dels = new Map<string, number[]>();
+	const adds = new Map<string, number[]>();
+	bad.forEach((line, idx) => {
+		const m = movedProp.exec(line);
+		if (!m) return;
+		const map = m[1] === '-' ? dels : adds;
+		(map.get(m[2]) ?? map.set(m[2], []).get(m[2])!).push(idx);
+	});
+	const cancelled = new Set<number>();
+	for (const [stmt, dIdx] of dels) {
+		const aIdx = adds.get(stmt);
+		if (!aIdx) continue;
+		const pairs = Math.min(dIdx.length, aIdx.length);
+		for (let p = 0; p < pairs; p++) {
+			cancelled.add(dIdx[p]);
+			cancelled.add(aIdx[p]);
+		}
+	}
+	return cancelled.size ? bad.filter((_, idx) => !cancelled.has(idx)) : bad;
 }
 
 function diff(a: string[], b: string[]): { op: '=' | '-' | '+'; line: string }[] {

@@ -482,7 +482,7 @@ export const frontMethods = traceMethods('front', {
 	isAugmentedLibMember(this: Front & Pick<StateBackend, 'resolve'>, e: ts.Node): boolean {
 		if (!ts.isPropertyAccessExpression(e) || !ts.isIdentifier(e.expression) || isWriteTarget(e) || !isLibGlobal(this, e.expression)) return false;
 		const decls = this.checker.getSymbolAtLocation(e.name)?.declarations ?? [];
-		return decls.length > 0 && decls.every((d) => !isLibDeclaration(d) && d.getSourceFile().isDeclarationFile === false && ts.isInterfaceDeclaration(d.parent));
+		return decls.length > 0 && decls.every((d) => !isLibDeclaration(d) && ts.isInterfaceDeclaration(d.parent));
 	},
 
 	/** An app class's plan, keyed or not: its fields' null states. */

@@ -106,8 +106,9 @@ export const argumentsMethods = {
 		if (target && !ts.isJSDocSignature(target) && this.readsArguments(target)) return [this.packed(all, 'JSArray<Any?>', this.restSlot(e, 'Any?'))];
 		const out: string[] = [];
 		const restAt = params.findIndex((p) => p.valueDeclaration && ts.isParameter(p.valueDeclaration) && p.valueDeclaration.dotDotDotToken);
-		// A function type's rest parameter too (`mainThreadify(fn)` gives `(...args) => void`): Swift's function type takes it as `JSRest`.
-		const appDeclared = !!sig?.getDeclaration() && (!sig!.getDeclaration().getSourceFile().isDeclarationFile || (!this.library && ts.isFunctionTypeNode(sig!.getDeclaration())));
+		// A function type's rest parameter too (`mainThreadify(fn)` gives `(...args) => void`, or `String.fromCharCode.bind(String)`): Swift's function type takes it as `JSRest`.
+		const calleeRest = !this.library && ts.isCallExpression(e) && restAt >= 0 && functionParts(this.typeOf(e.expression).replace(/^\((.*)\)[?!]$/, '$1'))?.rest === restAt;
+		const appDeclared = (!!sig?.getDeclaration() && (!sig!.getDeclaration().getSourceFile().isDeclarationFile || (!this.library && ts.isFunctionTypeNode(sig!.getDeclaration())))) || calleeRest;
 		let covered = list.length;
 		for (let k = 0; k < list.length; k++) {
 			const a = list[k];

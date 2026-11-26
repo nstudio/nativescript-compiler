@@ -1,6 +1,8 @@
 // Type tests as Swift: typeof, presence and the conditional operator.
 import ts from 'typescript';
-import { isLibGlobal } from '../semantics/globals.ts';
+import { isLibGlobal, UNSUPPORTED_LIB_GLOBALS } from '../semantics/globals.ts';
+import { LIB_CONSTANTS } from './library.ts';
+import { isUnsupportedLibStatic } from '../semantics/apis/statics.ts';
 import { inOptionalChain, isNullish, swiftString, RT } from './syntax.ts';
 import type { Translator, TypeofCell } from './translator.ts';
 import { mergedInterfaceMemberOf, neverDefined } from '../semantics/lang.ts';
@@ -127,14 +129,20 @@ export const typeTestsMethods = {
 		if (neverDefined(e.expression, this.checker)) return known('undefined');
 		// A member of an untyped object is whatever script put there, whatever its declared type says.
 		const read = ts.skipOuterExpressions(e.expression, ts.OuterExpressionKinds.Parentheses);
+		// Feature-probing an unsupported static method on a built-in (`typeof (Uint8Array as any).fromBase64`): always `"undefined"`.
+		if (isUnsupportedLibStatic(this, read, (k) => !!LIB_CONSTANTS[k])) return known('undefined');
 		if (ts.isPropertyAccessExpression(read) && !ts.isOptionalChain(read) && ((this.isAny(read.expression) && !(ts.isIdentifier(read.expression) && isLibGlobal(this, read.expression))) || mergedInterfaceMemberOf(read, this.checker)) && !this.isAny(read)) return code(`${RT.jsTypeof}(${RT.jsGet}(${this.expr(read.expression)}, ${swiftString(read.name.text)}))`);
 		if (ts.isPropertyAccessExpression(read) && this.augmentedMember(read)) return code(`${RT.jsTypeof}(${this.augmentedRead(read)})`);
 		const newer = this.native.introducedAfterDeployment(e.expression);
 		if (newer) return code(`(${RT.jsOSAtLeast}(${newer}) ? "function" : "undefined")`);
-		// A constructor or function of the language's library (`Symbol`, `Map`, `Promise`), which the kit always has.
+		// A constructor or function of the language's library (`Symbol`, `Map`, `Promise`), which the kit always has —
+		// except the globals the compiled runtime omits (`FinalizationRegistry`, `Proxy`, …), which are always `"undefined"`.
 		const lib = ts.isIdentifier(e.expression) ? this.resolve(e.expression)?.declarations : undefined;
 		const callable = this.checker.getTypeAtLocation(e.expression);
-		if (lib?.length && lib.every((d) => /[\\/]lib\.[\w.]*\.d\.ts$/.test(d.getSourceFile().fileName)) && (callable.getConstructSignatures().length || callable.getCallSignatures().length)) return known('function');
+		if (lib?.length && lib.every((d) => /[\\/]lib\.[\w.]*\.d\.ts$/.test(d.getSourceFile().fileName))) {
+			if (ts.isIdentifier(e.expression) && UNSUPPORTED_LIB_GLOBALS.has(e.expression.text)) return known('undefined');
+			if (callable.getConstructSignatures().length || callable.getCallSignatures().length) return known('function');
+		}
 		if (this.states.nullDistinct(e.expression)) return code(`${RT.jsTypeof}(${this.observe(e.expression)})`);
 		if (numberArrayElement(read, this.checker)) return code(`${RT.jsTypeof}(${this.maybeUndefined(e.expression) ?? this.expr(e.expression)} as Any?)`);
 		const t = this.typeOf(e.expression);

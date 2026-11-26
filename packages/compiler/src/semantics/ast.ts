@@ -83,6 +83,11 @@ export function isSymbolIterator(e: ts.Expression, checker: ts.TypeChecker): boo
 	return ts.isPropertyAccessExpression(e) && e.name.text === 'iterator' && ts.isIdentifier(e.expression) && e.expression.text === 'Symbol' && !!checker.getSymbolAtLocation(e.expression)?.declarations?.every((d) => d.getSourceFile().isDeclarationFile);
 }
 
+/** `Symbol.asyncIterator`, as the library declares `Symbol`. */
+export function isSymbolAsyncIterator(e: ts.Expression, checker: ts.TypeChecker): boolean {
+	return ts.isPropertyAccessExpression(e) && e.name.text === 'asyncIterator' && ts.isIdentifier(e.expression) && e.expression.text === 'Symbol' && !!checker.getSymbolAtLocation(e.expression)?.declarations?.every((d) => d.getSourceFile().isDeclarationFile);
+}
+
 /**
  * How many of a built-in's callback arguments (element, index, array) a function value reads: its signature's
  * parameters, at least one; every argument where it is held untyped, as script calls it with all of them.

@@ -131,20 +131,21 @@ export const objectClassesMethods = {
 				continue;
 			}
 			const a = f.accessor;
+			const ak = n.replace(/`/g, '');
 			const getType = `(${name}) ${a.throws ? 'throws ' : ''}-> ${f.type}`;
 			const setType = `(${name}, ${a.value}) -> Void`;
 			if (a.get) {
-				lines.push(`    private let __get_${f.name}: ${getType}`);
-				params.push(`__get_${f.name}: @escaping ${getType}`);
-				inits.push(`        self.__get_${f.name} = __get_${f.name}`);
+				lines.push(`    private let __get_${ak}: ${getType}`);
+				params.push(`__get_${ak}: @escaping ${getType}`);
+				inits.push(`        self.__get_${ak} = __get_${ak}`);
 			}
 			if (a.set) {
-				lines.push(`    private let __set_${f.name}: ${setType}`);
-				params.push(`__set_${f.name}: @escaping ${setType}`);
-				inits.push(`        self.__set_${f.name} = __set_${f.name}`);
+				lines.push(`    private let __set_${ak}: ${setType}`);
+				params.push(`__set_${ak}: @escaping ${setType}`);
+				inits.push(`        self.__set_${ak} = __set_${ak}`);
 			}
-			const get = a.get ? this.marks.tryIf(a.throws, `__get_${f.name}(self)`) : 'nil';
-			if (a.set) lines.push(`    var ${n}: ${f.type} {`, `        get { ${get} }`, `        set { __set_${f.name}(self, newValue${a.get ? '' : '!'}) }`, '    }');
+			const get = a.get ? this.marks.tryIf(a.throws, `__get_${ak}(self)`) : 'nil';
+			if (a.set) lines.push(`    var ${n}: ${f.type} {`, `        get { ${get} }`, `        set { __set_${ak}(self, newValue${a.get ? '' : '!'}) }`, '    }');
 			else lines.push(`    var ${n}: ${f.type} {`, `        get${a.throws ? ' throws' : ''} { ${get} }`, '    }');
 			this.declare(f.name, { kind: 'var', type: f.type, throws: !a.set && !!a.throws });
 		}

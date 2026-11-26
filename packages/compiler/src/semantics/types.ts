@@ -3,7 +3,7 @@ import { isCoreDeclaration } from '../program/core-facts.ts';
 import type { Representation } from './forms/forms.ts';
 import type { Held } from './shapes.ts';
 import { isLibDeclaration } from './ast.ts';
-import { BUFFER_TYPES, ERRORS } from './globals.ts';
+import { BUFFER_TYPES, ERRORS, UNSUPPORTED_LIB_GLOBALS } from './globals.ts';
 import type { Ledger } from './ledger.ts';
 import { rethrowUnlessRefused } from './refusals.ts';
 
@@ -523,4 +523,44 @@ export function iterableAssertion(from: string, to: string): { element: string; 
 	const target = /^JSIterable<(.*)>\??$/.exec(to);
 	if (!target || /^JS(Iterable|Iterator|Generator|Map)</.test(from)) return null;
 	return { element: target[1], mayFail: !/^(JSArray<.*>|JSSet<.*>|String)$/.test(from) };
+}
+
+const ERASED_LIB_UTILITIES = new Set(['Extract', 'Exclude', 'NonNullable', 'ReturnType', 'Parameters', 'ConstructorParameters', 'InstanceType', 'ThisParameterType', 'OmitThisParameter', 'ThisType', 'Record']);
+const CLASS_UTILITIES = new Set(['Partial', 'Required', 'Readonly', 'Pick', 'Omit']);
+
+/**
+ * Mapped types (`Partial<…>`, `{ [k in Side]: number }`), unresolved TS utility aliases (`Extract`, `Exclude`, …),
+ * and `*Constructor` lib interfaces: returns the underlying class type for a utility wrapping a class, `'any'` when
+ * held untyped, or null otherwise.
+ */
+export function mappedOrErasedType(t: ts.Type, name: string | undefined, sym: ts.Symbol | undefined): ts.Type | 'any' | null {
+	if (name && CLASS_UTILITIES.has(name) && t.aliasSymbol) {
+		const of = t.aliasTypeArguments?.[0];
+		return of && of.getSymbol()?.flags! & ts.SymbolFlags.Class ? of : 'any';
+	}
+	if (name && ERASED_LIB_UTILITIES.has(name) && t.aliasSymbol && isLibDeclaration(t.aliasSymbol.declarations?.[0])) return 'any';
+	if (name && (/Constructor$/.test(name) || UNSUPPORTED_LIB_GLOBALS.has(name)) && sym?.declarations?.length && sym.declarations.every((d) => isLibDeclaration(d))) return 'any';
+	if ((t as ts.ObjectType).objectFlags & ts.ObjectFlags.Mapped) return 'any';
+	return null;
+}
+
+/** `Object` as TypeScript's own lib declares it: held untyped. */
+export function isLibObjectType(name: string | undefined, sym: ts.Symbol | undefined): boolean {
+	return name === 'Object' && !!sym?.declarations?.every((d) => /[\\/]typescript[\\/]lib[\\/]/.test(d.getSourceFile().fileName));
+}
+
+/** `NonNullable<T>`'s inner type argument when unresolved by the checker; null otherwise. */
+export function nonNullableInner(t: ts.Type, name: string | undefined, args: readonly ts.Type[]): ts.Type | null {
+	return name === 'NonNullable' && t.aliasSymbol && args.length === 1 ? args[0] : null;
+}
+
+/** Strips trailing `?` from a spelled native type unless it is untyped (`Any?`). */
+export function nonOptionalSpelling(type: string): string {
+	return isUntyped(spelledType(type)) ? type : type.replace(/\?$/, '');
+}
+
+/** A JSDoc `@constructor` function in a JS module (no class/interface/enum/ambient declaration): no native class exists for it. */
+export function isJsDocConstructorFunction(sym: ts.Symbol | undefined): boolean {
+	if (!sym?.valueDeclaration || !(ts.isFunctionDeclaration(sym.valueDeclaration) || ts.isFunctionExpression(sym.valueDeclaration) || ts.isVariableDeclaration(sym.valueDeclaration))) return false;
+	return !sym.declarations?.some((d) => ts.isClassLike(d) || ts.isInterfaceDeclaration(d) || ts.isEnumDeclaration(d) || d.getSourceFile().isDeclarationFile);
 }

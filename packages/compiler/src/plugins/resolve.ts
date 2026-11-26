@@ -13,19 +13,24 @@ export function packageOf(specifier: string): string {
  * variant before the plain one, then the directory's index; for a package
  * with neither, the ES module its `exports` or `module` names.
  */
-export function runtimeFile(specifier: string, modules: string, platform: 'ios' | 'android'): { packageDir: string; file: string } | null {
+export function runtimeFile(specifier: string, modules: string, platform: 'ios' | 'android', localPackages?: ReadonlyMap<string, string>): { packageDir: string; file: string } | null {
 	const name = packageOf(specifier);
-	const packageDir = join(modules, name);
-	if (!existsSync(join(packageDir, 'package.json'))) return null;
+	const inModules = join(modules, name);
+	const packageDir = existsSync(join(inModules, 'package.json')) ? inModules : localPackages?.get(name);
+	if (!packageDir || !existsSync(join(packageDir, 'package.json'))) return null;
 	const deep = specifier.slice(name.length).replace(/^\//, '');
 	const pkg = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8'));
 	const base = deep ? join(packageDir, deep) : resolve(packageDir, (pkg.main ?? 'index').replace(/\.js$/, ''));
+	// Platform-specific NativeScript files (`*.ios.js`, `*.android.js`) take priority over generic `exports`/`module`.
+	const platformSpecific = [`${base}.${platform}.js`, join(base, `index.${platform}.js`)].find(isFile);
+	if (platformSpecific) return { packageDir, file: platformSpecific };
+	// Prefer `exports` (matching browser/import conditions, never node) and `module` (ESM) over CommonJS `main`.
+	const esm = exported(pkg.exports, deep ? `./${deep}` : '.') ?? (!deep && typeof pkg.module === 'string' ? pkg.module : null);
+	const esmTarget = esm ? runtimeCandidate(resolve(packageDir, esm), platform, esm.endsWith('.mjs') ? '.mjs' : '.js') : null;
+	if (esmTarget) return { packageDir, file: esmTarget };
 	const file = (deep ? (asFile(base, platform) ?? entryOf(base, platform)) : null) ?? runtimeCandidate(base, platform);
 	if (file) return { packageDir, file };
-	// A package published as ES modules only (`exports`, `module`; no `main`), as the bundler's import conditions pick its file.
-	const esm = exported(pkg.exports, deep ? `./${deep}` : '.') ?? (deep || pkg.main ? null : typeof pkg.module === 'string' ? pkg.module : null);
-	const target = esm && resolve(packageDir, esm);
-	return target && existsSync(target) && statSync(target).isFile() ? { packageDir, file: target } : null;
+	return null;
 }
 
 const isFile = (f: string) => existsSync(f) && statSync(f).isFile();
@@ -62,12 +67,14 @@ function exported(exports: unknown, subpath: string): string | null {
 		if (typeof e === 'string') return /\.d\.[cm]?ts$/.test(e) ? null : e;
 		if (Array.isArray(e)) return e.map(pick).find((x) => x) ?? null;
 		if (!e || typeof e !== 'object') return null;
-		// The first condition, in the order the package lists them, that an importing bundler matches.
-		for (const [k, v] of Object.entries(e))
-			if (['import', 'module', 'default', 'require'].includes(k)) {
-				const f = pick(v);
+		// Prefer `browser` over generic `default`/`require` (NativeScript is not Node), then standard bundler conditions.
+		const record = e as Record<string, unknown>;
+		for (const cond of ['browser', 'import', 'module', 'default', 'require']) {
+			if (Object.hasOwn(record, cond)) {
+				const f = pick(record[cond]);
 				if (f) return f;
 			}
+		}
 		return null;
 	};
 	return pick(entry);

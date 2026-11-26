@@ -103,7 +103,8 @@ export const conversionMethods = {
 		const from = decl.parameters.findIndex((p) => p.initializer);
 		const byName = from >= 0 && !decl.typeParameters?.length && decl.parameters.slice(from).every((p) => p.initializer && !p.dotDotDotToken) && splitTopLevel(this.params(decl, false)).every((p) => p.trim().startsWith('_ '));
 		// Called by name with fewer arguments: the function itself, not its value (`declaredValue`).
-		const named = /^FunctionCell_\w+\.(?:declared\w*\("[^"]*"|local\w*\(\w+), (.*)\)$/s.exec(ref)?.[1] ?? ref;
+		const rawNamed = /^FunctionCell_\w+\.(?:declared\w*\("[^"]*"|local\w*\(\w+), (.*)\)$/s.exec(ref)?.[1] ?? ref;
+		const named = /^\{ (?:try )?([\w.`]+)\([^)]*\) \}$/.exec(rawNamed)?.[1] ?? rawNamed;
 		const restAt = this.readsArguments(decl) ? 0 : decl.parameters.findIndex((p) => p.dotDotDotToken);
 		return this.boxFunction(ref, t, restAt, decl.name?.text ?? '', scriptLength(decl), byName ? { ref: named, from } : undefined, false);
 	},
@@ -180,7 +181,11 @@ export const conversionMethods = {
 		// Named by its Swift path, which is the program's one function of that name.
 		const id = (this.appModule && ref.startsWith(`${this.appModule}.`) ? ref.slice(this.appModule.length + 1) : ref).replace(/`/g, '');
 		if (!this.functionDepth) this.isolatedInit = true;
-		return `${cell}.${this.cellStatic(cell, 'declared', `${RT.jsDeclaredFunction}(id, Self(f: __h)).f`)}(${swiftString(id)}, ${ref})`;
+		// Wrap top-level `func` in a forwarding closure so Swift 6 `@MainActor @Sendable` function values convert cleanly to non-isolated closure types.
+		const fn = functionParts(type)!;
+		const fwdArgs = fn.params.map((_, k) => `$${k}`).join(', ');
+		const fwd = `{ ${this.throwsInfo.fn(decl) ? 'try ' : ''}${ref}(${fwdArgs}) }`;
+		return `${cell}.${this.cellStatic(cell, 'declared', `${RT.jsDeclaredFunction}(id, Self(f: __h)).f`)}(${swiftString(id)}, ${fwd})`;
 	},
 
 	/** A closure body that keeps `alias` alive with the closure: what makes the closure's key the alias's. */

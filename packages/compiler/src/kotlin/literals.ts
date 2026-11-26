@@ -2,7 +2,7 @@
 import ts from 'typescript';
 import { cast, destructuringSource, ident, isNullable, jsObjectCode, kotlinString, optionalType, splitTopLevel, spell, RT } from './syntax.ts';
 import type { ShapeField, Translator } from './translator.ts';
-import { assertedOperand, evolvingElementContext, intersectionAliasMembers, literalKey, openSpreadType, spreadOperand, wellKnownMember } from '../semantics/lang.ts';
+import { assertedOperand, evolvingElementContext, intersectionAliasMembers, literalKey, openSpreadType, spreadOperand, unquoted, wellKnownMember } from '../semantics/lang.ts';
 import { holdsNil, literalNotes, signatureField, shapePlanOfLiteral, spelledOptional, resultShapeNamed } from '../semantics/shapes.ts';
 import { structural, type Structural, type StructuralFacts } from '../semantics/conversion.ts';
 import { heldOf, isKit, isUntyped, parseNativeType, spelledType } from '../semantics/types.ts';
@@ -226,13 +226,14 @@ export const literalsMethods = {
 				const key = literalKey(p.name, this.checker) ?? p.name.getText();
 				const f = order.find((x) => x.name === key) as ShapeField | undefined;
 				if (!f?.accessor) throw this.error(p, 'an accessor in an object literal of this type');
+				const ak = unquoted(ident(key));
 				if (ts.isGetAccessorDeclaration(p)) {
 					const body = this.withThis(p, '__this', false, () => this.functionBody(p, f.type, this.indent));
-					given.set(`__get_${key}`, `fun(__this: ${target}): ${f.type} ${body}`);
+					given.set(`__get_${ak}`, `fun(__this: ${target}): ${f.type} ${body}`);
 				} else {
 					const v = p.parameters[0].name as ts.Identifier;
 					const body = this.withThis(p, '__this', false, () => this.functionBody(p, 'Unit', this.indent));
-					given.set(`__set_${key}`, `fun(__this: ${target}, ${ident(v.text)}: ${f.accessor.value}) ${body}`);
+					given.set(`__set_${ak}`, `fun(__this: ${target}, ${ident(v.text)}: ${f.accessor.value}) ${body}`);
 				}
 				continue;
 			}
@@ -314,7 +315,8 @@ export const literalsMethods = {
 		const reorder = spreads.length ? `jsOrder = ${RT.jsLiteralKeyOrder}(listOf(${parts.join(', ')}), listOf(${order.map((f) => kotlinString(f.name)).join(', ')}))` : inOrder.join() !== declared.join() ? `jsOrder = listOf(${inOrder.map(kotlinString).join(', ')})` : '';
 		const args = order.flatMap((f) => {
 			const a = (f as ShapeField).accessor;
-			if (a) return [...(a.get ? [`__get_${f.name} = ${given.get(`__get_${f.name}`)}`] : []), ...(a.set ? [`__set_${f.name} = ${given.get(`__set_${f.name}`)}`] : [])];
+			const ak = unquoted(ident(f.name));
+			if (a) return [...(a.get ? [`__get_${ak} = ${given.get(`__get_${ak}`)}`] : []), ...(a.set ? [`__set_${ak} = ${given.get(`__set_${ak}`)}`] : [])];
 			return given.has(f.name) ? [`${ident(f.member ?? f.name)} = ${given.get(f.name)}`] : [];
 		});
 		const nullKeys = e.properties.filter((p): p is ts.PropertyAssignment | ts.ShorthandPropertyAssignment => !!notes.get(p)?.null).map((p) => literalKey(p.name, this.checker) ?? p.name.getText());

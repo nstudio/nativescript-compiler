@@ -3,6 +3,8 @@ import ts from 'typescript';
 import { propSignal } from '../semantics/signals.ts';
 import { LIB_CONSTANTS, MATH, isTypedArrayType } from './library.ts';
 import { mathFunctionValue } from '../semantics/apis/math.ts';
+import { CONSOLE } from '../semantics/apis/console.ts';
+import { libFunctionValueKind } from '../semantics/apis/statics.ts';
 import { ERRORS, TYPED_ARRAYS, isLibGlobal } from '../semantics/globals.ts';
 import { spell, escapingFunction, functionParts, hasTopLevelArrow, ident, identPath, isFunctionType, isOptional, openSwiftChain, optionalType, splitTopLevel, swiftString, RT, lenientReader } from './syntax.ts';
 import type { Translator } from './translator.ts';
@@ -138,8 +140,19 @@ export const accessMethods = {
 			// `const round = Math.round`: the function as a value.
 			const mathValue = target.text === 'Math' ? mathFunctionValue(name) : null;
 			if (mathValue) return this.convert(`{ (__x: Double) -> Double in ${MATH[mathValue]}(__x) }`, '(Double) throws -> Double', this.typeOf(e));
-			// `console && console.log && console.log(x)`: a method the console has is there, as `console` itself is.
-			if (target.text === 'console' && tested(e) && this.checker.getSymbolAtLocation(e.name)?.flags! & ts.SymbolFlags.Method) return '(true as Any?)';
+			const libFn = libFunctionValueKind(target.text, name);
+			if (libFn === 'console') {
+				if (tested(e)) return '(true as Any?)';
+				const fn = RT[CONSOLE[name].op];
+				return this.convert(`{ (__args: JSRest<Any?>) -> Void in ${fn}(spread: __args.storage) }`, '(JSRest<Any?>) throws -> Void', this.typeOf(e));
+			}
+			if (libFn === 'fromCharCode') return this.convert(`{ (__args: JSRest<Double>) -> String in ${RT.jsFromCharCode}(codes: __args.storage) }`, '(JSRest<Double>) throws -> String', this.typeOf(e));
+			if (libFn === 'typedArrayFrom') return this.convert(`{ (__v: Any?) throws -> JS${target.text} in try JS${target.text}.from(__v) }`, `(Any?) throws -> JS${target.text}`, this.typeOf(e));
+			if (libFn === 'isArray') return this.convert(`{ (__v: Any?) -> Bool in JSArray<Any?>.isArray(__v) }`, '(Any?) throws -> Bool', this.typeOf(e));
+			if (libFn === 'numberCheck') {
+				const test = name === 'isInteger' ? `${RT.jsIsInteger}($0)` : name === 'isSafeInteger' ? `${RT.jsIsSafeInteger}($0)` : `$0.${name}`;
+				return this.convert(`{ (__v: Any?) -> Bool in ((__v as? Double).map { ${test} } ?? false) }`, '(Any?) throws -> Bool', this.typeOf(e));
+			}
 			if (this.isAugmentedLibMember(e)) return '(nil as Any?)';
 			throw this.error(e, `${target.text}.${name}`, name === 'prototype' ? 'builtin-prototype' : this.checker.getSymbolAtLocation(e.name)?.flags! & ts.SymbolFlags.Method ? 'function-value' : 'library-member');
 		}

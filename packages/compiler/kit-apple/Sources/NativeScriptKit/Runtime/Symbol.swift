@@ -37,6 +37,8 @@ public final class JSSymbol: Hashable, CustomStringConvertible {
     public static let toPrimitive = JSSymbol("Symbol.toPrimitive")
     public static let toStringTag = JSSymbol("Symbol.toStringTag")
     public static let hasInstance = JSSymbol("Symbol.hasInstance")
+    public static let dispose = JSSymbol("Symbol.dispose")
+    public static let asyncDispose = JSSymbol("Symbol.asyncDispose")
 
     /// The symbol a property key stands for.
     public static func of(key: String) -> JSSymbol? {

@@ -3,7 +3,7 @@ import ts from 'typescript';
 import { balanced, functionParts, hasTopLevelArrow, isFunctionType, isOptional, splitTopLevel, swiftString, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { accessedDeclaration, evolvingElementContext, isSelf } from '../semantics/lang.ts';
-import { isWriteTarget, notIterable } from '../semantics/ast.ts';
+import { hasModifier, isWriteTarget, notIterable } from '../semantics/ast.ts';
 import { rethrowUnlessRefused } from '../semantics/refusals.ts';
 import { isUntyped, spelledType } from '../semantics/types.ts';
 
@@ -159,6 +159,11 @@ export const lenientMethods = {
 		if (ts.isReturnStatement(p)) {
 			const fn = ts.findAncestor(p, ts.isFunctionLike);
 			if (!fn || !(ts.isFunctionDeclaration(fn) || ((ts.isMethodDeclaration(fn) || ts.isGetAccessorDeclaration(fn)) && !ts.isObjectLiteralExpression(fn.parent)))) return false;
+			if (hasModifier(fn, ts.SyntaxKind.AsyncKeyword)) {
+				const result = this.returnTypeOf(fn).replace(/[?!]$/, '');
+				const inner = result.startsWith('JSPromise<') && result.endsWith('>') ? result.slice(10, -1) : result;
+				return isOptional(inner) || isUntyped(spelledType(inner));
+			}
 			if (!this.inNativeClass(fn)) return true;
 			// A native class's own getter is optional as lenient code's are; a native member's or own method's result is as declared.
 			if (ts.isGetAccessorDeclaration(fn)) {

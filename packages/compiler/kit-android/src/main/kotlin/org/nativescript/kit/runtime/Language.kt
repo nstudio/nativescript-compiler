@@ -48,6 +48,8 @@ class JSSymbol(val jsDescription: String?) {
         val toPrimitive = JSSymbol("Symbol.toPrimitive")
         val toStringTag = JSSymbol("Symbol.toStringTag")
         val hasInstance = JSSymbol("Symbol.hasInstance")
+        val dispose = JSSymbol("Symbol.dispose")
+        val asyncDispose = JSSymbol("Symbol.asyncDispose")
 
         /** The symbol a property key stands for. */
         fun of(key: String): JSSymbol? = if (jsIsSymbolKey(key)) byKey[key]?.get() else null

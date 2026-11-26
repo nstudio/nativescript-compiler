@@ -8,9 +8,12 @@ import Security
 /// `DOMException`: an error the web's APIs throw, told apart by its name.
 public final class JSDOMException: JSError {
     nonisolated deinit {}
-    public init(_ message: String, name: String) {
+    public init(_ message: String = "", name: String = "Error") {
         super.init(message)
         self.name = name
+    }
+    public convenience init(_ message: String, _ name: String) {
+        self.init(message, name: name)
     }
 }
 

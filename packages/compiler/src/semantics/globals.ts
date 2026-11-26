@@ -23,7 +23,7 @@ export function errorArguments(name: string, args: readonly ts.Expression[]): { 
 }
 
 /** WinterTC's web classes as NativeScript's globals declare them: the runtime's class of each name with a `JS` prefix. */
-const WEB_CLASSES = ['TextEncoder', 'TextDecoder', 'Crypto', 'SubtleCrypto', 'CryptoKey', 'CryptoKeyPair', 'KeyAlgorithm'];
+const WEB_CLASSES = ['TextEncoder', 'TextDecoder', 'Crypto', 'SubtleCrypto', 'CryptoKey', 'CryptoKeyPair', 'KeyAlgorithm', 'DOMException'];
 /** The worker API's classes, web classes of a kit that runs workers. */
 const WORKER_CLASSES = ['Worker', 'MessageEvent', 'ErrorEvent', 'URL'];
 
@@ -32,8 +32,26 @@ export function isWebClass(ledger: Ledger, name: string): boolean {
 	return WEB_CLASSES.includes(name) || (ledger.workerGlobals && WORKER_CLASSES.includes(name));
 }
 
-/** The web's option and algorithm dictionaries, which script writes as object literals and the runtime reads by key. */
-export const WEB_DICTIONARIES: readonly string[] = ['TextDecoderOptions', 'Algorithm', 'HmacKeyGenParams', 'RsaKeyGenParams', 'RsaHashedKeyGenParams', 'RsaOaepParams'];
+/** The web's option and algorithm dictionaries, plus global-object web interfaces read by key. */
+export const WEB_DICTIONARIES: readonly string[] = ['TextDecoderOptions', 'Algorithm', 'HmacKeyGenParams', 'RsaKeyGenParams', 'RsaHashedKeyGenParams', 'RsaOaepParams', 'Performance', 'Storage'];
+
+/** Globals declared in `/__shims__/globals.d.ts` whose runtime values live on `jsGlobalThis`. */
+export const SHIM_GLOBAL_OBJECT_VARS: ReadonlySet<string> = new Set(['performance', 'localStorage', 'sessionStorage']);
+
+/** Standard ES library globals the compiled runtime intentionally omits (`typeof X` is `"undefined"`). */
+export const UNSUPPORTED_LIB_GLOBALS: ReadonlySet<string> = new Set(['Proxy', 'Reflect', 'eval', 'Function', 'FinalizationRegistry', 'SharedArrayBuffer', 'Atomics']);
+
+/** Library constants whose runtime spelling is identical in both Swift and Kotlin kits. */
+export const SHARED_LIB_CONSTANTS: Readonly<Record<string, string>> = {
+	'Symbol.iterator': 'JSSymbol.iterator',
+	'Symbol.asyncIterator': 'JSSymbol.asyncIterator',
+	'Symbol.toPrimitive': 'JSSymbol.toPrimitive',
+	'Symbol.toStringTag': 'JSSymbol.toStringTag',
+	'Symbol.hasInstance': 'JSSymbol.hasInstance',
+	'Symbol.dispose': 'JSSymbol.dispose',
+	'Symbol.asyncDispose': 'JSSymbol.asyncDispose',
+	'Object.prototype': 'JSPrototypes.objectPrototype',
+};
 
 const LIB_GLOBALS = new Set(['Math', 'JSON', 'Object', 'Array', 'Number', 'Promise', 'console', 'String', 'Boolean', 'Map', 'Set', 'Date', 'WeakRef', 'Symbol', 'WeakMap', 'WeakSet', 'BigInt']);
 

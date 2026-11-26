@@ -80,7 +80,52 @@ export function preflight(checker: ts.TypeChecker, files: readonly ts.SourceFile
 	};
 	files.forEach(collectAssigned);
 
+	/** Static truth of a feature-detection test on an unsupported lib global (`typeof FinalizationRegistry === 'function'` -> false). */
+	const staticUnsupportedTest = (e: ts.Expression): boolean | undefined => {
+		const x = ts.skipOuterExpressions(e, ts.OuterExpressionKinds.Parentheses);
+		const K = ts.SyntaxKind;
+		if (ts.isPrefixUnaryExpression(x) && x.operator === K.ExclamationToken) {
+			const inner = staticUnsupportedTest(x.operand);
+			return inner === undefined ? undefined : !inner;
+		}
+		if (!ts.isBinaryExpression(x)) return undefined;
+		const op = x.operatorToken.kind;
+		if (op === K.AmpersandAmpersandToken || op === K.BarBarToken) {
+			const l = staticUnsupportedTest(x.left);
+			if (l === (op === K.BarBarToken)) return l;
+			const r = staticUnsupportedTest(x.right);
+			if (r === (op === K.BarBarToken)) return r;
+			return l !== undefined ? r : undefined;
+		}
+		const eq = op === K.EqualsEqualsEqualsToken || op === K.EqualsEqualsToken;
+		const neq = op === K.ExclamationEqualsEqualsToken || op === K.ExclamationEqualsToken;
+		if (!eq && !neq) return undefined;
+		const [t, lit] = ts.isTypeOfExpression(x.left) && ts.isStringLiteralLike(x.right) ? [x.left, x.right] : ts.isTypeOfExpression(x.right) && ts.isStringLiteralLike(x.left) ? [x.right, x.left] : [null, null];
+		if (!t || !lit || !ts.isIdentifier(t.expression) || !UNSUPPORTED_GLOBALS[t.expression.text]) return undefined;
+		const decls = checker.getSymbolAtLocation(t.expression)?.declarations ?? [];
+		if (!decls.length || !decls.every((d) => isLibFile(d.getSourceFile().fileName))) return undefined;
+		const same = lit.text === 'undefined';
+		return eq ? same : !same;
+	};
+
 	const visit = (n: ts.Node): void => {
+		if (ts.isConditionalExpression(n)) {
+			const decided = staticUnsupportedTest(n.condition);
+			if (decided !== undefined) {
+				visit(decided ? n.whenTrue : n.whenFalse);
+				return;
+			}
+		} else if (ts.isIfStatement(n)) {
+			const decided = staticUnsupportedTest(n.expression);
+			if (decided !== undefined) {
+				if (decided) visit(n.thenStatement);
+				else if (n.elseStatement) visit(n.elseStatement);
+				return;
+			}
+		} else if (ts.isBinaryExpression(n) && (n.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken || n.operatorToken.kind === ts.SyntaxKind.BarBarToken)) {
+			const decided = staticUnsupportedTest(n.left);
+			if (decided === (n.operatorToken.kind === ts.SyntaxKind.BarBarToken)) return;
+		}
 		if (n.kind === ts.SyntaxKind.WithStatement) {
 			report(n, '`with`', 'with');
 		} else if (ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword) {
@@ -102,7 +147,8 @@ export function preflight(checker: ts.TypeChecker, files: readonly ts.SourceFile
 			const decls = sym?.declarations ?? [];
 			const global = UNSUPPORTED_GLOBALS[n.text];
 			const functionSupported = n.text === 'Function' && ((ts.isPropertyAccessExpression(n.parent) && n.parent.expression === n && n.parent.name.text === 'prototype') || (ts.isBinaryExpression(n.parent) && n.parent.operatorToken.kind === ts.SyntaxKind.InstanceOfKeyword && n.parent.right === n));
-			if (global && !functionSupported && decls.length && decls.every((d) => isLibFile(d.getSourceFile().fileName))) {
+			const typeofProbe = ts.isTypeOfExpression(n.parent) && n.parent.expression === n;
+			if (global && !functionSupported && !typeofProbe && decls.length && decls.every((d) => isLibFile(d.getSourceFile().fileName))) {
 				report(n, n.text === 'eval' || n.text === 'Function' ? `\`${n.text}\`` : `\`${n.text}\` (not provided by the compiled runtime)`, global);
 			} else if (DEFINE_LIKE.test(n.text) && decls.length && !assignedGlobals.has(n.text) && decls.every((d) => isAmbientAppVariable(d))) {
 				report(n, `${n.text}, declared but never given a value`, 'undefined-constant', `if your bundler defines ${n.text} (Vite \`define\`, webpack DefinePlugin), the compiled build reads the same config: check the name there; otherwise assign globalThis.${n.text} before it is read`);

@@ -34,6 +34,13 @@ export const assignmentMethods = {
 				const member = this.untypedMember(e.operand);
 				const step = e.operator === K.PlusPlusToken ? '+' : '-';
 				if (member) return `${RT.jsToNumber}(${this.untypedUpdate(member, `${RT.jsToNumber}(__old) ${step} 1`, false)})`;
+				if (ts.isIdentifier(e.operand)) {
+					const top = this.resolve(e.operand)?.valueDeclaration;
+					if (top && ts.isVariableDeclaration(top) && this.facts.tdzBindings().has(top) && !(top.parent.flags & ts.NodeFlags.Const)) {
+						const raw = (this.globalAlias(e.operand) ?? this.refName(e.operand)).replace(/`/g, '');
+						return this.marks.ownTried(`{ () throws -> Double in let __next = try __tdz_get_${raw}() ${step} 1; try __tdz_set_${raw}(__next); return __next }()`);
+					}
+				}
 				return this.optionalNumberUpdate(e) ?? `${step === '+' ? RT.jsPreIncrement : RT.jsPreDecrement}(&${this.lvalue(e.operand)})`;
 			}
 		}

@@ -60,12 +60,18 @@ export function collectDependencies(projectRoot: string): Record<string, string>
 	return {};
 }
 
-/** The folder of a package installed for the app: in its node_modules or a parent folder's. */
+/** The folder of a package installed for the app: in its node_modules, a `file:` dependency, or a parent folder's. */
 export function installedPackageDir(projectRoot: string, depName: string): string | undefined {
 	let dir = resolve(projectRoot);
 	for (let depth = 0; depth < 5; depth++) {
 		const candidate = join(dir, 'node_modules', depName);
 		if (readPackageJson(candidate)) return candidate;
+		const pkg = readPackageJson(dir);
+		const spec = (pkg?.dependencies as Record<string, unknown> | undefined)?.[depName] ?? (pkg?.devDependencies as Record<string, unknown> | undefined)?.[depName];
+		if (typeof spec === 'string' && spec.startsWith('file:')) {
+			const local = resolve(dir, spec.slice(5));
+			if (readPackageJson(local)) return local;
+		}
 		const parent = dirname(dir);
 		if (parent === dir) break;
 		dir = parent;

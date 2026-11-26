@@ -5,7 +5,7 @@ import { isLibGlobal } from '../semantics/globals.ts';
 import { OBJECT_TO_STRING, functionTypeParts, ident, isFunctionType, isNullable, kotlinString, optionalType, splitTopLevel, substituteTypes, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { KOTLIN_NATIVE_TYPES } from './syntax.ts';
-import { ambientAddedMemberOf, augmentedPropertyRead, mergedInterfaceMemberOf, runtimeTypeName, tokenClassBase, undeclaredMemberOf, isArguments } from '../semantics/lang.ts';
+import { ambientAddedMemberOf, augmentedPropertyRead, isDomGlobalDeclaration, mergedInterfaceMemberOf, runtimeTypeName, tokenClassBase, undeclaredMemberOf, isArguments } from '../semantics/lang.ts';
 import { THREAD_ANNOTATIONS } from '../semantics/threading.ts';
 import { boundNames, hasModifier, isLibDeclaration, moduleBlockVars, withoutDefault } from '../semantics/ast.ts';
 import { isCoreDeclaration, isShimDeclaration } from '../program/core-facts.ts';
@@ -443,7 +443,7 @@ export const overridesMethods = {
 		if (!decls.length) return this.pluginFiles.has(e.getSourceFile().fileName) && !isArguments(e, this.checker) && !['undefined', 'NaN', 'Infinity'].includes(e.text);
 		// The animation-frame functions held as values: kit-android's runtime has none.
 		if (['requestAnimationFrame', 'cancelAnimationFrame'].includes(e.text) && decls.every((d) => d.getSourceFile().fileName === '/__shims__/globals.d.ts') && !(ts.isCallExpression(e.parent) && e.parent.expression === e)) return true;
-		return decls.every((d) => /[\\/]lib\.(dom|webworker)[\w.]*\.d\.ts$/.test(d.getSourceFile().fileName) && (ts.isVariableDeclaration(d) || ts.isFunctionDeclaration(d)));
+		return isDomGlobalDeclaration(e.text, decls);
 	},
 
 	isJavaPackage(this: Translator, sym: ts.Symbol | undefined): boolean {
@@ -522,8 +522,9 @@ export const overridesMethods = {
 		if (decl && ts.isPropertySignature(decl) && ts.isInterfaceDeclaration(decl.parent) && !decl.getSourceFile().isDeclarationFile) {
 			return (decl.parent.heritageClauses ?? []).some((h) => h.types.some((x) => !!this.native?.type(this.checker.getTypeAtLocation(x))));
 		}
-		if (!decl || !(ts.isPropertySignature(decl) && ts.isTypeLiteralNode(decl.parent))) return false;
+		if (!decl || !ts.isPropertySignature(decl) || !(ts.isTypeLiteralNode(decl.parent) || ts.isInterfaceDeclaration(decl.parent))) return false;
 		const target = this.checker.getNonNullableType(this.checker.getTypeAtLocation(e.expression));
+		if (target.isIntersection() && !decl.getSourceFile().isDeclarationFile && target.types.some((t) => !!(t.getSymbol()?.flags! & ts.SymbolFlags.Class) && !t.getProperty(e.name.text))) return true;
 		return [target, ...(target.isIntersection() ? target.types : [])].some((t) => !!this.native?.type(t));
 	},
 

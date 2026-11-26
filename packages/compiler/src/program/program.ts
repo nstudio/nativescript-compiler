@@ -1,11 +1,12 @@
 import ts from 'typescript';
 import { existsSync, readFileSync } from 'node:fs';
-import { basename, dirname, isAbsolute, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, resolve, sep } from 'node:path';
 import { foldPlatform, type Platform } from './platform.ts';
 import { desugarConstructorFactories } from './constructor-factories.ts';
 import { NATIVE_CONTROLLERS, NATIVE_VIEWS, nativeViewOf } from './core-facts.ts';
 import type { PluginSources } from '../plugins/source.ts';
 import { packageOf, runtimeFile } from '../plugins/resolve.ts';
+import { localFilePackages } from '../targets/resources.ts';
 import { NATIVE_VIEWS_ANDROID } from '../kotlin/core-api.ts';
 import { BuildContext } from './build-context.ts';
 import { compiledEnv } from './env.ts';
@@ -96,6 +97,32 @@ const GLOBALS = `
     randomUUID(): \`\${string}-\${string}-\${string}-\${string}-\${string}\`;
   }
   declare var crypto: Crypto;
+  interface DOMException extends Error {
+    readonly code: number;
+    readonly message: string;
+    readonly name: string;
+  }
+  declare var DOMException: { prototype: DOMException; new (message?: string, name?: string): DOMException };
+  interface Performance {
+    now(): number;
+    readonly timeOrigin: number;
+  }
+  declare var performance: Performance;
+  interface Storage {
+    readonly length: number;
+    clear(): void;
+    getItem(key: string): string | null;
+    key(index: number): string | null;
+    removeItem(key: string): void;
+    setItem(key: string, value: string): void;
+    [name: string]: any;
+  }
+  declare var localStorage: Storage;
+  declare var sessionStorage: Storage;
+  interface SymbolConstructor {
+    readonly dispose: unique symbol;
+    readonly asyncDispose: unique symbol;
+  }
 `;
 
 /**
@@ -182,6 +209,7 @@ export function createProgram(roots: string[], virtual: Map<string, string>, pla
 		skipLibCheck: true,
 		experimentalDecorators: true,
 		noEmit: true,
+		allowJs: true,
 		allowImportingTsExtensions: true,
 		jsx: ts.JsxEmit.Preserve,
 		// Each file is a module, as the bundler makes it: a file without imports does not merge into the platform's globals (`double`, `long`).
@@ -216,9 +244,11 @@ export function createProgram(roots: string[], virtual: Map<string, string>, pla
 	host.getSourceFile = (name, version, onError) => {
 		const text = files.get(name) ?? (isSource(name) && existsSync(name) ? readFileSync(name, 'utf8') : appTypings.has(name) ? nativeReferences(readFileSync(name, 'utf8'), name) : undefined);
 		if (text === undefined) {
-			// A package's own TypeScript source.
-			if (!/\.tsx?$/.test(name) || name.endsWith('.d.ts') || !existsSync(name)) return readLib(name, version, onError);
-			return ts.createSourceFile(name, desugarConstructorFactories(declaredExports(name, readFileSync(name, 'utf8')), name), version, true);
+			// A package's own TypeScript (or pure-JS ESM) source.
+			if (!/\.(tsx?|m?js)$/.test(name) || name.endsWith('.d.ts') || !existsSync(name)) return readLib(name, version, onError);
+			const raw = readFileSync(name, 'utf8');
+			if (/\.m?js$/.test(name)) return ts.createSourceFile(name, raw, version, true, ts.ScriptKind.JS);
+			return ts.createSourceFile(name, desugarConstructorFactories(declaredExports(name, raw), name), version, true);
 		}
 		const code = /\.tsx?$/.test(name) && !name.endsWith('.d.ts') ? desugarConstructorFactories(declaredExports(name, text), name) : text;
 		return ts.createSourceFile(name, isSource(name) ? foldPlatform(code, name, platform, modules, build.defines) : code, version, true);
@@ -244,10 +274,13 @@ export function createProgram(roots: string[], virtual: Map<string, string>, pla
 			if (r.resolvedModule) resolutions.set(`${containing}\0${lit.text}`, r.resolvedModule.resolvedFileName);
 			return r;
 		});
+	const appRoot = plugins?.options?.app ? resolve(plugins.options.app) : null;
+	const localPackages = appRoot ? localFilePackages(appRoot) : new Map<string, string>();
 	const resolveLiteral = (lit: ts.StringLiteralLike, containing: string): ts.ResolvedModuleWithFailedLookupLocations => {
 		{
 			// The app's own tsconfig `paths` (`~/app/x`), as its bundler resolves them: plugins' sources have their own.
-			const m = (isApp(containing) ? aliased(lit.text) : undefined) ?? lit.text;
+			const aliasTarget = isApp(containing) ? aliased(lit.text) : undefined;
+			const m = aliasTarget ?? lit.text;
 			const substitution = rules.substitutions && Object.hasOwn(rules.substitutions, m) && !replacements[m] ? rules.substitutions[m] : undefined;
 			if (substitution && (plugins || !substitution.sourcesOnly)) {
 				pluginFiles.add(substitution.file);
@@ -263,18 +296,23 @@ export function createProgram(roots: string[], virtual: Map<string, string>, pla
 			// The build's own glue imports app modules by absolute path (`__elements.release.ts`).
 			if (m.startsWith('.') || (isAbsolute(m) && !m.startsWith('/__shims__/'))) {
 				const base = resolve(dirname(containing), m);
+				const stem = base.replace(/\.m?js$/, '');
 				// A platform's own file first, as NativeScript's bundler resolves `./x` to `x.ios.ts`.
 				// A platform file importing its own module's name (`import type { HingeListener } from './hinge-tracker'` in
 				// hinge-tracker.ios.ts) means the module's declarations: `x.d.ts`, else the platforms' shared `x.ts`.
 				const typeOnly = (ts.isImportDeclaration(lit.parent) && !!lit.parent.importClause?.isTypeOnly) || (ts.isExportDeclaration(lit.parent) && lit.parent.isTypeOnly);
 				// A type-only import is TypeScript's, which reads `x.d.ts` beside the platforms' files; only the bundler picks `x.ios.ts`.
-				const own = containing === `${base}.${platform}.ts` || (typeOnly && existsSync(base + '.d.ts'));
-				for (const candidate of own ? [base + '.d.ts', base + '.ts'] : [`${base}.${platform}.ts`, base + '.ts', base + '.tsx', `${base}/index.${platform}.ts`, base + '/index.ts']) {
+				const own = containing === `${stem}.${platform}.ts` || (typeOnly && existsSync(stem + '.d.ts'));
+				const direct = /\.(tsx?|d\.ts)$/.test(base) ? [base] : [];
+				const jsFallback = pluginFiles.has(containing) ? [...(/\.m?js$/.test(base) ? [base] : []), stem + '.js', stem + '.mjs', stem + '/index.js', stem + '/index.mjs'] : [];
+				for (const candidate of own ? [...direct, stem + '.d.ts', stem + '.ts'] : [...direct, `${stem}.${platform}.ts`, stem + '.ts', stem + '.tsx', `${stem}/index.${platform}.ts`, stem + '/index.ts', ...jsFallback]) {
 					if (files.has(candidate) || existsSync(candidate)) {
 						if (candidate.endsWith('.d.ts')) return { resolvedModule: { resolvedFileName: candidate, extension: ts.Extension.Dts } };
-						// A plugin's own modules are compiled with it, and a substitution's file however it is imported.
-						if (pluginFiles.has(containing) || substituted.has(candidate)) pluginFiles.add(candidate);
-						return { resolvedModule: { resolvedFileName: candidate, extension: candidate.endsWith('.tsx') ? ts.Extension.Tsx : ts.Extension.Ts } };
+						// A plugin's own modules, a substitution's file, or a monorepo workspace library outside the app folder
+						// are compiled through closed-world reachability so only reached declarations emit native code.
+						if (pluginFiles.has(containing) || substituted.has(candidate) || (aliasTarget && appRoot && !candidate.startsWith(appRoot + sep))) pluginFiles.add(candidate);
+						const extension = candidate.endsWith('.tsx') ? ts.Extension.Tsx : candidate.endsWith('.mjs') ? ts.Extension.Mjs : candidate.endsWith('.js') ? ts.Extension.Js : ts.Extension.Ts;
+						return { resolvedModule: { resolvedFileName: candidate, extension } };
 					}
 				}
 			}
@@ -289,7 +327,7 @@ export function createProgram(roots: string[], virtual: Map<string, string>, pla
 			// A plugin's augmentation of another's module augments the module the program compiles: that package's source.
 			const augments = ts.isModuleDeclaration(lit.parent) && lit.parent.name === lit && !!plugins?.all().some((p) => containing.startsWith(p.root + '/'));
 			if (plugins && (isSource(containing) || pluginFiles.has(containing) || augments || containing.startsWith('/__shims__/')) && !m.startsWith('.') && !m.startsWith('/') && !notPlugin(packageOf(m)) && !typeOnly) {
-				const js = runtimeFile(m, modules, platform);
+				const js = runtimeFile(m, modules, platform, localPackages);
 				if (js) {
 					plugins.get(js.packageDir);
 					const source = plugins.sourceOf(js.file);
@@ -303,7 +341,19 @@ export function createProgram(roots: string[], virtual: Map<string, string>, pla
 						for (const t of plugins.get(js.packageDir).typings) extraRoots.add(t);
 						const beside = augmentations(source);
 						if (beside) extraRoots.add(beside);
-						return { resolvedModule: { resolvedFileName: source, extension: source.endsWith('.tsx') ? ts.Extension.Tsx : ts.Extension.Ts } };
+						const extension = source.endsWith('.tsx') ? ts.Extension.Tsx : source.endsWith('.mjs') ? ts.Extension.Mjs : source.endsWith('.js') ? ts.Extension.Js : ts.Extension.Ts;
+						return { resolvedModule: { resolvedFileName: source, extension } };
+					}
+				}
+			}
+			// Type-only imports of local `file:` packages (outside node_modules): resolve to the package's typings.
+			if (!m.startsWith('.') && !m.startsWith('/')) {
+				const localDir = localPackages.get(packageOf(m));
+				if (localDir) {
+					const deep = m.slice(packageOf(m).length).replace(/^\//, '');
+					const target = deep ? resolve(localDir, deep) : resolve(localDir, 'index');
+					for (const dts of [target + '.d.ts', resolve(target, 'index.d.ts')]) {
+						if (existsSync(dts)) return { resolvedModule: { resolvedFileName: dts, extension: ts.Extension.Dts } };
 					}
 				}
 			}
@@ -337,7 +387,7 @@ export function createProgram(roots: string[], virtual: Map<string, string>, pla
 		program = ts.createProgram(rootNames, options, host, program);
 	}
 	// kit-android does not compile core's fetch and XMLHttpRequest yet.
-	const webGlobals = platform === 'ios' ? coreGlobalImports(program, isSource, modules) : new Map<string, string>();
+	const webGlobals = platform === 'ios' ? coreGlobalImports(program, (name) => isSource(name) || pluginFiles.has(name), modules) : new Map<string, string>();
 	if (webGlobals.size) {
 		for (const [name, text] of webGlobals) files.set(name, text);
 		program = ts.createProgram(rootNames, options, host, program);
@@ -491,8 +541,8 @@ function coreGlobalImports(program: ts.Program, isApp: (name: string) => boolean
 		if ([K.PropertyAssignment, K.PropertyDeclaration, K.PropertySignature, K.MethodDeclaration, K.MethodSignature, K.GetAccessor, K.SetAccessor, K.EnumMember, K.JsxAttribute].includes(p.kind)) return (p as ts.NamedDeclaration).name === n;
 		return [K.ImportSpecifier, K.ExportSpecifier, K.ImportClause, K.NamespaceImport, K.LabeledStatement, K.BreakStatement, K.ContinueStatement].includes(p.kind);
 	};
-	// Undeclared (the DOM's names, which the program's library leaves out), or declared in the global scope by a declaration file.
-	const global = (s: ts.Symbol | undefined) => !s || (!(s.flags & ts.SymbolFlags.Alias) && !(s as { parent?: ts.Symbol }).parent && !!s.declarations?.length && s.declarations.every((d) => d.getSourceFile().isDeclarationFile));
+	// Undeclared (the DOM's names, which the program's library leaves out), or declared in the global scope by a declaration file (including `declare global` in `@types/node`).
+	const global = (s: ts.Symbol | undefined) => !s || (!(s.flags & ts.SymbolFlags.Alias) && (!(s as { parent?: ts.Symbol }).parent || (s as { parent?: ts.Symbol }).parent!.name === '__global') && !!s.declarations?.length && s.declarations.every((d) => d.getSourceFile().isDeclarationFile));
 	const out = new Map<string, string>();
 	for (const sf of program.getSourceFiles()) {
 		if (!isApp(sf.fileName) || !wanted.size) continue;
@@ -564,12 +614,14 @@ function nativeViewCasts(program: ts.Program, isApp: (name: string) => boolean, 
 	return out;
 }
 
+const parseTsConfig = (file: string) => ts.getParsedCommandLineOfConfigFile(file, {}, { ...ts.sys, onUnRecoverableConfigFileDiagnostic: () => {} });
+
 /** The declaration files the app's tsconfig.json includes (its `references.d.ts`, its own typings), outside node_modules. */
 export function appDeclarations(app: string): string[] {
 	const file = resolve(app, 'tsconfig.json');
 	if (!existsSync(file)) return [];
-	const parsed = ts.parseJsonConfigFileContent(ts.readConfigFile(file, ts.sys.readFile).config ?? {}, ts.sys, app);
-	return parsed.fileNames.filter((f) => f.endsWith('.d.ts') && !f.includes('/node_modules/'));
+	const parsed = parseTsConfig(file);
+	return (parsed?.fileNames ?? []).filter((f) => f.endsWith('.d.ts') && !f.includes('/node_modules/'));
 }
 
 /** Whether the app's configuration defines class fields (`useDefineForClassFields`, on from target ES2022); undefined where it has none. */
@@ -578,20 +630,19 @@ function appDefinesFields(from: string | undefined): boolean | undefined {
 	for (let dir = dirname(from); dirname(dir) !== dir; dir = dirname(dir)) {
 		const file = resolve(dir, 'tsconfig.json');
 		if (!existsSync(file)) continue;
-		const o = ts.parseJsonConfigFileContent(ts.readConfigFile(file, ts.sys.readFile).config ?? {}, ts.sys, dir).options;
+		const o = parseTsConfig(file)?.options ?? {};
 		return o.useDefineForClassFields ?? (o.target ?? ts.ScriptTarget.ES5) >= ts.ScriptTarget.ES2022;
 	}
 	return undefined;
 }
 
-/** Whether the app's tsconfig.json leaves strict checking off. */
+/** Whether the app's tsconfig.json (its `extends` followed) leaves strict checking off. */
 function appStrictness(from: string | undefined): boolean {
 	if (!from) return false;
 	for (let dir = dirname(from); dirname(dir) !== dir; dir = dirname(dir)) {
 		const file = resolve(dir, 'tsconfig.json');
 		if (!existsSync(file)) continue;
-		const config = ts.readConfigFile(file, ts.sys.readFile).config ?? {};
-		const o = config.compilerOptions ?? {};
+		const o = parseTsConfig(file)?.options ?? {};
 		return !(o.strict || o.strictNullChecks);
 	}
 	return false;

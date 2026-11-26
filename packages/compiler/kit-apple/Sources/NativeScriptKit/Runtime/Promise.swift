@@ -130,6 +130,10 @@ extension JSResolvers where T == Void {
     public func resolve() { resolve(()) }
 }
 
+extension JSResolvers where T == Any? {
+    public func resolve() { resolve(nil) }
+}
+
 /// The reactions of `then` beyond a promise's first, the fulfilled ones as `Any`: a field of a generic type
 /// (an array of `(T) -> Void`) looks up its metadata each time the promise copies or destroys it.
 final class JSPromiseReactions {

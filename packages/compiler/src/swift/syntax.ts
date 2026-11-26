@@ -8,6 +8,7 @@ import { SWIFT_RUNTIME } from '../semantics/runtime.ts';
 import { keepsIdentity, type Slot } from '../semantics/conversion.ts';
 import { ERROR_CLASS, isKit, parseNativeType, spelledType, type NativeKind, type NativeType, type Spelling } from '../semantics/types.ts';
 import { thisNodes } from '../semantics/ast.ts';
+import { dollarIdent } from '../semantics/lang.ts';
 
 const KEYWORDS = new Set(['in', 'default', 'repeat', 'where', 'func', 'var', 'let', 'struct', 'enum', 'protocol', 'extension', 'internal', 'operator', 'self', 'Self', 'Type', 'is', 'as', 'guard', 'defer', 'subscript', 'init', 'deinit', 'inout', 'associatedtype', 'fallthrough', 'super', 'true', 'false', 'nil', 'class', 'import', 'static', 'Any', 'Protocol', 'rethrows', 'throws', 'precedencegroup', 'fileprivate', 'open', 'some', 'any', 'return', 'throw', 'try', 'await', 'catch', 'if', 'else', 'for', 'while', 'switch', 'case', 'break', 'continue', 'do', 'typealias', 'private', 'public']);
 
@@ -33,6 +34,9 @@ export function convertedReader(type: string, orNil = false): string {
 }
 
 export function ident(name: string): string {
+	// Names of `$` alone (`$`, `$$`) would otherwise collapse to `_` (Swift's discard pattern) or collide with `_$`.
+	const dollar = dollarIdent(name);
+	if (dollar) return dollar;
 	// A key no identifier spells (`1`, `aria-label`) keeps its string form in jsKeys and subscripts.
 	const n = name
 		.replace(/^#/, '_p_')
@@ -384,7 +388,7 @@ export const SWIFT_SYNTAX: Omit<AsyncSyntax, 'unwrap'> = {
 	asyncBody: (cap) => [`${cap}.body {`, '}'],
 	// Undefined where the result has no undefined (a tuple, after branches that each return): reached only where the types are wrong.
 	asyncReturn: (cap, value, isPromise, result) => (value === null ? `${cap}.returnValue(${result === 'Void' ? '()' : /^\(.*\)$/.test(result) && !/->/.test(result) ? `{ fatalError("undefined for ${result}") }()` : 'nil'})` : `${cap}.${isPromise ? 'returnPromise' : 'returnValue'}(${value})`),
-	asyncError: (cap) => `${cap}.throwValue`,
+	asyncError: (cap) => `{ ${cap}.throwValue($0) }`,
 	loopRun: (iteration) => `JSAsyncLoop().run ${iteration}`,
 	undefinedValue: 'nil',
 	generatorBody: (cap, element, isAsync) => [`return ${isAsync ? 'JSAsyncGenerator' : 'JSGenerator'}<${element}> { (${cap}: ${isAsync ? 'JSAsyncGeneratorContext' : 'JSGeneratorContext'}) throws -> Void in`, '}'],

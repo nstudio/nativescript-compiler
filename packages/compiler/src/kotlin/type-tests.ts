@@ -1,6 +1,8 @@
 // Type tests as Kotlin: instanceof, typeof and truth decided statically.
 import ts from 'typescript';
-import { ERRORS } from '../semantics/globals.ts';
+import { ERRORS, UNSUPPORTED_LIB_GLOBALS } from '../semantics/globals.ts';
+import { LIB_CONSTANTS } from './library.ts';
+import { isUnsupportedLibStatic } from '../semantics/apis/statics.ts';
 import { IOS_TYPINGS, ident, isNullable, kotlinString, optionalType, typeofName, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { mergedInterfaceMemberOf, neverDefined } from '../semantics/lang.ts';
@@ -52,6 +54,7 @@ export const typeTestsMethods = {
 	libCallable(this: Translator, e: ts.Expression): boolean {
 		const decls = ts.isIdentifier(e) ? this.resolve(e)?.declarations : undefined;
 		if (!decls?.length || !decls.every((d) => /[\\/]lib\.[\w.]*\.d\.ts$/.test(d.getSourceFile().fileName))) return false;
+		if (ts.isIdentifier(e) && UNSUPPORTED_LIB_GLOBALS.has(e.text)) return false;
 		const t = this.checker.getTypeAtLocation(e);
 		return t.getConstructSignatures().length > 0 || t.getCallSignatures().length > 0;
 	},
@@ -60,9 +63,12 @@ export const typeTestsMethods = {
 	typeofConstant(this: Translator, e: ts.TypeOfExpression): string | null {
 		if (neverDefined(e.expression, this.checker)) return 'undefined';
 		const read = ts.skipOuterExpressions(e.expression, ts.OuterExpressionKinds.Parentheses);
+		// Feature-probing an unsupported static method on a built-in (`typeof (Uint8Array as any).fromBase64`): always `"undefined"`.
+		if (isUnsupportedLibStatic(this, read, (k) => !!LIB_CONSTANTS[k])) return 'undefined';
 		if (ts.isPropertyAccessExpression(read) && mergedInterfaceMemberOf(read, this.checker)) return null;
 		const decls = ts.isIdentifier(e.expression) ? this.resolve(e.expression)?.declarations : undefined;
 		if (decls?.length && decls.every((d) => IOS_TYPINGS.test(d.getSourceFile().fileName))) return 'undefined';
+		if (ts.isIdentifier(e.expression) && UNSUPPORTED_LIB_GLOBALS.has(e.expression.text) && decls?.length && decls.every((d) => /[\\/]lib\.[\w.]*\.d\.ts$/.test(d.getSourceFile().fileName))) return 'undefined';
 		if (this.namesClass(e.expression) || this.libCallable(e.expression)) return 'function';
 		const param = ts.isIdentifier(e.expression) ? this.resolve(e.expression)?.valueDeclaration : undefined;
 		if (param && ts.isParameter(param) && (this.typeTested(param) || this.untypedNarrowed(param))) return null;
@@ -144,11 +150,14 @@ export const typeTestsMethods = {
 	typeofExpr(this: Translator, e: ts.TypeOfExpression): string {
 		if (neverDefined(e.expression, this.checker)) return '"undefined"';
 		const read = ts.skipOuterExpressions(e.expression, ts.OuterExpressionKinds.Parentheses);
+		// Feature-probing an unsupported static method on a built-in (`typeof (Uint8Array as any).fromBase64`): always `"undefined"`.
+		if (isUnsupportedLibStatic(this, read, (k) => !!LIB_CONSTANTS[k])) return '"undefined"';
 		if (ts.isPropertyAccessExpression(read) && !ts.isOptionalChain(read) && mergedInterfaceMemberOf(read, this.checker)) return `${RT.jsTypeof}(${RT.jsGet}(${this.expr(read.expression)}, ${kotlinString(read.name.text)}))`;
 		if (ts.isPropertyAccessExpression(read) && this.augmentedMember(read)) return `${RT.jsTypeof}(${this.augmentedRead(read)})`;
-		// An iOS API (`typeof NSDate`): undefined on Android, without the ReferenceError reading it throws.
+		// An iOS API (`typeof NSDate`) or omitted ES global (`typeof FinalizationRegistry`): undefined without throwing.
 		const decls = ts.isIdentifier(e.expression) ? this.resolve(e.expression)?.declarations : undefined;
 		if (decls?.length && decls.every((d) => IOS_TYPINGS.test(d.getSourceFile().fileName))) return '"undefined"';
+		if (ts.isIdentifier(e.expression) && UNSUPPORTED_LIB_GLOBALS.has(e.expression.text) && decls?.length && decls.every((d) => /[\\/]lib\.[\w.]*\.d\.ts$/.test(d.getSourceFile().fileName))) return '"undefined"';
 		if (this.namesClass(e.expression) || this.libCallable(e.expression)) return '"function"';
 		// A parameter callers give other values than its type (`typeTested`): what it holds, never its declared type's.
 		const tested = ts.isIdentifier(e.expression) ? this.resolve(e.expression)?.valueDeclaration : undefined;

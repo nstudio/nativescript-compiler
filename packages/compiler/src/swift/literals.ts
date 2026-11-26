@@ -2,7 +2,7 @@
 import ts from 'typescript';
 import { functionParts, ident, identPath, initOrder, isNullish, isOptional, label, optionalType, splitTopLevel, swiftString, withoutThenables, spell, RT } from './syntax.ts';
 import type { ShapeField, Translator } from './translator.ts';
-import { assertedOperand, evolvingElementContext, intersectionAliasMembers, literalKey, openSpreadType, spreadOperand } from '../semantics/lang.ts';
+import { assertedOperand, evolvingElementContext, intersectionAliasMembers, literalKey, openSpreadType, spreadOperand, unquoted } from '../semantics/lang.ts';
 import { place } from '../semantics/placement.ts';
 import { holdsNil, literalNotes, signatureField, shapePlanOfLiteral, spelledOptional, resultShapeNamed } from '../semantics/shapes.ts';
 import { isCoreDeclaration } from '../program/core-facts.ts';
@@ -231,15 +231,16 @@ export const literalsMethods = {
 				const key = literalKey(p.name, this.checker) ?? p.name.getText();
 				const f = order.find((x) => x.name === key) as ShapeField | undefined;
 				if (!f?.accessor) throw this.error(p, 'an accessor in an object literal of this type');
+				const ak = unquoted(ident(key));
 				if (ts.isGetAccessorDeclaration(p)) {
 					if (f.accessor.throws && f.accessor.set) throw this.error(p, 'a getter that throws beside a setter');
 					const body = this.withThis(p, '__this', false, () => this.functionBody(p, f.type, this.indent));
-					given.set(`__get_${key}`, `{ (__this: ${target}) ${f.accessor.throws ? 'throws ' : ''}-> ${f.type} in${body.slice(1)}`);
+					given.set(`__get_${ak}`, `{ (__this: ${target}) ${f.accessor.throws ? 'throws ' : ''}-> ${f.type} in${body.slice(1)}`);
 				} else {
 					if (this.throwsInfo.fn(p)) throw this.error(p, 'a setter that throws');
 					const v = p.parameters[0].name as ts.Identifier;
 					const body = this.withThis(p, '__this', false, () => this.functionBody(p, 'Void', this.indent));
-					given.set(`__set_${key}`, `{ (__this: ${target}, ${ident(v.text)}: ${f.accessor.value}) -> Void in${body.slice(1)}`);
+					given.set(`__set_${ak}`, `{ (__this: ${target}, ${ident(v.text)}: ${f.accessor.value}) -> Void in${body.slice(1)}`);
 				}
 			} else if (ts.isShorthandPropertyAssignment(p)) {
 				noteKey(p, p.name.text, p.name, () => '');
@@ -338,7 +339,8 @@ export const literalsMethods = {
 		const args = initOrder(order as ShapeField[])
 			.flatMap((f) => {
 				const a = (f as ShapeField).accessor;
-				if (a) return [...(a.get ? [`__get_${f.name}: ${given.get(`__get_${f.name}`)}`] : []), ...(a.set ? [`__set_${f.name}: ${given.get(`__set_${f.name}`)}`] : [])];
+				const ak = unquoted(ident(f.name));
+				if (a) return [...(a.get ? [`__get_${ak}: ${given.get(`__get_${ak}`)}`] : []), ...(a.set ? [`__set_${ak}: ${given.get(`__set_${ak}`)}`] : [])];
 				return given.has(f.name) ? [`${label((f as { member?: string }).member ?? f.name)}: ${given.get(f.name)}`] : [];
 			})
 			.join(', ');

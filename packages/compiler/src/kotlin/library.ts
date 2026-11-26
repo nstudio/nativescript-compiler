@@ -1,6 +1,7 @@
 // JavaScript's library as the Kotlin backend names it: the runtime's classes and functions for the library's globals,
 // constants and functions, and the core classes kit-android names otherwise.
 import type { MathOp } from '../semantics/apis/math.ts';
+import { SHARED_LIB_CONSTANTS } from '../semantics/globals.ts';
 import { RT } from './syntax.ts';
 
 // No prototype: a name like `toString` is no error class.
@@ -64,10 +65,5 @@ export const LIB_CONSTANTS: Record<string, string> = {
 	'Number.POSITIVE_INFINITY': 'Double.POSITIVE_INFINITY',
 	'Number.NEGATIVE_INFINITY': 'Double.NEGATIVE_INFINITY',
 	'Number.NaN': 'Double.NaN',
-	'Symbol.iterator': 'JSSymbol.iterator',
-	'Symbol.asyncIterator': 'JSSymbol.asyncIterator',
-	'Symbol.toPrimitive': 'JSSymbol.toPrimitive',
-	'Symbol.toStringTag': 'JSSymbol.toStringTag',
-	'Symbol.hasInstance': 'JSSymbol.hasInstance',
-	'Object.prototype': 'JSPrototypes.objectPrototype',
+	...SHARED_LIB_CONSTANTS,
 };

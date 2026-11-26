@@ -4,6 +4,8 @@ import ts from 'typescript';
 import { propSignal } from '../semantics/signals.ts';
 import { LIB_CONSTANTS, MATH } from './library.ts';
 import { mathFunctionValue } from '../semantics/apis/math.ts';
+import { CONSOLE } from '../semantics/apis/console.ts';
+import { libFunctionValueKind } from '../semantics/apis/statics.ts';
 import { ERRORS, isLibGlobal } from '../semantics/globals.ts';
 import { spell, ident, isCompared, isNullable, isThisParameter, kotlinString, numberLiteral, optionalType, testsMissing, scriptPrimitive, RT, assertedReader } from './syntax.ts';
 import type { Translator } from './translator.ts';
@@ -82,6 +84,18 @@ export const accessMethods = {
 			// `const round = Math.round`: the function as a value.
 			const mathValue = target.text === 'Math' ? mathFunctionValue(name) : null;
 			if (mathValue) return `{ __x: Double -> ${MATH[mathValue]}(__x) }`;
+			const libFn = libFunctionValueKind(target.text, name);
+			if (libFn === 'console') {
+				const fn = RT[CONSOLE[name].op];
+				return this.convert(`{ __args: JSArray<Any?> -> ${fn}(*__args.storage.toTypedArray()) }`, '(JSArray<Any?>) -> Unit', this.typeOf(e));
+			}
+			if (libFn === 'fromCharCode') return this.convert(`{ __args: JSArray<Double> -> ${RT.jsFromCharCode}(*__args.storage.toDoubleArray()) }`, '(JSArray<Double>) -> String', this.typeOf(e));
+			if (libFn === 'typedArrayFrom') return this.convert(`{ __v: Any? -> JS${target.text}.from(__v) }`, `(Any?) -> JS${target.text}`, this.typeOf(e));
+			if (libFn === 'isArray') return this.convert(`{ __v: Any? -> JSArray.isArray(__v) }`, '(Any?) -> Boolean', this.typeOf(e));
+			if (libFn === 'numberCheck') {
+				const test = name === 'isInteger' ? `${RT.jsIsInteger}(it)` : name === 'isSafeInteger' ? `${RT.jsIsSafeInteger}(it)` : name === 'isFinite' ? `${RT.jsIsFinite}(it)` : 'it.isNaN()';
+				return this.convert(`{ __v: Any? -> ((__v as? Double)?.let { ${test} } ?: false) }`, '(Any?) -> Boolean', this.typeOf(e));
+			}
 			if (this.isAugmentedLibMember(e)) return '(null as Any?)';
 			throw this.error(e, `${target.text}.${name}`, name === 'prototype' ? 'builtin-prototype' : this.checker.getSymbolAtLocation(e.name)?.flags! & ts.SymbolFlags.Method ? 'function-value' : 'library-member');
 		}

@@ -57,6 +57,11 @@ export function reachability(program: ts.Program, resolved: (containing: string,
 	for (const sf of program.getSourceFiles()) {
 		if (sf.isDeclarationFile || !(isPlugin(sf) || appFiles.includes(sf.fileName))) continue;
 		const visit = (n: ts.Node) => {
+			if (ts.isShorthandPropertyAssignment(n)) {
+				const local = checker.getShorthandAssignmentValueSymbol(n);
+				const s = local && local.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(local) : local;
+				if (s && s.valueDeclaration && ts.isFunctionDeclaration(s.valueDeclaration)) escaping.add(s);
+			}
 			if (ts.isIdentifier(n) && !isDeclarationName(n)) {
 				const s = resolveSym(n);
 				const decl = s?.valueDeclaration;
@@ -296,6 +301,16 @@ export function reachability(program: ts.Program, resolved: (containing: string,
 		if (ts.isPropertyAccessExpression(n) && ts.isIdentifier(n.expression) && (resolveSym(n.expression)?.flags ?? 0) & ts.SymbolFlags.ValueModule) {
 			const member = resolveSym(n.name);
 			if (member && isValue(member)) reachDecl(member, n.name);
+		}
+		// Shorthand object properties (`{ doNothing, insertFirst }`): getSymbolAtLocation returns the property symbol, not the referenced value.
+		if (ts.isShorthandPropertyAssignment(n)) {
+			const local = checker.getShorthandAssignmentValueSymbol(n);
+			const sym = local && local.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(local) : local;
+			if (sym && isValue(sym)) {
+				reachDecl(sym, n.name);
+				const importDecl = local?.declarations?.[0] && ts.findAncestor(local.declarations[0], ts.isImportDeclaration);
+				if (importDecl) loadImport(importDecl, importDecl.getSourceFile());
+			}
 		}
 		if (ts.isIdentifier(n) && !isDeclarationName(n)) {
 			const sym = resolveSym(n);
