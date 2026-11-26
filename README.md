@@ -24,10 +24,10 @@ Official nStudio NativeScript CLI plugin (`ns compile`) and framework adapters t
 
 ```sh
 # 1. Install the NativeScript CLI extension (npm install -g nativescript@next, nativescript CLI >= 9.2.0 / PR #6215)
-ns extension install @nstudio/nativescript-compiler@alpha
+ns extension install @nstudio/nativescript-compiler
 
 # 2. (Framework apps only) Install the matching adapter in your project
-npm install --save-dev @nstudio/nativescript-compiler-angular@alpha
+npm install --save-dev @nstudio/nativescript-compiler-angular
 
 # 3. Check environment, kits, core version, and plugins
 ns compile doctor

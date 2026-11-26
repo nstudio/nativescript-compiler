@@ -1,6 +1,6 @@
 {
   "name": "@nstudio/nativescript-compiler-angular",
-  "version": "9.2.0-alpha.12",
+  "version": "9.2.0-alpha.13",
   "description": "The Angular adapter of @nstudio/nativescript-compiler: compiles a NativeScript app written with Angular into a native iOS or Android app with no JavaScript runtime.",
   "type": "module",
   "exports": {
@@ -30,7 +30,7 @@
     "@angular/compiler": "^22.2.1"
   },
   "peerDependencies": {
-    "@nstudio/nativescript-compiler": "9.2.0-alpha.12"
+    "@nstudio/nativescript-compiler": "9.2.0-alpha.13"
   },
   "nativescript": {
     "compilerAdapter": {

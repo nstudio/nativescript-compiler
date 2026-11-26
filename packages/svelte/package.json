@@ -1,6 +1,6 @@
 {
   "name": "@nstudio/nativescript-compiler-svelte",
-  "version": "9.2.0-alpha.12",
+  "version": "9.2.0-alpha.13",
   "description": "The Svelte adapter of @nstudio/nativescript-compiler: compiles a NativeScript app written with Svelte into a native iOS or Android app with no JavaScript runtime.",
   "type": "module",
   "exports": {
@@ -27,7 +27,7 @@
     "svelte": "^4.2.20"
   },
   "peerDependencies": {
-    "@nstudio/nativescript-compiler": "9.2.0-alpha.12"
+    "@nstudio/nativescript-compiler": "9.2.0-alpha.13"
   },
   "nativescript": {
     "compilerAdapter": {
