@@ -4,7 +4,7 @@
 import ts from 'typescript';
 import { definitelyAssignedFields, isArguments, classesHeldUntyped } from './lang.ts';
 import { baseMethod, declaringMethod, literalClassOf, programBase, rootMethod, shapesClassOf } from './classes.ts';
-import { expandoRootsOf, instanceKeysOf } from './shapes.ts';
+import { expandoRootsOf, instanceKeysOf, isShapeInterfaceDecl } from './shapes.ts';
 import { hasModifier, resolveSymbol } from './ast.ts';
 import { isStatic } from './throws.ts';
 import { assignedMembers } from './sharing.ts';
@@ -48,6 +48,31 @@ export class ProgramFacts {
 	private familyMap: Map<ts.MethodDeclaration, ts.MethodDeclaration[]> | null = null;
 	private protoKeys: { data: Set<string>; accessors: Set<string> } | null = null;
 	private tdzSet: ReadonlySet<ts.VariableDeclaration> | null = null;
+	private ifaceDecls: (ts.InterfaceDeclaration | ts.TypeAliasDeclaration)[] | null = null;
+	private readonly ifaceNamesByTop = new WeakMap<object, Set<string>>();
+
+	/** All interface / object-shape type alias declarations across the program's source files. */
+	interfaceDecls(): readonly (ts.InterfaceDeclaration | ts.TypeAliasDeclaration)[] {
+		if (this.ifaceDecls) return this.ifaceDecls;
+		const out: (ts.InterfaceDeclaration | ts.TypeAliasDeclaration)[] = [];
+		const visit = (n: ts.Node) => {
+			if (isShapeInterfaceDecl(n)) out.push(n);
+			ts.forEachChild(n, visit);
+		};
+		for (const f of this.files) visit(f);
+		return (this.ifaceDecls = out);
+	}
+
+	/** Whether `name` is an interface registered in `interfaces` or declared anywhere in `this.files` under `owner`'s top-level naming. */
+	hasInterface(owner: object, interfaces: ReadonlyMap<string, unknown>, topName: (decl: ts.Node, name: string) => string, name: string): boolean {
+		if (interfaces.has(name)) return true;
+		let set = this.ifaceNamesByTop.get(owner);
+		if (!set) {
+			set = new Set(this.interfaceDecls().map((n) => topName(n, n.name.text)));
+			this.ifaceNamesByTop.set(owner, set);
+		}
+		return set.has(name);
+	}
 
 	private readonly checker: ts.TypeChecker;
 	private readonly files: readonly ts.SourceFile[];

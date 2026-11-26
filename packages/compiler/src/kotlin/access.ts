@@ -322,7 +322,7 @@ export const accessMethods = {
 				if (literalMethod(d)) return true;
 				if (!ts.isMethodSignature(d)) return false;
 				const owner = ts.isInterfaceDeclaration(d.parent) ? this.topName(d.parent, d.parent.name.text) : ts.isTypeLiteralNode(d.parent) && ts.isTypeAliasDeclaration(d.parent.parent) ? this.topName(d.parent.parent, d.parent.parent.name.text) : null;
-				return !!owner && this.interfaces.has(owner) && !this.protocols.has(owner);
+				return !!owner && this.facts.hasInterface(this, this.interfaces, (d, s) => this.topName(d, s), owner) && !this.protocols.has(owner);
 			})
 		);
 	},

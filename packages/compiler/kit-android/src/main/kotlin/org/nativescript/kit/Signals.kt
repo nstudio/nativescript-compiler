@@ -433,7 +433,7 @@ interface MemoReader {
  * next read. A result `same` as the kept one (Object.is) keeps the kept one and its version. Nothing it read holds it: a
  * reader asks for its value.
  */
-class Memo<T>(private val compute: () -> T, private val same: (T, T) -> Boolean = ::jsSame) : Versioned, MemoReader {
+class Memo<T>(private val compute: () -> T, private val same: (T, T) -> Boolean = ::jsSame) : Versioned, MemoReader, JSDynamic {
     private var cached: Result<T>? = null
     private val sources = mutableListOf<Pair<Versioned, Int>>()
     override var version = 0
@@ -493,6 +493,11 @@ class Memo<T>(private val compute: () -> T, private val same: (T, T) -> Boolean 
 
     /** A function's local `computed()` (`val total by Memo(…)`): each read of the local is the memo's value. */
     operator fun getValue(thisRef: Any?, property: kotlin.reflect.KProperty<*>): T = value
+
+    override val jsKeys: List<String> get() = listOf("value")
+    override val jsClassName: String? get() = null
+    override fun jsGet(key: String): Any? = if (key == "value") value else null
+    override fun jsSet(key: String, value: Any?) {}
 }
 
 /**
@@ -500,7 +505,7 @@ class Memo<T>(private val compute: () -> T, private val same: (T, T) -> Boolean 
  * (`equals`, by default `==`: Object.is for numbers and strings, identity for
  * the runtime's objects) is ignored.
  */
-class Signal<T>(private var stored: T, private val equals: ((T, T) -> Boolean)? = null) : Versioned {
+class Signal<T>(private var stored: T, private val equals: ((T, T) -> Boolean)? = null) : Versioned, JSDynamic {
     private val subscribers = LinkedHashSet<Subscriber>()
     override var version = 0
         private set
@@ -623,6 +628,14 @@ class Signal<T>(private var stored: T, private val equals: ((T, T) -> Boolean)? 
         subscribers.add(effect)
         effect.track(this)
         link?.let { for (s in it.sources.toList()) s.first.subscribe(effect) }
+    }
+
+    override val jsKeys: List<String> get() = listOf("value")
+    override val jsClassName: String? get() = null
+    override fun jsGet(key: String): Any? = if (key == "value") value else null
+    @Suppress("UNCHECKED_CAST")
+    override fun jsSet(key: String, value: Any?) {
+        if (key == "value") this.value = (if (value === JSNull) null else value) as T
     }
 
     /**

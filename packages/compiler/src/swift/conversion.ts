@@ -276,7 +276,7 @@ export const conversionMethods = {
 		}
 		if (isUntyped(spelledType(from))) return this.fromAny(code, to);
 		// An event's data read as the object type a handler declares (`({ window }: { window: NativeWindow })`).
-		if (from === 'EventData' && (this.interfaces.has(to.replace(/\?$/, '')) || !!this.shapes.named(to.replace(/\?$/, '')))) return this.fromAny(code, to);
+		if (from === 'EventData' && (this.facts.hasInterface(this, this.interfaces, (d, s) => this.topName(d, s), to.replace(/\?$/, '')) || !!this.shapes.named(to.replace(/\?$/, '')))) return this.fromAny(code, to);
 		const f = functionParts(unwrapFunction(from, false));
 		const g = functionParts(unwrapFunction(to, false));
 		if (f && g && f.text === g.text && (isOptional(to) || to.endsWith('!')) && !isOptional(from) && !from.endsWith('!')) return code;

@@ -94,6 +94,7 @@ export class Translator implements AsyncTranslator {
 	translating: ts.Node | undefined;
 	/** Android: the worker scripts compiled with the app, by file, and the name the entry registers each under. */
 	readonly workerScripts: ReadonlyMap<string, string> | null;
+	readonly resolveAlias: ((specifier: string, importer?: string) => string | undefined) | null;
 	/** The generated kit: a module's name for `AppModules.runImport`, set where modules `await import(…)` reaches run when imported. */
 	readonly moduleKey?: (file: string) => string;
 
@@ -163,6 +164,7 @@ export class Translator implements AsyncTranslator {
 		this.checker = checker;
 		this.lenient = c.lenient ?? false;
 		this.workerScripts = c.workerScripts ?? null;
+		this.resolveAlias = c.resolveAlias ?? null;
 		this.moduleThread = c.moduleThread ?? null;
 		this.moduleKey = c.moduleKey;
 		this.components = components;
@@ -754,7 +756,7 @@ export class Translator implements AsyncTranslator {
 		const at = this.typeOf(a).replace(/\?$/, '');
 		if (name === 'ArrayBuffer') return `${t}(${this.toNumber(a)})`;
 		if (at === 'JSArrayBuffer') return `${t}(${[this.expr(a), ...numbers].join(', ')})`;
-		if (name === 'DataView') return `${t}((${this.coerce(a, 'Any?')} as JSArrayBufferView).buffer, ${numbers.join(', ')})`;
+		if (name === 'DataView') return `${t}.from(${[this.coerce(a, 'Any?'), ...numbers].join(', ')})`;
 		if (at === 'Double') return `${t}(${this.expr(a)})`;
 		if (isKit(spelledType(at), 'JSArray')) return `${t}(${this.expr(a)})`;
 		return `${t}.from(${[this.coerce(a, 'Any?'), ...numbers].join(', ')})`;
@@ -774,15 +776,31 @@ export class Translator implements AsyncTranslator {
 		return `object : ${this.className(base)}() {\n${members.join('\n')}\n}`;
 	}
 
-	/** `new URL('./x.worker', import.meta.url)`: the worker script it names, when the app compiled it. */
+	/** `new Worker('~/x')`, `new Worker('./x')`, or `new Worker(new URL('./x', import.meta.url))`: the worker script it names, when the app compiled it. */
 	workerScript(e: ts.Expression): string | null {
-		if (!ts.isNewExpression(e) || !ts.isIdentifier(e.expression) || e.expression.text !== 'URL') return null;
-		const [spec, base] = e.arguments ?? [];
-		if (!spec || !ts.isStringLiteralLike(spec) || !base || base.getText() !== 'import.meta.url') return null;
-		const stem = pathResolve(pathDirname(e.getSourceFile().fileName), spec.text).replace(/\.(ts|js)$/, '');
-		for (const f of [stem + '.ts', stem + '.android.ts', stem + '/index.ts']) {
-			const script = this.workerScripts?.get(f);
-			if (script) return script;
+		let spec: string | null = null;
+		if (ts.isStringLiteralLike(e)) {
+			spec = e.text;
+		} else if (ts.isNewExpression(e) && ts.isIdentifier(e.expression) && e.expression.text === 'URL') {
+			const [s, base] = e.arguments ?? [];
+			if (s && ts.isStringLiteralLike(s) && base && base.getText() === 'import.meta.url') spec = s.text;
+		}
+		if (!spec || !this.workerScripts?.size) return null;
+		const file = e.getSourceFile().fileName;
+		const target = spec.startsWith('.') ? pathResolve(pathDirname(file), spec) : this.resolveAlias?.(spec, file);
+		if (target) {
+			const stem = target.replace(/\\/g, '/').replace(/\.(tsx?|m?js)$/, '');
+			for (const f of [stem + '.ts', stem + '.android.ts', stem + '.tsx', stem + '/index.ts', stem + '/index.android.ts']) {
+				const script = this.workerScripts.get(f);
+				if (script) return script;
+			}
+		}
+		if (spec.startsWith('~/') || spec.startsWith('@/')) {
+			const rel = spec.slice(2).replace(/\\/g, '/').replace(/\.(tsx?|m?js)$/, '');
+			for (const [key, script] of this.workerScripts) {
+				const norm = key.replace(/\\/g, '/');
+				if ([`/${rel}.ts`, `/${rel}.android.ts`, `/${rel}.tsx`, `/${rel}/index.ts`, `/${rel}/index.android.ts`].some((s) => norm.endsWith(s))) return script;
+			}
 		}
 		return null;
 	}

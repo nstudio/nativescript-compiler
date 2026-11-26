@@ -122,8 +122,8 @@ compiled iOS project (its Release build's dSYM), the `.app.dSYM` or the `.xcarch
 report:
 
 ```bash
-npx ns-compiled-retrace platforms/compiled/ios < trace.txt
-npx ns-compiled-retrace MyApp.xcarchive MyApp-2026-11-12-101500.ips
+ns compile retrace platforms/compiled/ios < trace.txt
+ns compile retrace MyApp.xcarchive MyApp-2026-11-12-101500.ips
 ```
 
 ```
@@ -140,7 +140,7 @@ Kotlin line to its source line. R8's `mapping.txt` undoes the release build's re
 frames:
 
 ```bash
-adb logcat -d -s System.err AndroidRuntime | npx ns-compiled-retrace platforms/compiled/android
+adb logcat -d -s System.err AndroidRuntime | ns compile retrace platforms/compiled/android
 ```
 
 ```
@@ -153,10 +153,10 @@ Crash reporters read the mapping alone, so the release build composes the two (`
 after R8, `mapping.txt` (in `platforms/compiled/android/build/outputs/mapping/release/`) names each app frame's `.ts`
 file and line, and R8's own is kept beside it as `mapping-kotlin.txt`. The bundle carries the composed one, so Play
 Console shows `.ts` lines with no upload, and the Crashlytics and Sentry Gradle plugins upload it as they upload any R8
-mapping. A build made without it composes in place with `npx ns-compiled-retrace --compose-mapping
+mapping. A build made without it composes in place with `ns compile retrace --compose-mapping
 platforms/compiled/android`. The mapping format holds one file per class: in a component made from two files (an
 Angular `templateUrl`, an XML page and its code), frames in the other file's code, and frames in code the compiler
-wrote, read no line; `ns-compiled-retrace` names both. Errors JavaScript code can catch carry their JVM frames as
+wrote, read no line; `ns compile retrace` names both. Errors JavaScript code can catch carry their JVM frames as
 `error.stack`.
 
 A component's virtual class is matched to its source file (`src/program/source-lines.ts`): script code by the
@@ -164,20 +164,25 @@ identifiers and literals it shares with the line it came from, a template bindin
 
 ## Device builds
 
-`--build --device` archives for any iOS device (`xcodebuild archive`) and writes the `.ipa`: unsigned without signing
-arguments; signed manually with `--provision <profile>` (a `.mobileprovision`, or the UUID or name of an installed one;
-the export method follows the profile); or signed automatically for a team with `--team-id <team>`, which lets Xcode
-create profiles and register the app id on that team (`--export-method`, `debugging` by default;
-`src/targets/ios/signing.ts`). On Android, `--build` writes the release APK and, with `--aab` or `--device`, the bundle,
-signed with `--key-store-path`, `--key-store-password`, `--key-store-alias` and `--key-store-alias-password` when they are
-given, and with the debug key otherwise.
+`ns compile ios --for-device` archives for any iOS device (`xcodebuild archive`) and writes the `.ipa`: unsigned without
+signing arguments; signed manually with `--provision <profile>` (a `.mobileprovision`, or the UUID or name of an
+installed one; the export method follows the profile); or signed automatically for a team with `--team-id <team>`, which
+lets Xcode create profiles and register the app id on that team (`--export-method`, `debugging` by default;
+`src/targets/ios/signing.ts`). On Android, `ns compile android` writes the release APK and, with `--aab`, the bundle,
+signed with `--key-store-path`, `--key-store-password`, `--key-store-alias` and `--key-store-alias-password` when they
+are given, and with the debug key otherwise.
 
 The generated Xcode project builds NativeScriptKit as a static library target with the app's settings (`-Osize`, full
 LTO, dead-code stripping, and, for an app with no pods or Swift packages, virtual function and witness method
 elimination over symbols internalized at the link; `src/targets/ios/build.ts`), so the link drops kit code the app never reaches. A framework the kit imports for code the
 app never reaches (WebKit for `WebView`) is left out of the link, since a linked framework is loaded at launch.
 
-## Run it from a checkout
+## Usage
+
+For everyday app builds, install the NativeScript CLI extension (`ns extension install @nstudio/nativescript-compiler`)
+and run `ns compile ios` / `ns compile android` (see [CLI.md](CLI.md)).
+
+### Run it from a checkout
 
 ```sh
 cd packages/compiler && npm ci

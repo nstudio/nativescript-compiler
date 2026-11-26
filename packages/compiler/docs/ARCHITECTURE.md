@@ -1,7 +1,8 @@
 # Architecture
 
-`ns build --compiled` builds a NativeScript app as a native app with no JavaScript engine. It is opt-in: an app built
-without `--compiled` is unaffected.
+`ns compile` (`ns compile ios` / `ns compile android`, installed as a NativeScript CLI extension via
+`ns extension install @nstudio/nativescript-compiler`) builds a NativeScript app as a native app with no JavaScript
+engine. It is opt-in: standard `ns run` and `ns build` workflows are unaffected.
 
 - **No JavaScript engine in the release.** The app's TypeScript and `@nativescript/core` are compiled to Swift (iOS)
   and Kotlin (Android). They link NativeScriptKit, a runtime that gives them JavaScript's value semantics, and call
@@ -390,7 +391,7 @@ Other projects compile JavaScript or TypeScript ahead of time:
 - **ScriptC** (Vercel Labs) compiles TypeScript through LLVM to executables, or to static libraries for iOS and
   Android called through a C ABI.
 
-They answer how to run JavaScript or TypeScript logic without a JIT. `--compiled` turns a whole NativeScript app into
+They answer how to run JavaScript or TypeScript logic without a JIT. `ns compile` turns a whole NativeScript app into
 a native app with no JavaScript engine: its UI framework, its views and layout through `@nativescript/core`, its plugins
 and its direct calls into UIKit and the Android SDK. Most of such an app's code is UI, framework glue and platform calls,
 so the compiler emits Swift and Kotlin source rather than machine code:
@@ -400,7 +401,7 @@ so the compiler emits Swift and Kotlin source rather than machine code:
   symbolication;
 - it is readable and debuggable, and every line maps back to the TypeScript it came from.
 
-The semantics bar differs too: `--compiled` holds compiled code to what the same code does in JavaScript, checked
+The semantics bar differs too: `ns compile` holds compiled code to what the same code does in JavaScript, checked
 against Node, where the compilers above document subsets or behaviours that differ from JavaScript.
 
 ## Reading the code

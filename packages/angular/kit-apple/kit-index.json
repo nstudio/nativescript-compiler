@@ -422,6 +422,15 @@
 				"stripTrailingSlash": [{"kind":"func","static":true,"type":"String","params":[{"label":"_","name":"url","type":"String"}]}]
 			}
 		},
+		"Memo": {
+			"kind": "extension",
+			"origin": "runtime",
+			"members": {
+				"jsClassName": [{"kind":"var","type":"String?"}],
+				"jsKeys": [{"kind":"var","type":"[String]"}],
+				"subscript": [{"kind":"subscript","type":"Any?","params":[{"label":"jsKey","name":"key","type":"String"}]}]
+			}
+		},
 		"NativeDialogRef": {
 			"kind": "class",
 			"origin": "runtime",
@@ -719,6 +728,15 @@
 				"subscribe": [{"kind":"func","type":"TeardownHandle","params":[{"label":"_","name":"next","type":"@escaping (T) -> Void"}]}]
 			},
 			"base": "RxObservable"
+		},
+		"Signal": {
+			"kind": "extension",
+			"origin": "runtime",
+			"members": {
+				"jsClassName": [{"kind":"var","type":"String?"}],
+				"jsKeys": [{"kind":"var","type":"[String]"}],
+				"subscript": [{"kind":"subscript","type":"Any?","params":[{"label":"jsKey","name":"key","type":"String"}]}]
+			}
 		},
 		"SimpleChange": {
 			"kind": "class",

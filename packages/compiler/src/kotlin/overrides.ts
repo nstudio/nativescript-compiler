@@ -157,8 +157,11 @@ export const overridesMethods = {
 		}
 		if (isUntyped(spelledType(from))) return this.fromAny(code, to);
 		if (to === optionalType(from)) return code;
-		// An array of one element type where another is declared (`string[]` given as `any[]`): the same array, as script shares it.
-		if (/^JSArray<.*>$/.test(from.replace(/\?$/, '')) && /^JSArray<.*>$/.test(to.replace(/\?$/, '')) && from.replace(/\?$/, '') !== to.replace(/\?$/, '')) return this.unchecked(to, code);
+		// An array of one element type where another is declared (`string[]` given as `any[]`): convert structural elements, else share the array.
+		if (/^JSArray<.*>$/.test(from.replace(/\?$/, '')) && /^JSArray<.*>$/.test(to.replace(/\?$/, '')) && from.replace(/\?$/, '') !== to.replace(/\?$/, '')) {
+			const el = !this.library ? this.elementwise(from, to) : null;
+			return el ? el(code) : this.unchecked(to, code);
+		}
 		// A tuple where an array is declared: its elements.
 		const tuple = /^(Pair|Triple)<.*>$/.exec(from),
 			array = /^JSArray<(.*)>\??$/.exec(to);
@@ -169,13 +172,13 @@ export const overridesMethods = {
 		// An object of a known shape where a dictionary is wanted: a dictionary of its entries.
 		const record = /^JSRecord<(.+)>$/.exec(to.replace(/\?$/, ''));
 		const fromShape = from.replace(/\?$/, '');
-		if (record && (this.interfaces.has(fromShape) || !!this.shapes.named(fromShape))) {
+		if (record && this.isShapeType(fromShape)) {
 			const entries = `JSRecord<${record[1]}>(__s.jsKeys.map { __k -> Pair(__k, ${this.fromAny('__s.jsGet(__k)', record[1])}) })`;
 			return from.endsWith('?') ? `${code}?.let { __s -> ${entries} }` : `${code}.let { __s -> ${entries} }`;
 		}
 		// One object shape where another is declared (a wider shape an override returns): not a subclass, read by its keys.
 		const shape = to.replace(/\?$/, '');
-		if (from.replace(/\?$/, '') !== shape && (this.interfaces.has(shape) || !!this.shapes.named(shape))) return this.fromAny(code, to);
+		if (from.replace(/\?$/, '') !== shape && this.isShapeType(shape)) return this.fromAny(code, to);
 		if (this.isObjectType(from) && this.isObjectType(to) && from.replace(/\?$/, '') !== to.replace(/\?$/, '')) return this.classCast(code, from, to);
 		return code;
 	},

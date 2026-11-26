@@ -3,7 +3,7 @@ import ts from 'typescript';
 import { cast, destructuringSource, ident, isNullable, jsObjectCode, kotlinString, optionalType, splitTopLevel, spell, RT } from './syntax.ts';
 import type { ShapeField, Translator } from './translator.ts';
 import { assertedOperand, evolvingElementContext, intersectionAliasMembers, isTypeParameterType, literalKey, openSpreadType, spreadOperand, unquoted, wellKnownMember } from '../semantics/lang.ts';
-import { holdsNil, literalNotes, signatureField, shapePlanOfLiteral, spelledOptional, resultShapeNamed } from '../semantics/shapes.ts';
+import { holdsNil, literalNotes, signatureField, shapePlanOfLiteral, spelledOptional, spreadElementNeedsMap, resultShapeNamed } from '../semantics/shapes.ts';
 import { structural, type Structural, type StructuralFacts } from '../semantics/conversion.ts';
 import { heldOf, isKit, isUntyped, parseNativeType, spelledType } from '../semantics/types.ts';
 import { boxStep, unboxStep, type TypeStep } from '../semantics/type-step.ts';
@@ -96,8 +96,7 @@ export const literalsMethods = {
 					run = [];
 				}
 				const items = `(${this.iterable(x.expression)}).toList()`;
-				// Library mode: an array of untyped values (`const cssClasses = []`) spread where the literal's elements are typed.
-				parts.push(this.library && !isUntyped(spelledType(el)) && isUntyped(spelledType(this.elementTypeOf(x.expression))) ? `${items}.map { ${this.fromAny('it', el)} }` : items);
+				parts.push(spreadElementNeedsMap(this.elementTypeOf(x.expression), el, (n) => this.isShapeType(n), !!this.library) ? `${items}.map { ${this.fromAny('it', el)} }` : items);
 			} else if (ts.isOmittedExpression(x)) throw this.error(x, 'an array hole', 'array-hole');
 			else run.push(place(this.placement, x, this.elementSlot(e, el)(x)));
 		}
@@ -457,7 +456,7 @@ export const literalsMethods = {
 
 	/** An interface's or object shape's Kotlin class. */
 	isShapeType(this: Translator, name: string): boolean {
-		return this.interfaces.has(name) || !!this.shapes.named(name) || (!this.library && !!this.core?.viewable?.(name));
+		return this.facts.hasInterface(this, this.interfaces, (d, s) => this.topName(d, s), name) || !!this.shapes.named(name) || (!this.library && !!this.core?.viewable?.(name));
 	},
 
 	/**
@@ -471,13 +470,13 @@ export const literalsMethods = {
 		if (from === to || !this.isShapeType(from) || !this.isShapeType(to)) return null;
 		const contextual = this.checker.getContextualType(e);
 		const props = contextual ? this.checker.getNonNullableType(contextual).getProperties() : [];
-		if (!props.length) return null;
 		// A literal is made as its contextual type already; a copy would lose the keys it notes.
-		if (ts.isObjectLiteralExpression(ts.skipOuterExpressions(e)) && this.shapes.question(() => this.type(this.checker.getNonNullableType(contextual!)).replace(/\?$/, '') === to)) return this.expr(e);
+		if (props.length && ts.isObjectLiteralExpression(ts.skipOuterExpressions(e)) && this.shapes.question(() => this.type(this.checker.getNonNullableType(contextual!)).replace(/\?$/, '') === to)) return this.expr(e);
 		const code = this.expr(e);
 		if (this.constructs(code, to)) return code;
-		const view = this.viewOf(to, '__s');
-		if (view === `${to}.jsView(__s)`) return `(${code})${holdsNil(heldOf(spelledType(source))) ? '?' : ''}.let { __s -> ${view} }`;
+		const reader = this.protocols.has(to) ? `${to}Object` : to;
+		const view = this.viewOf(reader, '__s');
+		if (!props.length || view === `${reader}.jsView(__s)`) return `(${code})${holdsNil(heldOf(spelledType(source))) ? '?' : ''}.let { __s -> ${view} }`;
 		const fields = props
 			.map((p) => programSymbolKey(p, this.checker)?.member ?? wellKnownMember(p.name) ?? p.name)
 			.map((n) => `${ident(n)} = __s.${ident(n)}`)

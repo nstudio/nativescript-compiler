@@ -137,8 +137,13 @@ export function copyArtifact(artifact: string, copyTo: string, projectDir: strin
 }
 
 export async function runNodeBin(scriptPath: string, args: string[], cwd: string): Promise<number> {
+	const env: NodeJS.ProcessEnv = { ...process.env };
+	if (!env.NS_CLI_LIB && process.argv[1]) {
+		const candidate = resolve(dirname(process.argv[1]), '..', 'lib', 'nativescript-cli-lib.js');
+		if (existsSync(candidate)) env.NS_CLI_LIB = candidate;
+	}
 	return new Promise<number>((resolveCode, reject) => {
-		const child = spawn(process.execPath, [scriptPath, ...args], { cwd, stdio: 'inherit' });
+		const child = spawn(process.execPath, [scriptPath, ...args], { cwd, stdio: 'inherit', env });
 		child.on('error', reject);
 		child.on('close', (code) => resolveCode(code ?? 1));
 	});

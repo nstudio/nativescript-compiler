@@ -245,8 +245,10 @@ export function createProgram(roots: string[], virtual: Map<string, string>, pla
 	const notPlugin = (pkg: string) => NOT_PLUGINS.test(pkg) || build.adapter.isFrameworkPackage(pkg) || build.stubbedPlugins.has(pkg);
 	// A build that compiles packages from their source compiles some packages the framework's adapter otherwise shims.
 	const shims: Record<string, string> = { ...SHIMS, ...rules.shims, ...(plugins ? {} : rules.fallbackShims) };
-	const substituted = new Set(Object.values(rules.substitutions ?? {}).map((s) => s.file));
-	const files = new Map<string, string>(virtual);
+	const normPath = (p: string) => p.replace(/\\/g, '/');
+	const substituted = new Set(Object.values(rules.substitutions ?? {}).map((s) => normPath(s.file)));
+	const virtualNorm = new Set([...virtual.keys()].map(normPath));
+	const files = new Map<string, string>([...virtual].map(([k, v]) => [normPath(k), v]));
 	for (const [m, text] of Object.entries(shims)) files.set(shimPath(m), text);
 	const hasDom = appIncludesDomLib(roots[0] ?? [...virtual.keys()][0]);
 	files.set('/__shims__/globals.d.ts', hasDom ? DOM_COMPAT_GLOBALS : GLOBALS + WORKER_GLOBALS);
@@ -280,10 +282,13 @@ export function createProgram(roots: string[], virtual: Map<string, string>, pla
 	// the other platform's types name what code for that platform holds (`signal<android.view.View | null>`).
 	const pluginFiles = new Set<string>();
 	const extraRoots = new Set<string>();
-	const isSource = (name: string) => !name.startsWith('/__shims__/') && !name.endsWith('.d.ts') && (build.adapter.isRuntimeSource(name) || !name.includes('/node_modules/'));
-	const isApp = (name: string) => isSource(name) && !pluginFiles.has(name);
+	const isSource = (name: string) => {
+		const n = normPath(name);
+		return !n.startsWith('/__shims__/') && !n.endsWith('.d.ts') && (build.adapter.isRuntimeSource(n) || !n.includes('/node_modules/'));
+	};
+	const isApp = (name: string) => isSource(name) && !pluginFiles.has(normPath(name));
 	// The app's declarations are read for the native APIs they declare: the frameworks' own typings they reference would replace the shims.
-	const appTypings = new Set(declarations);
+	const appTypings = new Set(declarations.map(normPath));
 	const nativeReferences = (text: string, file: string) =>
 		text.replace(/^\/\/\/\s*<reference\s+(path|types)="([^"]*)"\s*\/>.*$/gm, (line, kind: string, ref: string) => {
 			const target = resolve(dirname(file), ref);
@@ -293,14 +298,15 @@ export function createProgram(roots: string[], virtual: Map<string, string>, pla
 	// TypeScript loads a file's `/// <reference path>` sources (a package's index referencing its operators barrel) before resolving
 	// the file's imports, so a plugin's referenced source is claimed here or its imports resolve as the app's.
 	const declaredExports = (name: string, code: string) => {
-		if (!pluginFiles.has(name)) return code;
-		for (const [, ref] of code.matchAll(/^\/\/\/\s*<reference\s+path="([^"]*\.tsx?)"\s*\/>/gm)) if (!ref.endsWith('.d.ts')) pluginFiles.add(resolve(dirname(name), ref));
+		if (!pluginFiles.has(normPath(name))) return code;
+		for (const [, ref] of code.matchAll(/^\/\/\/\s*<reference\s+path="([^"]*\.tsx?)"\s*\/>/gm)) if (!ref.endsWith('.d.ts')) pluginFiles.add(normPath(resolve(dirname(name), ref)));
 		return pluginDeclaredExports(code, name, platform);
 	};
-	const appRoot = plugins?.options?.app ? resolve(plugins.options.app) : null;
-	const rootSet = new Set(roots);
+	const appRoot = plugins?.options?.app ? normPath(resolve(plugins.options.app)) : null;
+	const rootSet = new Set(roots.map(normPath));
 	host.getSourceFile = (name, version, onError) => {
-		const text = files.get(name) ?? (isSource(name) && existsSync(name) ? readFileSync(name, 'utf8') : appTypings.has(name) ? nativeReferences(readFileSync(name, 'utf8'), name) : undefined);
+		const key = normPath(name);
+		const text = files.get(key) ?? (isSource(key) && existsSync(name) ? readFileSync(name, 'utf8') : appTypings.has(key) ? nativeReferences(readFileSync(name, 'utf8'), name) : undefined);
 		if (text === undefined) {
 			// A package's own TypeScript (or pure-JS ESM) source.
 			if (!/\.(tsx?|m?js)$/.test(name) || name.endsWith('.d.ts') || !existsSync(name)) return readLib(name, version, onError);
@@ -311,15 +317,15 @@ export function createProgram(roots: string[], virtual: Map<string, string>, pla
 			}
 			return ts.createSourceFile(name, desugarClassMixins(desugarConstructorFactories(declaredExports(name, raw), name), name), version, true);
 		}
-		const transformed = !name.startsWith('/__shims__/') && !name.startsWith('/__raw__/') && !name.startsWith('/__vite__/') && !name.endsWith('.d.ts') ? vitePlugins.transform(text, name) : text;
-		const expanded = !name.startsWith('/__shims__/') && !name.endsWith('.d.ts') ? desugarDefaultExport(expandImportMetaGlob(transformed, name, appRoot), name) : transformed;
-		const code = /\.tsx?$/.test(name) && !name.endsWith('.d.ts') ? desugarClassMixins(desugarConstructorFactories(declaredExports(name, expanded), name), name) : expanded;
-		return ts.createSourceFile(name, isSource(name) ? foldPlatform(code, name, platform, modules, build.defines) : code, version, true);
+		const transformed = !key.startsWith('/__shims__/') && !key.startsWith('/__raw__/') && !key.startsWith('/__vite__/') && !key.endsWith('.d.ts') ? vitePlugins.transform(text, name) : text;
+		const expanded = !key.startsWith('/__shims__/') && !key.endsWith('.d.ts') ? desugarDefaultExport(expandImportMetaGlob(transformed, name, appRoot), name) : transformed;
+		const code = /\.tsx?$/.test(key) && !key.endsWith('.d.ts') ? desugarClassMixins(desugarConstructorFactories(declaredExports(name, expanded), name), name) : expanded;
+		return ts.createSourceFile(name, isSource(key) ? foldPlatform(code, name, platform, modules, build.defines) : code, version, true);
 	};
 	const fileExists = host.fileExists.bind(host);
-	host.fileExists = (name) => files.has(name) || fileExists(name);
+	host.fileExists = (name) => files.has(normPath(name)) || fileExists(name);
 	const readFile = host.readFile.bind(host);
-	host.readFile = (name) => files.get(name) ?? readFile(name);
+	host.readFile = (name) => files.get(normPath(name)) ?? readFile(name);
 	const resolutions = new Map<string, string>();
 	// A plugin's augmentations of other packages (`declare module '@nativescript/firebase-core'`), which its source keeps in
 	// the declarations beside it (`index.d.ts`), apply as its published typings apply them.
@@ -395,38 +401,41 @@ export function createProgram(roots: string[], virtual: Map<string, string>, pla
 			const m = aliasTarget ?? lit.text;
 			const substitution = rules.substitutions && Object.hasOwn(rules.substitutions, m) && !replacements[m] ? rules.substitutions[m] : undefined;
 			if (substitution && (plugins || !substitution.sourcesOnly)) {
-				pluginFiles.add(substitution.file);
-				return { resolvedModule: { resolvedFileName: substitution.file, extension: ts.Extension.Ts } };
+				const subFile = normPath(substitution.file);
+				pluginFiles.add(subFile);
+				return { resolvedModule: { resolvedFileName: subFile, extension: ts.Extension.Ts } };
 			}
 			if (substitution?.otherwise) return { resolvedModule: { resolvedFileName: shimPath(substitution.otherwise), extension: ts.Extension.Dts } };
 			if (shims[m]) return { resolvedModule: { resolvedFileName: shimPath(m), extension: ts.Extension.Dts } };
 			const stub = !m.startsWith('.') && !isAbsolute(m) ? build.pluginStubModules.get(packageOf(m)) : undefined;
 			if (stub) {
-				pluginFiles.add(stub);
-				return { resolvedModule: { resolvedFileName: stub, extension: ts.Extension.Ts } };
+				const stubFile = normPath(stub);
+				pluginFiles.add(stubFile);
+				return { resolvedModule: { resolvedFileName: stubFile, extension: ts.Extension.Ts } };
 			}
 			// The build's own glue imports app modules by absolute path (`__elements.release.ts`).
 			if (m.startsWith('.') || (isAbsolute(m) && !m.startsWith('/__shims__/'))) {
-				const base = resolve(dirname(containing), m);
+				const base = normPath(resolve(dirname(containing), m));
 				const stem = base.replace(/\.m?js$/, '');
+				const containingNorm = normPath(containing);
 				// A platform's own file first, as NativeScript's bundler resolves `./x` to `x.ios.ts`.
 				// A platform file importing its own module's name (`import type { HingeListener } from './hinge-tracker'` in
 				// hinge-tracker.ios.ts) means the module's declarations: `x.d.ts`, else the platforms' shared `x.ts`.
 				const typeOnly = (ts.isImportDeclaration(lit.parent) && !!lit.parent.importClause?.isTypeOnly) || (ts.isExportDeclaration(lit.parent) && lit.parent.isTypeOnly);
 				// A type-only import is TypeScript's, which reads `x.d.ts` beside the platforms' files; only the bundler picks `x.ios.ts`.
-				const own = containing === `${stem}.${platform}.ts` || (typeOnly && existsSync(stem + '.d.ts'));
+				const own = containingNorm === `${stem}.${platform}.ts` || (typeOnly && existsSync(stem + '.d.ts'));
 				const direct = /\.(tsx?|d\.ts)$/.test(base) ? [base] : [];
-				const jsFallback = pluginFiles.has(containing) ? [...(/\.m?js$/.test(base) ? [base] : []), stem + '.js', stem + '.mjs', stem + '/index.js', stem + '/index.mjs'] : [];
+				const jsFallback = pluginFiles.has(containingNorm) ? [...(/\.m?js$/.test(base) ? [base] : []), stem + '.js', stem + '.mjs', stem + '/index.js', stem + '/index.mjs'] : [];
 				for (const candidate of own ? [...direct, stem + '.d.ts', stem + '.ts'] : [...direct, `${stem}.${platform}.ts`, stem + '.ts', stem + '.tsx', `${stem}/index.${platform}.ts`, stem + '/index.ts', ...jsFallback]) {
 					if (files.has(candidate) || existsSync(candidate)) {
 						if (candidate.endsWith('.d.ts')) return { resolvedModule: { resolvedFileName: candidate, extension: ts.Extension.Dts } };
 						// A component file replaced by a compiled `.release.ts` virtual file must resolve to the virtual file everywhere so classes with private members stay nominally identical.
 						const released = candidate.endsWith('.ts') && !candidate.endsWith('.release.ts') ? candidate.replace(/\.ts$/, '.release.ts') : undefined;
-						if (released && virtual.has(released) && containing !== released) return { resolvedModule: { resolvedFileName: released, extension: ts.Extension.Ts } };
+						if (released && virtualNorm.has(released) && containingNorm !== released) return { resolvedModule: { resolvedFileName: released, extension: ts.Extension.Ts } };
 						// A plugin's own modules, a substitution's file, or a monorepo workspace library outside the app folder
 						// (not already compiled as an app/component root) are compiled through closed-world reachability.
-						const isCompiledRoot = rootSet.has(candidate) || virtual.has(candidate) || virtual.has(candidate.replace(/\.ts$/, '.release.ts'));
-						if (!isCompiledRoot && (pluginFiles.has(containing) || substituted.has(candidate) || (aliasTarget && appRoot && !candidate.startsWith(appRoot + sep)))) pluginFiles.add(candidate);
+						const isCompiledRoot = rootSet.has(candidate) || virtualNorm.has(candidate) || virtualNorm.has(candidate.replace(/\.ts$/, '.release.ts'));
+						if (!isCompiledRoot && (pluginFiles.has(containingNorm) || substituted.has(candidate) || (aliasTarget && appRoot && !candidate.startsWith(appRoot + '/')))) pluginFiles.add(candidate);
 						const extension = candidate.endsWith('.tsx') ? ts.Extension.Tsx : candidate.endsWith('.mjs') ? ts.Extension.Mjs : candidate.endsWith('.js') ? ts.Extension.Js : ts.Extension.Ts;
 						return { resolvedModule: { resolvedFileName: candidate, extension } };
 					}

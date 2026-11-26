@@ -2,11 +2,11 @@
 import { heldLoss } from '../semantics/losses.ts';
 import ts from 'typescript';
 import { TYPED_ARRAYS } from '../semantics/globals.ts';
-import { ident, isThisParameter, optionalType, RT } from './syntax.ts';
+import { ident, isThisParameter, kotlinString, optionalType, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { undefinedLiteral } from '../semantics/lang.ts';
 import { arrayFromLengthInit } from '../semantics/ast.ts';
-import { assignsArrayIntoObject } from '../semantics/shapes.ts';
+import { assignsArrayIntoObject, shapeArrayGuardAccess } from '../semantics/shapes.ts';
 import { CONSOLE } from '../semantics/apis/console.ts';
 import { staticFunction } from '../semantics/apis/statics.ts';
 import { runtimeCall } from '../semantics/apis/api.ts';
@@ -103,7 +103,10 @@ export const staticCallsMethods = {
 					const native = this.native?.call(e);
 					if (native) return native;
 				}
-				if (method === 'isArray') return `JSArray.isArray(${this.restArgument(e, arg(0), 'Any?')})`;
+				if (method === 'isArray') {
+					const guard = !this.library ? shapeArrayGuardAccess(arg(0), (t) => this.isShapeType(t), (x) => this.typeOf(x)) : null;
+					return guard ? `JSArray.isArray(${this.expr(guard.prop.expression)}${guard.optional ? '?' : ''}.jsGet(${kotlinString(guard.prop.name.text)}))` : `JSArray.isArray(${this.restArgument(e, arg(0), 'Any?')})`;
+				}
 				if (method === 'from' && e.arguments.length === 1) return `JSArray(${this.iterable(arg(0))}.toList())`;
 				if (method === 'from' && (e.arguments.length === 2 || e.arguments.length === 3) && ts.isObjectLiteralExpression(arg(0))) {
 					const lenExpr = arrayFromLengthInit(arg(0) as ts.ObjectLiteralExpression);

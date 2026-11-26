@@ -535,6 +535,7 @@ export async function compile(o: CompileOptions, build: BuildContext = new Build
 			resolved,
 			mounted,
 			workers: [...workerScripts],
+			aliased,
 			allowUnapplied,
 			allErrors: !!o.allErrors,
 			lenient: lenientApp,

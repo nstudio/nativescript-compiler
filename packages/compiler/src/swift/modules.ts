@@ -543,7 +543,7 @@ export const modulesMethods = {
 	},
 
 	isObjectShape(this: Translator, name: string): boolean {
-		return (this.interfaces.has(name) && !this.protocols.has(name)) || !!this.shapes.named(name) || (!this.library && this.core.viewable(name));
+		return (this.facts.hasInterface(this, this.interfaces, (d, s) => this.topName(d, s), name) && !this.protocols.has(name)) || !!this.shapes.named(name) || (!this.library && this.core.viewable(name));
 	},
 
 	/** An interface's members with those of the interfaces it extends (`StageFold extends Rect`), its own first. */

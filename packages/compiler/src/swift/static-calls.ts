@@ -5,7 +5,7 @@ import { ident, isFunctionType, optionalType, swiftString, RT } from './syntax.t
 import type { Translator } from './translator.ts';
 import { literalKey, statementLevel, undefinedLiteral } from '../semantics/lang.ts';
 import { arrayFromLengthInit } from '../semantics/ast.ts';
-import { assignsArrayIntoObject, definesDuringConstruction, restrictsField, definedField } from '../semantics/shapes.ts';
+import { assignsArrayIntoObject, definesDuringConstruction, restrictsField, definedField, shapeArrayGuardAccess } from '../semantics/shapes.ts';
 import { CONSOLE } from '../semantics/apis/console.ts';
 import { staticFunction } from '../semantics/apis/statics.ts';
 import { runtimeCall } from '../semantics/apis/api.ts';
@@ -95,7 +95,10 @@ export const staticCallsMethods = {
 				break;
 			}
 			case 'Array':
-				if (method === 'isArray') return `JSArray<Any?>.isArray(${this.restArgument(e, arg(0), 'Any?')})`;
+				if (method === 'isArray') {
+					const g = !this.library ? shapeArrayGuardAccess(arg(0), (t) => this.isObjectShape(t), (x) => this.typeOf(x)) : null;
+					return `JSArray<Any?>.isArray(${g ? `${this.expr(g.prop.expression)}${g.optional ? '?' : ''}[jsKey: ${swiftString(g.prop.name.text)}]` : this.restArgument(e, arg(0), 'Any?')})`;
+				}
 				if (method === 'from' && e.arguments.length === 1) return `${T()}.from(${this.iterable(arg(0))})`;
 				if (method === 'from' && (e.arguments.length === 2 || e.arguments.length === 3) && ts.isObjectLiteralExpression(arg(0))) {
 					const lenInit = arrayFromLengthInit(arg(0) as ts.ObjectLiteralExpression);

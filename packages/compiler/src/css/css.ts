@@ -16,14 +16,32 @@ export type Stylesheet = { file: string; css: string; ast: { type: 'stylesheet';
 
 /** The NativeScript CLI's library, which the bundlers read nativescript.config.ts through. */
 function cliLibrary(app: string): string {
+	const fromEnv = process.env.NS_CLI_LIB;
+	if (fromEnv && existsSync(fromEnv)) return fromEnv;
 	const local = join(app, 'node_modules', 'nativescript', 'lib', 'nativescript-cli-lib.js');
 	if (existsSync(local)) return local;
+	const probeDir = (dir: string): string | null => {
+		if (!dir) return null;
+		const beside = join(dir, 'node_modules', 'nativescript', 'lib', 'nativescript-cli-lib.js');
+		if (existsSync(beside)) return beside;
+		for (const bin of process.platform === 'win32' ? ['ns.cmd', 'ns'] : ['ns']) {
+			const ns = join(dir, bin);
+			if (!existsSync(ns)) continue;
+			try {
+				const real = dirname(realpathSync(ns));
+				for (const candidate of [join(real, '..', 'lib', 'nativescript-cli-lib.js'), join(real, 'node_modules', 'nativescript', 'lib', 'nativescript-cli-lib.js')]) {
+					if (existsSync(candidate)) return candidate;
+				}
+			} catch {}
+		}
+		return null;
+	};
 	for (const dir of (process.env.PATH ?? '').split(delimiter)) {
-		const ns = join(dir, 'ns');
-		if (!existsSync(ns)) continue;
-		const lib = join(dirname(realpathSync(ns)), '..', 'lib', 'nativescript-cli-lib.js');
-		if (existsSync(lib)) return lib;
+		const found = probeDir(dir);
+		if (found) return found;
 	}
+	const besideNode = probeDir(dirname(process.execPath));
+	if (besideNode) return besideNode;
 	throw new Error("the NativeScript CLI (ns) is needed: its library reads nativescript.config.ts for the app's bundler");
 }
 

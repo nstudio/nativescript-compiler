@@ -26,7 +26,7 @@ import { formatKotlin } from '../../kotlin/ktfmt.ts';
 import { moduleThreads, THREAD_ANNOTATIONS } from '../../semantics/threading.ts';
 import { androidManifest, copyAndroidAppFiles, copyAndroidFonts, pluginManifests } from './resources.ts';
 import { appResourcesDir, uncaughtErrorSwitches } from '../resources.ts';
-import { KIT_ANDROID, PACKAGE } from '../../driver/paths.ts';
+import { gradleWrapper, KIT_ANDROID, PACKAGE } from '../../driver/paths.ts';
 import type { BuildContext } from '../../program/build-context.ts';
 import { OVERLAY_FILE, XML_FREE_OVERLAY, type KitOverlay } from '../../kit/overlay.ts';
 import { byName } from '../../program/order.ts';
@@ -76,6 +76,7 @@ export interface AndroidBuild {
 	compiledPlugins?: string[];
 	/** Worker scripts (`new Worker(new URL('./x.worker', import.meta.url))`), compiled as modules each worker thread runs. */
 	workers?: string[];
+	aliased?: (specifier: string, importer?: string) => string | undefined;
 	resolved?: (containing: string, specifier: string) => string | undefined;
 	/** The app mounts its own roots (its entry renders them): the entry is a module that runs the app. */
 	mounted?: boolean;
@@ -168,7 +169,8 @@ export async function writeAndroid(b: AndroidBuild): Promise<void> {
 		plainFields: !!b.translatorHooks?.plainFields,
 		appMembersByName: !!b.xml && !b.xmlMemberKeys,
 		pluginRoots: (b.plugins ?? []).map((p) => p.root + '/'),
-		workerScripts: new Map((b.workers ?? []).map((f) => [f, relative(b.app, f)])),
+		workerScripts: new Map((b.workers ?? []).map((f) => [f.replace(/\\/g, '/'), relative(b.app, f).replace(/\\/g, '/')])),
+		resolveAlias: b.aliased ?? null,
 		moduleThread: (file) => threads.get(file),
 		moduleKey: lazy.size ? (file) => relative(b.app, file) : undefined,
 	});
@@ -542,7 +544,8 @@ ${overlays.map((m) => `        variant.sources.manifests.addStaticManifestFile($
 		const k = b.keyStore;
 		const signing = k ? [`-Pandroid.injected.signing.store.file=${resolve(k.path)}`, `-Pandroid.injected.signing.store.password=${k.password}`, `-Pandroid.injected.signing.key.alias=${k.alias}`, `-Pandroid.injected.signing.key.password=${k.aliasPassword}`] : [];
 		// Kotlin's errors point into the generated files: printed with the TypeScript lines they came from.
-		const gradle = spawnSync(join(kit, 'gradlew'), ['-p', b.out, ':assembleRelease', ...(b.bundle ? [':bundleRelease'] : []), ...signing, '--quiet'], { stdio: ['inherit', 'pipe', 'pipe'], encoding: 'utf8', maxBuffer: 1 << 30 });
+		const gw = gradleWrapper(['-p', b.out, ':assembleRelease', ...(b.bundle ? [':bundleRelease'] : []), ...signing, '--quiet'], kit);
+		const gradle = spawnSync(gw.command, gw.args, { stdio: ['inherit', 'pipe', 'pipe'], encoding: 'utf8', maxBuffer: 1 << 30 });
 		process.stdout.write(mapKotlinDiagnostics(gradle.stdout ?? '', b.out));
 		process.stderr.write(mapKotlinDiagnostics(gradle.stderr ?? '', b.out));
 		if (gradle.status !== 0) throw new Error(`the Gradle build failed (exit ${gradle.status ?? gradle.signal})`);

@@ -54,6 +54,7 @@
     "kit-android/build.gradle.kts",
     "kit-android/consumer-rules.pro",
     "kit-android/gradlew",
+    "kit-android/gradlew.bat",
     "kit-android/gradle/",
     "kit-android/src/",
     "kit-android/generated/",

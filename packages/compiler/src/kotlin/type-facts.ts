@@ -68,10 +68,20 @@ export const typeFactsMethods = {
 	/** Whether a read of `e` only tests or passes on its value, so a nullable declaration needs no unwrap there. */
 	nullTolerant(this: Translator, e: ts.Expression): boolean {
 		let n: ts.Node = e;
-		while (ts.isParenthesizedExpression(n.parent)) n = n.parent;
+		while (
+			ts.isParenthesizedExpression(n.parent) ||
+			((ts.isAsExpression(n.parent) || ts.isTypeAssertionExpression(n.parent)) &&
+				(() => {
+					const pt = this.typeOf(n.parent);
+					return isUntyped(spelledType(pt)) || isNullable(pt) || this.isTypeParameterName(pt);
+				})())
+		)
+			n = n.parent;
 		if (this.nullOk.has(n) || this.nullOk.has(e) || this.states.observedAsIs(e)) return true;
 		const p = n.parent;
 		const K = ts.SyntaxKind;
+		// A discarded expression (`context.registerReceiver(...)`, `void expr`) never dereferences its result.
+		if (ts.isExpressionStatement(p) || ts.isVoidExpression(p)) return true;
 		// A branch of a conditional, or `a ?? b`'s `b`, where the whole goes where missing is taken; or a result a function gives as nullable.
 		if (ts.isConditionalExpression(p) && (p.whenTrue === n || p.whenFalse === n)) return this.nullTolerant(p);
 		if (ts.isBinaryExpression(p) && p.operatorToken.kind === K.QuestionQuestionToken && p.right === n) return this.nullTolerant(p);
@@ -79,7 +89,7 @@ export const typeFactsMethods = {
 			const fn = ts.isArrowFunction(p) ? p : ts.findAncestor(p, ts.isFunctionLike);
 			if (fn && (ts.isMethodDeclaration(fn) || ts.isFunctionDeclaration(fn) || ts.isGetAccessorDeclaration(fn))) {
 				const rt = this.returnTypeOf(fn);
-				if (isNullable(rt) || isUntyped(spelledType(rt))) return true;
+				if (isNullable(rt) || isUntyped(spelledType(rt)) || (this.library && this.isTypeParameterName(rt))) return true;
 			}
 		}
 		// `for (k in x)` of nothing runs no iteration.

@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { archiveClasses } from '../kotlin/native/classfiles.ts';
 import type { PluginSource } from './source.ts';
-import { cacheDir, KIT_ANDROID } from '../driver/paths.ts';
+import { cacheDir, gradleWrapper, KIT_ANDROID } from '../driver/paths.ts';
 import { byName, compareText } from '../program/order.ts';
 
 /**
@@ -246,7 +246,8 @@ ${l.include?.libraryBlocks.join('\n\n') ?? ''}
 		});
 		options.say?.(`building the Android code of ${libraries.map((l) => `${l.source.name}@${l.source.version}`).join(', ')}`);
 		try {
-			execFileSync(join(kit, 'gradlew'), ['-p', root, 'assembleRelease', '-PtempBuild=true', '--quiet'], { stdio: 'inherit' });
+			const gw = gradleWrapper(['-p', root, 'assembleRelease', '-PtempBuild=true', '--quiet'], kit);
+			execFileSync(gw.command, gw.args, { stdio: 'inherit' });
 		} catch {
 			throw new Error(`the Android code of ${libraries.map((l, i) => `${l.source.name} (:p${i})`).join(', ')} did not build (Gradle's output is above)`);
 		}
@@ -469,6 +470,30 @@ export function parseIncludeGradle(text: string): IncludeGradle {
 						const list = is(p, 'id', 'exclude') ? out.packaging.excludes : is(p, 'id', 'pickFirst') ? out.packaging.pickFirsts : unsupported(p);
 						i++;
 						list.push(stringArgument());
+					});
+					return;
+				}
+				if (blockOf('compileOptions')) {
+					i++;
+					statements((c) => {
+						if (!is(c, 'id', 'sourceCompatibility') && !is(c, 'id', 'targetCompatibility') && !is(c, 'id', 'encoding')) unsupported(c);
+						i++;
+						if (is(peek(), 'punct', '=')) i++;
+						if (is(peek(), 'str') || is(peek(), 'num')) {
+							i++;
+							return;
+						}
+						// `JavaVersion.VERSION_1_8` or `JavaVersion.toVersion(...)`.
+						expect('id');
+						while (is(peek(), 'punct', '.')) {
+							i++;
+							expect('id');
+						}
+						if (is(peek(), 'punct', '(')) {
+							i++;
+							while (!is(peek(), 'punct', ')') && !is(peek(), 'end')) i++;
+							expect('punct', ')');
+						}
 					});
 					return;
 				}

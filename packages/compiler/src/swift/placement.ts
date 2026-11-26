@@ -175,7 +175,7 @@ export const placementMethods = {
 		if (!shape) {
 			// An interface's object class, whose fields are its property signatures.
 			const d = this.checker.getSymbolAtLocation(e.name)?.valueDeclaration;
-			if (!d || !ts.isPropertySignature(d) || !ts.isInterfaceDeclaration(d.parent) || d.parent.name.text !== held || !this.interfaces.has(held) || this.protocols.has(held)) return null;
+			if (!d || !ts.isPropertySignature(d) || !ts.isInterfaceDeclaration(d.parent) || d.parent.name.text !== held || !this.facts.hasInterface(this, this.interfaces, (x, s) => this.topName(x, s), held) || this.protocols.has(held)) return null;
 			const t = this.typeOf(d);
 			return (d.questionToken || holdsNil(heldOf(spelledType(t)))) && heldOf(spelledType(t)) !== 'any' ? e.name.text : null;
 		}
@@ -627,8 +627,7 @@ export const placementMethods = {
 		if (source.replace(/[?!]$/, '') !== target.replace(/[?!]$/, '') && this.isObjectShape(source.replace(/[?!]$/, '')) && this.isObjectShape(target.replace(/[?!]$/, ''))) return this.convert(this.expr(e), source, target);
 		if (/^\(.*\)$/.test(source) && !functionParts(source) && /^JSArray<.*>[?!]?$/.test(target)) return this.convert(this.expr(e), source, target);
 		// An array literal is made of the slot's element type already.
-		const literal = ts.isArrayLiteralExpression(bare) && !bare.elements.some(ts.isSpreadElement);
-		if (literal && /^JSArray<.+>[?!]?$/.test(source) && /^JSArray<.+>[?!]?$/.test(target) && ['elements', 'view'].includes(structural(parseNativeType(source), parseNativeType(target), this.structuralFacts())?.step ?? '')) return this.expr(e);
+		if (ts.isArrayLiteralExpression(bare) && /^JSArray<.+>[?!]?$/.test(source) && /^JSArray<.+>[?!]?$/.test(target) && ['elements', 'view'].includes(structural(parseNativeType(source), parseNativeType(target), this.structuralFacts())?.step ?? '')) return this.expr(e);
 		if (/^JSArray<\w+>[?!]?$/.test(source) && /^JSArray<\w+>[?!]?$/.test(target) && source.replace(/[?!]$/, '') !== target.replace(/[?!]$/, '')) return this.convert(this.expr(e), source, target);
 		if (!this.library && /^JSArray<.+>[?!]?$/.test(source) && /^JSArray<.+>[?!]?$/.test(target) && ['elements', 'view'].includes(structural(parseNativeType(source), parseNativeType(target), this.structuralFacts())?.step ?? '')) return this.convert(this.expr(e), source, target);
 		// A non-strict app's value that may be missing (a native read typed `T | null`) where one is declared: unwrapped where used.

@@ -53,7 +53,12 @@ export const conversionMethods = {
 				const set = tracked.has(f.name) ? `jsKeySet(field, value, ${kotlinString(f.name)})` : 'value';
 				// A view is made with no fields given: a number or boolean field's backing value unboxes.
 				const unboxed: Record<string, string> = { Double: '0.0', Boolean: 'false', Int: '0', Long: '0L', Float: '0f' };
-				lines.push(`    ${overrides?.has(f.name) ? 'override ' : ''}var ${ident(memberOf(f))}: ${f.type} = ${unboxed[f.type] ? `${ident(memberOf(f))} ?: ${unboxed[f.type]}` : `${RT.jsUnchecked}(${ident(memberOf(f))})`}`, `        get() { val __r = jsRoot ?: return field; return ${field(f, '__r')} }`, `        set(value) { val __r = jsRoot; if (__r != null) { __r.jsSet(${kotlinString(f.name)}, ${RT.jsBox}(value)); return }; field = ${set}${writes(f)} }`);
+				// A view over an untyped object must not fabricate an empty JSArray for a missing or non-array property (`Array.isArray((v as T).arr)`).
+				const arrayField = !this.library ? /^JSArray<(.+)>(\??)$/.exec(f.type) : null;
+				const viewRead = arrayField
+					? `${RT.jsField}(__r, ${f.key ?? kotlinString(f.name)}).let { __v -> if (__v is JSArray<*> || (__v != null && __v.javaClass.isArray)) ${RT.jsArrayFrom}(__v) { ${this.fromAny('it', arrayField[1])} } else ${arrayField[2] ? 'null' : `${RT.jsUnchecked}<${f.type}>(null)`} }`
+					: field(f, '__r');
+				lines.push(`    ${overrides?.has(f.name) ? 'override ' : ''}var ${ident(memberOf(f))}: ${f.type} = ${unboxed[f.type] ? `${ident(memberOf(f))} ?: ${unboxed[f.type]}` : `${RT.jsUnchecked}(${ident(memberOf(f))})`}`, `        get() { val __r = jsRoot ?: return field; return ${viewRead} }`, `        set(value) { val __r = jsRoot; if (__r != null) { __r.jsSet(${kotlinString(f.name)}, ${RT.jsBox}(value)); return }; field = ${set}${writes(f)} }`);
 			}
 		} else for (const f of [...fields, ...allFields.filter((f) => f.symbol)]) if (loose(f)) lines.push(`    ${modifiers(f)}var ${ident(memberOf(f))}: ${f.type} = ${RT.jsUnchecked}(${ident(memberOf(f))})`, ...(through.has(f.name) ? [`        set(value) { field = value${writes(f)} }`] : []));
 		for (const x of protocols) lines.push(...x.lines);
@@ -394,7 +399,7 @@ export const conversionMethods = {
 		const record = unbox.composite === 'record' ? /^JSRecord<(.*)>(\??)$/.exec(type) : null;
 		// App code: of objects it types as its own classes, which a package's copies (`{ ...entity }`) are not: each read as one.
 		const entry = record?.[1].replace(/\?$/, '');
-		if (record && !this.library && entry && (this.interfaces.has(entry) || this.isShapeType(entry))) {
+		if (record && !this.library && entry && this.isShapeType(entry)) {
 			const read = (x: string) => `${RT.jsRecordOf}(${x}) { ${this.fromAny('it', record[1])} }`;
 			if (!record[2]) return read(code);
 			return this.marks.isPure(code) ? `(if (${RT.jsIsNullish}(${code})) null else ${read(code)})` : `${RT.jsUnlessNullish}(${code}) { ${read('it')} }`;
@@ -429,9 +434,17 @@ export const conversionMethods = {
 		// A promise its type promises may be any thenable: adopted, as awaiting it or `Promise.resolve` would.
 		const promised = unbox.composite === 'promise' ? /^JSPromise<(.*)>$/.exec(base) : null;
 		if (promised) {
-			// Kotlin cannot tell a promise's element type: objects read into classes are read as each value arrives.
-			const read = this.readsIntoClass(promised[1]) ? ` { ${this.fromAny('it', promised[1])} }` : '';
-			const of = (x: string) => `${RT.jsPromiseOf}<${promised[1]}>(${x})${read}`;
+			// Kotlin cannot tell a promise's element type: convert resolved values as each arrives (including Unit and shapes).
+			const inner = promised[1];
+			const innerBase = inner.replace(/\?$/, '');
+			const converted =
+				inner === 'Unit'
+					? 'Unit'
+					: this.readsIntoClass(inner) || (!this.library && !isUntyped(spelledType(inner)) && !this.isTypeParameterName(innerBase))
+						? this.fromAny(this.marks.pureCode('it'), inner)
+						: 'it';
+			const read = converted !== 'it' ? ` { ${converted} }` : '';
+			const of = (x: string) => `${RT.jsPromiseOf}<${inner}>(${x})${read}`;
 			return type.endsWith('?') ? `${RT.jsUnlessNullish}(${code}) { ${of('it')} }` : of(code);
 		}
 		// Library mode: JavaScript's null where an object goes (`cond ? entry.fragment : null`) is Kotlin's.

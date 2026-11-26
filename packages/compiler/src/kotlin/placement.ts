@@ -525,12 +525,13 @@ export const placementMethods = {
 				return elements(code);
 			}
 		}
+		if (!this.library && sb === 'JSPromise<Any?>' && /^JSPromise<(.+)>$/.test(tb)) return this.fromAny(this.functionValue(e), target);
 		if (head(sb) && head(sb) === head(tb) && sb !== tb) return cast(this.functionValue(e), target);
 		if (sb !== tb && anyArguments(sb, tb)) return this.unchecked(target, this.functionValue(e));
 		// An object given where an object type of the program's is declared, which it meets without naming it (`btn` as a `MeasuredView`): read through it by name.
 		const wanted = this.checker.getContextualType(e)?.getSymbol();
 		const programInterface = !!wanted && !!(wanted.flags & ts.SymbolFlags.Interface) && !(wanted.flags & ts.SymbolFlags.Class) && !!wanted.declarations?.every((d) => !d.getSourceFile().isDeclarationFile) && wanted.name === tb;
-		if (!this.library && sb !== tb && this.isObjectType(sb) && (programInterface || this.interfaces.has(tb) || !!this.shapes.named(tb)) && !this.declaresInterface(this.checker.getTypeAtLocation(e), tb)) {
+		if (!this.library && sb !== tb && this.isObjectType(sb) && (programInterface || this.facts.hasInterface(this, this.interfaces, (d, s) => this.topName(d, s), tb) || !!this.shapes.named(tb)) && !this.declaresInterface(this.checker.getTypeAtLocation(e), tb)) {
 			const reader = this.protocols.has(tb) ? `${tb}Object` : tb;
 			return isNullable(target) ? `${this.expr(e)}?.let { ${this.viewOf(reader, 'it')} }` : this.viewOf(reader, this.expr(e));
 		}

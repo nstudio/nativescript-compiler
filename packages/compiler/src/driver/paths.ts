@@ -11,6 +11,14 @@ export const KIT_APPLE_SOURCES = join(KIT_APPLE, 'Sources', 'NativeScriptKit');
 export const KIT_ANDROID = join(PACKAGE, 'kit-android');
 export const BIN = join(PACKAGE, 'bin');
 
+/** Command and arguments to invoke the bundled Gradle wrapper on the current OS. */
+export function gradleWrapper(args: string[], kit: string = KIT_ANDROID): { command: string; args: string[] } {
+	if (process.platform === 'win32') {
+		return { command: process.env.ComSpec || 'cmd.exe', args: ['/d', '/c', join(kit, 'gradlew.bat'), ...args] };
+	}
+	return { command: join(kit, 'gradlew'), args };
+}
+
 /**
  * Where the compiler keeps what it fetches and derives once per machine (plugins' sources, their Android libraries,
  * tools it downloads), outside the installed package: $NS_COMPILED_CACHE, else `nativescript/compiled` in

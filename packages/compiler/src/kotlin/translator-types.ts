@@ -106,6 +106,8 @@ export interface KotlinConfig extends TranslatorConfig<KotlinTranslatorView, Kot
 	readonly native?: (t: Translator) => KotlinNative;
 	/** The worker scripts compiled with the app, by file, and the name the entry registers each under. */
 	readonly workerScripts?: ReadonlyMap<string, string> | null;
+	/** Resolves app path aliases (`~/...`, `@/...`) for worker script specifiers. */
+	readonly resolveAlias?: ((specifier: string, importer?: string) => string | undefined) | null;
 	/** The thread each module's code runs on (threading.ts). */
 	readonly moduleThread?: ((file: string) => ModuleThread | undefined) | null;
 	/** A module's name for `AppModules.runImport`, where modules `await import(…)` reaches run when imported. */

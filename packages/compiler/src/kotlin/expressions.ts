@@ -221,13 +221,18 @@ export const expressionsMethods = {
 			// An object of one shape asserted another's (`cur as ICalEvent` of a `Partial<ICalEvent> & {…}`): Kotlin's classes are apart, so
 			// the object is read as the asserted interface's, by its keys.
 			const [fromName, toName] = [from.replace(/\?$/, ''), to.replace(/\?$/, '')];
-			const fieldClass = (n: string) => (this.interfaces.has(n) && !this.protocols.has(n)) || !!this.shapes.named(n);
-			if (!this.library && fromName !== toName && fieldClass(fromName) && this.interfaces.has(toName) && !this.protocols.has(toName)) {
+			const fieldClass = (n: string) => (this.facts.hasInterface(this, this.interfaces, (d, s) => this.topName(d, s), n) && !this.protocols.has(n)) || !!this.shapes.named(n);
+			if (!this.library && fromName !== toName && fieldClass(fromName) && this.facts.hasInterface(this, this.interfaces, (d, s) => this.topName(d, s), toName) && !this.protocols.has(toName)) {
 				return from.endsWith('?') ? `${this.expr(e.expression)}?.let { ${this.viewOf(toName, 'it')} }` : this.viewOf(toName, this.expr(e.expression));
 			}
 			if (from !== to && from.replace(/\?$/, '') !== to.replace(/\?$/, '') && this.isObjectRef(e) && this.isObjectRef(e.expression)) {
-				// Library mode: a script assertion never fails, so a value of another class (a TabViewItem walked up to as a parent) reads as null where null fits.
+				// Library mode: a script assertion never fails, so a value of another class (a TabViewItem walked up to as a parent)
+				// or a null Java result (`dlg.findViewById(id) as TextView`) reads as null instead of throwing ClassCastException/NPE.
 				if (this.library && this.isClassDowncast(e) && (isNullable(to) || this.functionLiteralArgument(e))) return safeCast(this.expr(e.expression), to.replace(/\?$/, ''));
+				if (this.library && this.native?.type(this.checker.getNonNullableType(this.checker.getTypeAtLocation(e))) && this.native?.type(this.checker.getNonNullableType(this.checker.getTypeAtLocation(e.expression)))) {
+					const safe = safeCast(this.expr(e.expression), to.replace(/\?$/, ''));
+					return isNullable(to) || this.nullOk.has(e) ? safe : this.unchecked(to, safe);
+				}
 				return this.classCast(this.expr(e.expression), from, to);
 			}
 			if (from.endsWith('?') && !to.endsWith('?') && from.replace(/\?$/, '') === to) return this.asserted(this.expr(e.expression));

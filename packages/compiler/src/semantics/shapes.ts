@@ -1,5 +1,5 @@
 import ts from 'typescript';
-import { heldOf, isPrimitive, presentOf, spelledType } from './types.ts';
+import { heldOf, isPrimitive, isUntyped, presentOf, spelledType } from './types.ts';
 import type { Form } from './forms/forms.ts';
 import { admitsUndefined, alwaysThrows, containsThis, hasStatic, jsKeyOrder, literalKey, onlyUndefined } from './lang.ts';
 import type { ValueStates } from './states/value-states.ts';
@@ -158,6 +158,19 @@ export type Held = 'present' | 'optional' | 'unwrapped' | 'any' | 'function' | '
 
 /** The type holds nil as its value: `T?`, `Any?`. */
 export const holdsNil = (h: Held): boolean => h === 'optional' || h === 'any';
+
+/** An interface or object-shape type alias declared in program source (collected upfront for order-independent checks). */
+export const isShapeInterfaceDecl = (n: ts.Node): n is ts.InterfaceDeclaration | ts.TypeAliasDeclaration =>
+	!n.getSourceFile().isDeclarationFile && (ts.isInterfaceDeclaration(n) || (ts.isTypeAliasDeclaration(n) && (ts.isTypeLiteralNode(n.type) || ts.isIntersectionTypeNode(n.type))));
+
+/** Property access inside `Array.isArray(x)` when `x` reads a property off an object shape / interface view. */
+export function shapeArrayGuardAccess(arg: ts.Expression | undefined, isShape: (type: string) => boolean, typeOf: (e: ts.Expression) => string): { prop: ts.PropertyAccessExpression; optional: boolean } | null {
+	const a0 = arg ? ts.skipParentheses(arg) : undefined;
+	if (!a0 || !ts.isPropertyAccessExpression(a0)) return null;
+	const recvType = typeOf(a0.expression);
+	if (!isShape(recvType.replace(/[?!]$/, ''))) return null;
+	return { prop: a0, optional: !!a0.questionDotToken || recvType.endsWith('?') };
+}
 /** The spelling ends in `?`, a function's result's included. */
 export const spelledOptional = (h: Held): boolean => holdsNil(h) || h === 'optional-result';
 /** The type holds nil, implicitly unwrapped or not. */
@@ -812,4 +825,11 @@ function runsCode(n: ts.Node, deep = true): boolean {
 	};
 	visit(n);
 	return found;
+}
+
+/** Whether spreading elements of `from` into an array of `to` requires elementwise mapping (untyped source or distinct structural shapes). */
+export function spreadElementNeedsMap(from: string, to: string, isShape: (name: string) => boolean, mapUntyped: boolean): boolean {
+	if (from === to) return false;
+	if (mapUntyped && isUntyped(spelledType(from))) return true;
+	return !isUntyped(spelledType(to)) && isShape(to.replace(/\?$/, '')) && isShape(from.replace(/\?$/, ''));
 }

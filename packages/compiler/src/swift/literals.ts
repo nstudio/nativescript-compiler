@@ -4,7 +4,7 @@ import { functionParts, ident, identPath, initOrder, isNullish, isOptional, labe
 import type { ShapeField, Translator } from './translator.ts';
 import { assertedOperand, evolvingElementContext, intersectionAliasMembers, isTypeParameterType, literalKey, openSpreadType, spreadOperand, unquoted } from '../semantics/lang.ts';
 import { place } from '../semantics/placement.ts';
-import { holdsNil, literalNotes, signatureField, shapePlanOfLiteral, spelledOptional, resultShapeNamed } from '../semantics/shapes.ts';
+import { holdsNil, literalNotes, signatureField, shapePlanOfLiteral, spelledOptional, spreadElementNeedsMap, resultShapeNamed } from '../semantics/shapes.ts';
 import { isCoreDeclaration } from '../program/core-facts.ts';
 import { hasModifier, thisNodes, tupleSpreadTypes, withoutDefault } from '../semantics/ast.ts';
 import { programSymbolKey } from '../program/stable-names.ts';
@@ -81,9 +81,9 @@ export const literalsMethods = {
 					parts.push(`[${run.join(', ')}]`);
 					run = [];
 				}
-				// The spread's elements as this array's (`[name, ...untyped]` into a `string[]`).
-				const from = this.elementTypeOf(x.expression);
-				parts.push(from !== el && isUntyped(spelledType(from)) ? `Array(${this.iterable(x.expression)}).map { ${this.fromAny('$0', el)} }` : `Array(${this.iterable(x.expression)})`);
+				// The spread's elements as this array's (`[name, ...untyped]` into a `string[]`, or `[...derived]` into a base shape array).
+				const needsMap = spreadElementNeedsMap(this.elementTypeOf(x.expression), el, (n) => this.isObjectShape(n), true);
+				parts.push(needsMap ? `Array(${this.iterable(x.expression)}).map { ${this.fromAny('$0', el)} }` : `Array(${this.iterable(x.expression)})`);
 			} else if (ts.isOmittedExpression(x)) throw this.error(x, 'an array hole', 'array-hole');
 			else if (!this.lenient && isNullish(ts.skipOuterExpressions(x)) && !isOptional(el) && !isUntyped(spelledType(el)) && !isKit(spelledType(el), 'JSNullish') && this.zero(el) === null) {
 				throw this.error(x, `null or undefined in an array of ${el}, whose type leaves both out (declare the element type \`${el} | null\`)`);

@@ -51,6 +51,9 @@ import { buildKotlinRuntime, buildSwiftRuntime, kotlinc, kotlinStdlib, modulesDi
 import ts from 'typescript';
 import { BuildContext } from '../../src/program/build-context.ts';
 import { desugarClassMixins } from '../../src/program/class-mixins.ts';
+import { parseIncludeGradle } from '../../src/plugins/native-android.ts';
+import { addKotlinInterfaces } from '../../src/kotlin/app-modules.ts';
+import { ADAPTERS_OVERRIDE, adapterOf, availableAdapters, loadAdapter } from '../../src/adapters/load.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -1818,6 +1821,289 @@ console.log([
         ktGot = errors ? errors.slice(0, 3).join(' ; ') : spawnSync('java', ['-cp', [join(dir, 'classes-wave3'), runtime, kotlinStdlib()].join(':'), 'org.example.wave3.__MainKt'], { encoding: 'utf8' }).stdout.trim();
       } catch (e) { ktGot = String(e); }
       check(ktGot === expected, `Wave 3 compiler features (.json, mixin, recursive fn expr, tuple spread, setPrototypeOf, replaceAll fn, this+arguments, Symbol.hasInstance) run natively (Kotlin${ktGot === expected ? '' : `: ${ktGot.slice(0, 300)}`})`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+})();
+
+// ---- Reported issues #1-#14: Windows support, Signal/Memo JSDynamic, Android native codegen, Worker, DataView, jsView Array.isArray, structural interfaces, generic Promise<T>, include.gradle compileOptions ----
+await (async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ns-release-checks-issues-'));
+  try {
+    // #1: gradlew.bat shipped alongside gradlew & virtual path backslash normalization in createProgram.
+    const pkgJson = JSON.parse(readFileSync(join(here, '../../package.json'), 'utf8'));
+    check(existsSync(join(KIT_ANDROID, 'gradlew.bat')) && pkgJson.files.includes('kit-android/gradlew.bat'), '#1: kit-android ships gradlew.bat and lists it in package.json files');
+    const winRoot = join(dir, 'win.release.ts');
+    const winVirtual = new Map([[winRoot.replace(/\//g, '\\'), 'export const winVal: number = 7;\n']]);
+    const winProg = createProgram([winRoot], winVirtual, 'android', modulesDir);
+    const winDiag = ts.getPreEmitDiagnostics(winProg.program, winProg.program.getSourceFile(winRoot));
+    check(winDiag.length === 0 && !!winProg.program.getSourceFile(winRoot), '#1: createProgram resolves virtual .release.ts files when keyed with Windows backslashes');
+
+    // #5 & #9: Vue adapter sets rowSignals: 'array' and extracts top-level app.ts startup statements into __vue_entry.release.ts.
+    {
+      const prevOverride = process.env[ADAPTERS_OVERRIDE];
+      process.env[ADAPTERS_OVERRIDE] = join(here, '../../..');
+      try {
+        const vueAppDir = join(dir, 'vue-app', 'app');
+        mkdirSync(vueAppDir, { recursive: true });
+        const appVue = join(vueAppDir, 'App.vue');
+        const storeTs = join(vueAppDir, 'store.ts');
+        const appTs = join(vueAppDir, 'app.ts');
+        writeFileSync(appVue, `<template><Page><Label text="hi" /></Page></template>\n<script setup lang="ts">\n</script>\n`);
+        writeFileSync(storeTs, `export function initStore() {}\n`);
+        const entryText = `import { createApp } from 'nativescript-vue';\nimport { initStore } from './store';\nimport App from './App.vue';\ninitStore();\ncreateApp(App).start();\n`;
+        writeFileSync(appTs, entryText);
+        const vueAdapter = await loadAdapter(adapterOf('vue', availableAdapters(join(dir, 'vue-app'))));
+        check(vueAdapter.behaviour.rowSignals === 'array', '#5: Vue adapter enables per-key rowSignals (ForEach / ForRow)');
+        const vueRes = await vueAdapter.frontEnd({
+          root: join(dir, 'vue-app'),
+          appDir: vueAppDir,
+          entry: appTs,
+          files: [appVue, storeTs, appTs],
+          platform: 'android',
+          entryText,
+          sources: [storeTs],
+          aliased: () => undefined,
+          plugins: new PluginSources({ app: join(dir, 'vue-app'), platform: 'android' }),
+          nodeModules: modulesDir,
+          replacedPackages: new Set(),
+        });
+        const entryMod = join(vueAppDir, '__vue_entry.release.ts');
+        const entrySrc = vueRes.overrides?.get(entryMod) ?? '';
+        check(
+          vueRes.modules.includes(entryMod) &&
+            entrySrc.includes("import { initStore } from './store';") &&
+            entrySrc.includes('initStore();') &&
+            !entrySrc.includes('createApp'),
+          `#9: Vue adapter compiles app.ts startup code into __vue_entry.release.ts`,
+        );
+      } finally {
+        if (prevOverride === undefined) delete process.env[ADAPTERS_OVERRIDE];
+        else process.env[ADAPTERS_OVERRIDE] = prevOverride;
+      }
+    }
+
+    // #10: parseIncludeGradle accepts android { compileOptions { ... } } (e.g. @nstudio/ncharts).
+    const parsedGradle = parseIncludeGradle(`
+repositories {
+  maven { url 'https://jitpack.io' }
+}
+dependencies {
+  implementation 'com.github.PhilJay:MPAndroidChart:v3.1.0'
+}
+android {
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_1_8
+    targetCompatibility JavaVersion.VERSION_1_8
+  }
+}
+`);
+    check(parsedGradle.repositories.includes('https://jitpack.io') && parsedGradle.dependencies.some((d) => d.coords === 'com.github.PhilJay:MPAndroidChart:v3.1.0'), '#10: parseIncludeGradle accepts android { compileOptions { ... } }');
+
+    // #6: new Worker('~/...') resolves registered worker script in Kotlin codegen.
+    const workerSrc = join(dir, 'app', 'workers', 'echo-worker.ts');
+    const mainSrc = join(dir, 'app', 'main.ts');
+    mkdirSync(dirname(workerSrc), { recursive: true });
+    writeFileSync(workerSrc, 'declare const self: any; self.onmessage = (e: any) => postMessage(e.data);\n');
+    writeFileSync(mainSrc, "export const w = new Worker('~/workers/echo-worker');\n");
+    const wProg = createProgram([mainSrc, workerSrc], new Map(), 'android', modulesDir);
+    const wKt = new Translator(wProg.checker, new Map(), wProg.files, {
+      workerScripts: new Map([[workerSrc, 'app/workers/echo-worker.ts']]),
+      resolveAlias: (spec) => (spec.startsWith('~/') ? join(dir, 'app', spec.slice(2)) : undefined),
+      errors: [],
+    });
+    const wCode = translateKotlinModules(wKt, wProg.program, [mainSrc]).map((m) => m.code).join('\n');
+    check(wCode.includes('JSWorker("~/workers/echo-worker", "app/workers/echo-worker.ts")'), `#6: new Worker('~/...') passes registered script argument (${wCode.trim().slice(0, 160)})`);
+
+    // #3, #4, #7, #11: Android SDK & library-mode Kotlin codegen checks.
+    const cp = androidClassPath(null, { archives: [], dependencies: [] });
+    if (cp) {
+      const sdkFile = join(dir, 'sdk.ts');
+      writeFileSync(sdkFile, `
+export function readUsb(intent: android.content.Intent): android.hardware.usb.UsbDevice | null {
+  return intent.getParcelableExtra(android.hardware.usb.UsbManager.EXTRA_DEVICE) as android.hardware.usb.UsbDevice | null;
+}
+export function registerNonSticky(ctx: android.content.Context, rx: android.content.BroadcastReceiver) {
+  ctx.registerReceiver(rx, new android.content.IntentFilter('x'));
+}
+`);
+      const sdkProg = createProgram([sdkFile], new Map(), 'android', modulesDir);
+      const sdkKt = new Translator(sdkProg.checker, new Map(), sdkProg.files, { native: (t) => new AndroidNativeAPI(t, cp), errors: [] });
+      const sdkCode = translateKotlinModules(sdkKt, sdkProg.program, [sdkFile]).map((m) => m.code).join('\n');
+      check(sdkCode.includes('.getParcelableExtra<android.os.Parcelable>('), `#7: unconstrained generic Java method emits explicit type argument (${sdkCode.slice(0, 200)})`);
+      check(!sdkCode.includes('jsObjectRequired'), `#4: discarded @Nullable Java call (registerReceiver) omits jsObjectRequired (${sdkCode.slice(0, 200)})`);
+
+      const libFile = join(dir, 'lib-core.ts');
+      writeFileSync(libFile, `
+export class FakeView {
+  public id: string = '';
+  public getViewById<T = FakeView>(id: string): T {
+    return <T>findById(this, id);
+  }
+}
+export function findById(view: FakeView, id: string): FakeView {
+  if (!view) return undefined as any;
+  return view.id === id ? view : (undefined as any);
+}
+export function styleDialog(dlg: android.app.AlertDialog) {
+  const tv = dlg.findViewById(1) as android.widget.TextView;
+  if (tv) tv.setTextColor(0);
+  const buttons: android.widget.Button[] = [];
+  buttons[0] = dlg.findViewById(2) as android.widget.Button;
+}
+`);
+      const libProg = createProgram([libFile], new Map(), 'android', modulesDir, undefined, [], {}, { strict: false, strictNullChecks: false });
+      const libKt = new Translator(libProg.checker, new Map(), libProg.files, {
+        lenient: true,
+        library: { moduleName: () => 'Core_test', counterpart: () => null, identities: new Set() },
+        native: (t) => new AndroidNativeAPI(t, cp),
+        errors: [],
+      });
+      const libCode = translateKotlinModules(libKt, libProg.program, [libFile]).map((m) => m.code).join('\n');
+      check(!/fun getViewById[\s\S]*?jsObjectRequired/.test(libCode), `#11: ViewBase.getViewById generic wrapper omits jsObjectRequired`);
+      check(libCode.includes('as? android.widget.TextView') && libCode.includes('as? android.widget.Button'), `#3: showDialog findViewById casts emit nullable as? in library mode`);
+    }
+
+    // #2, #8, #12, #13, #14: Full native Swift + Kotlin execution (with cross-file interfaces in reverse order!).
+    const typesFile = join(dir, 'z-types.ts');
+    const consumerFile = join(dir, 'a-consumer.ts');
+    writeFileSync(typesFile, `
+export interface BaseBand { bandIndex: number; gain: number; }
+export interface DetailedBand extends BaseBand { mode: number; }
+export interface Point { x: number; y: number; }
+export interface EncodedBytes { $bytes: number[]; }
+export interface OpenResult { ready: boolean; count: number; }
+export interface FormatProvider { getFormat(): { sampleRate: number; dsdMode: number }; }
+`);
+    writeFileSync(consumerFile, `
+import type { BaseBand, DetailedBand, Point, EncodedBytes, OpenResult, FormatProvider } from './z-types';
+
+function getBands(): BaseBand[] {
+  const band: DetailedBand = { bandIndex: 0, gain: 3, mode: 1 };
+  return [band];
+}
+function getBandsFromArr(): BaseBand[] {
+  const arr: DetailedBand[] = [{ bandIndex: 2, gain: 5, mode: 9 }];
+  return [...arr];
+}
+function mapPoints(pts: { x: number; y: number; z: number }[]): Point[] {
+  const mapped = pts.map((p) => ({ x: p.x, y: 0 }));
+  return mapped;
+}
+class ImplProvider implements FormatProvider {
+  getFormat(): { sampleRate: number; dsdMode: number } {
+    return { sampleRate: 48000, dsdMode: 1 };
+  }
+}
+function readUint32LE(payload: Uint8Array): number {
+  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+  return view.getUint32(0, true);
+}
+function isEncodedBytes(value: unknown): value is EncodedBytes {
+  return typeof value === 'object' && value !== null && Array.isArray((value as EncodedBytes).$bytes);
+}
+function isEncodedBytesVar(value: unknown): boolean {
+  const eb = value as EncodedBytes;
+  return Array.isArray(eb.$bytes);
+}
+class RpcClient {
+  private send<T>(payload: unknown): Promise<T> {
+    return Promise.resolve(payload as T);
+  }
+  open(): Promise<OpenResult> {
+    return this.send<OpenResult>({ ready: true, count: 7 });
+  }
+  close(): Promise<void> {
+    return this.send<void>(undefined);
+  }
+}
+
+async function runAll() {
+  const b1 = getBands();
+  const b2 = getBandsFromArr();
+  const pts = mapPoints([{ x: 11, y: 22, z: 33 }]);
+  const prov: FormatProvider = new ImplProvider();
+  const fmt = prov.getFormat();
+  const u32 = readUint32LE(new Uint8Array([1, 0, 0, 0]));
+  const g1 = isEncodedBytes({ ok: true });
+  const g2 = isEncodedBytes({ $bytes: 'bad' });
+  const g3 = isEncodedBytes({ $bytes: [1, 2] });
+  const g4 = isEncodedBytesVar({ ok: true });
+  const rpc = new RpcClient();
+  const opened = await rpc.open();
+  await rpc.close();
+  console.log([
+    b1[0].gain + ':' + b2[0].bandIndex,
+    pts[0].x + ',' + pts[0].y,
+    fmt.sampleRate + '/' + fmt.dsdMode,
+    String(u32),
+    [g1, g2, g3, g4].join(','),
+    opened.ready + ':' + opened.count,
+  ].join('|'));
+}
+runAll();
+`);
+    const expected = '3:2|11,0|48000/1|1|false,false,true,false|true:7|sig:2:4';
+    {
+      let swGot = '';
+      try {
+        buildSwiftRuntime(nativeBuild, '-Onone');
+        const out = join(dir, 'swift-issues');
+        const mods = translateSwift([consumerFile, typesFile], out);
+        // Also test #2 Signal & Memo JSDynamic reactivity natively on Swift!
+        writeFileSync(
+          join(out, 'main.swift'),
+          `${swiftMain(mods).replace(/Microtasks\.checkpoint\(\)/, '')}
+let __sig = Signal<Double>(1)
+let __memo = Memo<Double>({ __sig.value * 2 })
+var __seen: [Double] = []
+let _ = Effect { if let v = try? jsGet(__sig, "value") as? Double { __seen.append(v) } }
+try! jsSet(__sig, "value", 2.0)
+let __mVal = (try? jsGet(__memo, "value") as? Double) ?? -1
+Microtasks.checkpoint()
+print("sig:\\(Int(__seen.last ?? -1)):\\(Int(__mVal))")
+`,
+        );
+        const errors = swiftc(readdirSync(out).map((f) => join(out, f)), join(dir, 'main-issues'), nativeBuild, '-Onone');
+        swGot = errors ? errors.slice(0, 3).join(' ; ') : spawnSync(join(dir, 'main-issues'), { encoding: 'utf8' }).stdout.trim().split('\n').join('|');
+      } catch (e) { swGot = String(e); }
+      check(swGot === expected, `Issues #2, #8, #12, #13, #14 run natively (Swift${swGot === expected ? '' : `: ${swGot.slice(0, 300)}`})`);
+    }
+    {
+      let ktGot = '';
+      try {
+        const out = join(dir, 'kotlin-issues');
+        const prog = createProgram([consumerFile, typesFile], new Map(), 'android', modulesDir);
+        const kt = new Translator(prog.checker, new Map(), prog.files, { errors: [] });
+        const mods = translateKotlinModules(kt, prog.program, [consumerFile, typesFile]);
+        addKotlinInterfaces(kt, mods);
+        mkdirSync(out, { recursive: true });
+        for (const m of mods) writeFileSync(join(out, `${m.name}.kt`), `package org.example.issues\nimport org.nativescript.kit.*\n${m.code}\n`);
+        const shapes = kt.shapesCode();
+        if (shapes) writeFileSync(join(out, '__Objects.kt'), `package org.example.issues\nimport org.nativescript.kit.*\n${shapes}\n`);
+        writeFileSync(
+          join(out, '__Main.kt'),
+          `package org.example.issues
+import org.nativescript.kit.*
+fun main() {
+${mods.map((m) => (m.init ? `    ${m.init}()\n` : '')).join('')}    Microtasks.checkpoint()
+    val sig = Signal<Double>(1.0)
+    val memo = Memo<Double>({ sig.value * 2.0 })
+    val seen = mutableListOf<Double>()
+    Effect { (jsGet(sig, "value") as? Double)?.let { seen.add(it) } }
+    jsSet(sig, "value", 2.0)
+    Microtasks.checkpoint()
+    val mVal = (jsGet(memo, "value") as? Double) ?: -1.0
+    println("sig:\${seen.last().toInt()}:\${mVal.toInt()}")
+}
+`,
+        );
+        const runtime = buildKotlinRuntime(nativeBuild);
+        const errors = kotlinc(readdirSync(out).filter((f) => f.endsWith('.kt')).map((f) => join(out, f)), join(dir, 'classes-issues'), [runtime]);
+        ktGot = errors ? errors.slice(0, 3).join(' ; ') : spawnSync('java', ['-cp', [join(dir, 'classes-issues'), runtime, kotlinStdlib()].join(':'), 'org.example.issues.__MainKt'], { encoding: 'utf8' }).stdout.trim().split('\n').join('|');
+      } catch (e) { ktGot = String(e); }
+      check(ktGot === expected, `Issues #2, #8, #12, #13, #14 run natively (Kotlin${ktGot === expected ? '' : `: ${ktGot.slice(0, 300)}`})`);
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });

@@ -81,8 +81,8 @@ export const nativeCallsMethods = {
 		if (!this.t.lenient && !raw.optional && this.t.states.nilKept(e)) return raw.code;
 		// An optional chain (`?.`) TypeScript types as present: the value, as the code reads it.
 		if (raw.optional && !ts.isPropertyAccessExpression(e.parent) && !ts.isCallExpression(e.parent) && !ts.isElementAccessExpression(e.parent)) return this.t.asserted(raw.code);
-		// Tested or passed on as it is (`intent.getAction() && …`): null is the test's to see.
-		if (raw.nullable && this.t.library && raw.desc.startsWith('L') && raw.desc !== 'Ljava/lang/CharSequence;' && this.t.nullTolerant(e)) return raw.code;
+		// Discarded results (`context.registerReceiver(...)`) or null-tolerant uses (`intent.getParcelableExtra(...) as UsbDevice | null`) never dereference null.
+		if (raw.nullable && raw.desc.startsWith('L') && raw.desc !== 'Ljava/lang/CharSequence;' && this.t.nullTolerant(e)) return raw.code;
 		// `@RecentlyNullable` (android.jar): null passes on as Kotlin's platform types let it, except into a member read or an array's elements.
 		if (raw.recentlyNullable && !raw.optional && ((ts.isPropertyAccessExpression(e.parent) && e.parent.expression === e) || raw.desc.startsWith('['))) return this.t.asserted(raw.code);
 		return raw.nullable && !raw.optional ? this.t.asserted(raw.code) : raw.code;
@@ -227,9 +227,79 @@ export const nativeCallsMethods = {
 		const property = r.isStatic ? null : this.kotlinProperty(chosen);
 		if (property) return { code: e.arguments.length ? `run { ${target}.${ident(property)} = ${args} }` : `${target}.${ident(property)}`, desc: e.arguments.length ? 'V' : chosen.ret, optional: target.endsWith('?'), nullable: chosen.m.nullable, recentlyNullable: chosen.m.recentlyNullable };
 		const mapped = r.isStatic ? null : this.mapped(classes, name, chosen.m.descriptor);
+		// A generic Java method whose return type parameter is unconstrained by its arguments (e.g. `Intent.getParcelableExtra`,
+		// `View.findViewById`) would otherwise infer `Nothing` (`java.lang.Void`) under an unsafe `as` cast.
+		const typeArgs = mapped ? '' : this.unconstrainedMethodTypeArgs(chosen.m, e);
 		// Kotlin's own member keeps a function's call parentheses (`toInt()`, `get(i)`) and drops a property's.
-		const call = mapped ? (/^\.(get|to\w+)$/.test(mapped) ? `${mapped}(${args})` : mapped) : `.${ident(name)}(${args})`;
+		const call = mapped ? (/^\.(get|to\w+)$/.test(mapped) ? `${mapped}(${args})` : mapped) : `.${ident(name)}${typeArgs}(${args})`;
 		return { code: `${target}${call}`, desc: chosen.ret, optional: target.endsWith('?'), nullable: chosen.m.nullable, recentlyNullable: chosen.m.recentlyNullable };
+	},
+
+	/**
+	 * Explicit Kotlin type arguments for a generic Java method when any of its type parameters is not referenced in its
+	 * parameter list (e.g. `<T::Landroid/os/Parcelable;>(Ljava/lang/String;)TT;`), preventing Kotlin from inferring `Nothing` (`Void`).
+	 */
+	unconstrainedMethodTypeArgs(this: AndroidNativeAPI, m: { signature?: string }, e: ts.CallExpression): string {
+		const sig = m.signature;
+		if (!sig || !sig.startsWith('<')) return '';
+		// Parse `<Name:ClassBound:InterfaceBound...>` respecting nested generic arguments.
+		let depth = 0;
+		let headerEnd = -1;
+		for (let i = 0; i < sig.length; i++) {
+			if (sig[i] === '<') depth++;
+			else if (sig[i] === '>' && --depth === 0) {
+				headerEnd = i;
+				break;
+			}
+		}
+		if (headerEnd < 0 || sig[headerEnd + 1] !== '(') return '';
+		const paramsEnd = sig.indexOf(')', headerEnd + 2);
+		if (paramsEnd < 0) return '';
+		const paramsSig = sig.slice(headerEnd + 2, paramsEnd);
+		const header = sig.slice(1, headerEnd);
+		const typeParams: { name: string; bound: string | null }[] = [];
+		let i = 0;
+		while (i < header.length) {
+			const colon = header.indexOf(':', i);
+			if (colon < 0) break;
+			const name = header.slice(i, colon);
+			i = colon;
+			let bound: string | null = null;
+			while (i < header.length && header[i] === ':') {
+				i++;
+				if (i >= header.length || header[i] === ':') continue;
+				const start = i;
+				let d = 0;
+				while (i < header.length) {
+					const ch = header[i];
+					if (ch === '<') d++;
+					else if (ch === '>') d--;
+					else if (ch === ';' && d === 0) {
+						i++;
+						break;
+					}
+					i++;
+				}
+				const raw = header.slice(start, i);
+				if (!bound && raw.startsWith('L')) {
+					const internal = raw.slice(1, -1).replace(/<.*$/, '');
+					if (internal !== 'java/lang/Object') bound = internal;
+				}
+			}
+			typeParams.push({ name, bound });
+		}
+		if (!typeParams.length || typeParams.every((tp) => paramsSig.includes(`T${tp.name};`))) return '';
+		const resolved = typeParams.map((tp, k) => {
+			const tsArg = e.typeArguments?.[k];
+			if (tsArg) {
+				const kt = this.t.type(this.t.checker.getTypeFromTypeNode(tsArg), e).replace(/\?$/, '');
+				if (kt && kt !== 'Any' && kt !== 'Nothing' && kt !== 'Unit' && !this.t.isTypeParameterName(kt) && (!tp.bound || this.classpath.distance(kt.replace(/\./g, '/'), tp.bound) !== null)) return kt;
+			}
+			if (!tp.bound) return 'Any?';
+			const cls = this.classpath.get(tp.bound);
+			return cls && this.typeParamCount(cls) ? this.classRef(cls, undefined, '*', e) : this.kotlinTypeName(tp.bound);
+		});
+		return `<${resolved.join(', ')}>`;
 	},
 
 	/** `const AccessibilityDelegate = android.view.View['AccessibilityDelegate']`: the nested Java class the alias names. */

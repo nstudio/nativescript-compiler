@@ -419,7 +419,7 @@ protocol MemoReader: AnyObject {
 /// A computed value: kept, so reads share it, until a value it read has a new version; then it is computed again on
 /// the next read. A result `same` as the kept one keeps the kept one and its version. Nothing it read holds it: a
 /// reader asks for its value.
-public final class Memo<T>: Versioned, MemoReader {
+public final class Memo<T>: Versioned, MemoReader, JSDynamic {
     nonisolated deinit {}
     private let compute: () throws -> T
     private let same: (T, T) throws -> Bool
@@ -483,6 +483,13 @@ public final class Memo<T>: Versioned, MemoReader {
     }
 
     public var value: T { jsReportedOrZero(read) }
+
+    public var jsKeys: [String] { ["value"] }
+    public var jsClassName: String? { nil }
+    public subscript(jsKey key: String) -> Any? {
+        get { key == "value" ? value : nil }
+        set {}
+    }
 }
 
 /// The `equal` of a signal's options, read by name; `default` when they give none.
@@ -497,7 +504,7 @@ public func jsReportingEquals<T>(_ equal: @escaping (T, T) throws -> Bool) -> (T
 }
 
 /// A value that notifies the effects that read it.
-public final class Signal<T>: Versioned, Holding {
+public final class Signal<T>: Versioned, Holding, JSDynamic {
     nonisolated deinit {}
     private enum Backing {
         case stored(T)
@@ -742,6 +749,17 @@ public final class Signal<T>: Versioned, Holding {
     }
 
     func unsubscribe(_ subscriber: Subscriber) { subscribers[ObjectIdentifier(subscriber)] = nil }
+
+    public var jsKeys: [String] { ["value"] }
+    public var jsClassName: String? { nil }
+    public subscript(jsKey key: String) -> Any? {
+        get { key == "value" ? value : nil }
+        set {
+            guard key == "value" else { return }
+            let unwrapped: Any? = jsIsNullish(newValue) ? nil : newValue
+            if let v = unwrapped as? T { value = v }
+        }
+    }
 }
 
 /// State the handlers of a render read as it rendered (untracked reads see the last flush) until the
