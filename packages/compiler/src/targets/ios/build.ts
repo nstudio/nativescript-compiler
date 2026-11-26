@@ -180,11 +180,16 @@ export async function writeIos(b: IosBuild): Promise<void> {
 		// A component's file declares more than the component (interfaces, constants): it is a module as well.
 		// The SDK frameworks beyond UIKit the program's code names (CoreSpotlight, SafariServices), imported by every file once all are known.
 		const SDK_IMPORTS = '// @sdk-imports\n';
-		const translated = translateModules(translator, program, [...modules, ...components.map((c) => c.file), ...compiledPlugins], resolved);
+		const translated = translateModules(translator, program, [...new Set([...modules, ...components.map((c) => c.file), ...compiledPlugins])], resolved);
+		const componentClass = (name: string) => {
+			const c = components.find((x) => x.name === name);
+			const sf = c && program.getSourceFile(c.file);
+			return sf?.statements.find((s): s is ts.ClassDeclaration => ts.isClassDeclaration(s) && s.name?.text === name) ?? sf?.statements.find(ts.isClassDeclaration);
+		};
 		// Every component's members first: whether a constructor throws is known before any template creates the component.
 		const members = new Map<string, string>();
 		for (const c of components) {
-			const cls = program.getSourceFile(c.file)!.statements.find(ts.isClassDeclaration)!;
+			const cls = componentClass(c.name)!;
 			try {
 				members.set(c.name, located(translator.componentMembers(cls, c.props).join('\n')));
 			} catch (e) {
@@ -194,15 +199,10 @@ export async function writeIos(b: IosBuild): Promise<void> {
 			infos.get(c.name)!.initThrows = translator.initThrows(c.name);
 			infos.get(c.name)!.throwingSetters = (c.setters ?? []).filter((p) => translator.memberThrows(cls, '$set_' + p));
 		}
-		const componentClass = (name: string) => {
-			const c = components.find((x) => x.name === name);
-			return c && program.getSourceFile(c.file)?.statements.find(ts.isClassDeclaration);
-		};
 		/** Components whose class could not be written (`--keep-going`): a root view of one is left as it is. */
 		const unwritten = new Set<string>();
 		for (const c of components) {
-			const sf = program.getSourceFile(c.file)!;
-			const cls = sf.statements.find(ts.isClassDeclaration)!;
+			const cls = componentClass(c.name)!;
 			try {
 				const lines = [`final class ${swiftClass(c.name)} {`, NONISOLATED_DEINIT, members.get(c.name) ?? '', ...translator.componentStatics(cls), '', ...render(c, infos, (m) => translator.memberThrows(cls, m), behaviour, { itemType: (m) => translator.memberElementType(cls, m), propValue: (child, p, m) => translator.propValue(cls, componentClass(child), p, m), swiftClass: (name) => (elementClasses.has(name) || infos.has(name) ? swiftClass(name) : name) }), '}', translator.componentConformance(cls, swiftClass(c.name))];
 				writeFileSync(join(sourcesDir, c.name + '.swift'), header(c.file) + lines.join('\n') + '\n');
@@ -469,7 +469,8 @@ ${Object.entries(appSettings)
 		/** The code making a component's root view, wrapped as the framework wraps root views. */
 		function rootView(name: string, make: string): string {
 			const c = adapter?.swift?.wrapsRootViews && !unwritten.has(name) ? components.find((x) => x.name === name) : undefined;
-			const cls = c && program.getSourceFile(c.file)?.statements.find(ts.isClassDeclaration);
+			const sf = c && program.getSourceFile(c.file);
+			const cls = sf?.statements.find((s): s is ts.ClassDeclaration => ts.isClassDeclaration(s) && s.name?.text === name) ?? sf?.statements.find(ts.isClassDeclaration);
 			return cls ? translator.rootView(cls, swiftClass(name), make) : make;
 		}
 	} finally {

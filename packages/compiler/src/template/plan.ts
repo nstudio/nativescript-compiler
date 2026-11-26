@@ -147,6 +147,10 @@ export type Step =
 	/** A region added to `parent` (`detached`: made apart, its insert deferred as an `addRegion`). */
 	| { kind: 'region'; name: string; parent: string; detached: boolean }
 	| { kind: 'addRegion'; parent: string; region: string }
+	/** Projected slot content supplied by a parent to a child component (`c0.__slots[name] = ...`). */
+	| { kind: 'setSlot'; component: string; name: string; scope: Scope | null; viewMark: boolean; body: Block }
+	/** Content projection site (`<ng-content>`) rendering the parent's slot into `host`, or `fallback` if none was supplied. */
+	| { kind: 'slot'; name: string; host: Host; fallback: Block | null }
 	| {
 			kind: 'choose';
 			host: Host;
@@ -219,6 +223,8 @@ export interface RootHook {
 export interface RenderPlan {
 	/** It renders into its parent's region rather than returning one view. */
 	fragment: boolean;
+	/** The component declares `<ng-content>` slots and needs a `__slots` map field. */
+	hasSlots: boolean;
 	scope: Scope | null;
 	viewMark: boolean;
 	derived: { name: string; call: Call }[];
@@ -297,6 +303,8 @@ export function renderPlan(c: ComponentIR, components: ReadonlyMap<string, Compo
 
 	// The steps being written, innermost last, and the template scopes whose deferred steps follow their own.
 	const out: Step[][] = [];
+	/** Enclosing child component instance variables while emitting projected slot bodies (for `contentHost` queries). */
+	const slotTargets: string[] = [];
 	const say = (step: Step) => out.at(-1)!.push(step);
 	type Deferred = { inserts: Step[]; bindings: Step[]; listeners: Step[]; content: Step[]; children: Step[]; after: Step[] };
 	const templates: Deferred[] = [];
@@ -371,6 +379,7 @@ export function renderPlan(c: ComponentIR, components: ReadonlyMap<string, Compo
 		for (const u of uses ?? []) {
 			const d = `d${n++}`;
 			say({ kind: 'directive', name: d, view, make: call(u.make, loops) });
+			queried(u.queries, loops, view, d);
 			const inner = [...loops, { item: u.name, itemExpr: d }];
 			if (u.destroy) say({ kind: 'cleanup', call: call(u.destroy, inner) });
 			for (const a of u.attributes) say({ kind: 'setAttr', view, name: a.name, value: a.value });
@@ -403,8 +412,9 @@ export function renderPlan(c: ComponentIR, components: ReadonlyMap<string, Compo
 	const queried = (hooks: QueryHook[] | undefined, loops: readonly Loop[], view: string, instance: string) => {
 		for (const q of hooks ?? []) {
 			const made = q.on === 'view' ? view : instance;
-			say({ kind: 'run', call: call(q.set, loops, [made]) });
-			if (q.unset) say({ kind: 'cleanup', call: call(q.unset, loops, [made]) });
+			const args = q.contentHost && slotTargets.length ? [slotTargets.at(-1)!, made] : [made];
+			say({ kind: 'run', call: call(q.set, loops, args) });
+			if (q.unset) say({ kind: 'cleanup', call: call(q.unset, loops, args) });
 		}
 	};
 
@@ -428,6 +438,19 @@ export function renderPlan(c: ComponentIR, components: ReadonlyMap<string, Compo
 		});
 		const passed = info.passed ? node.props.map((a) => a.name).concat(node.events.map((e) => 'on' + e.name[0].toUpperCase() + e.name.slice(1))) : null;
 		say({ kind: 'component', name: cv, type: node.name, args, passed, initThrows: !!info.initThrows });
+		if (node.slots && info.slots?.length) {
+			slotTargets.push(cv);
+			try {
+				for (const [slotName, slotNodes] of Object.entries(node.slots)) {
+					if (!slotNodes.length || !info.slots.includes(slotName)) continue;
+					const f = `f${n++}`;
+					const b = template(block([], f, viewMark(slotNodes)), () => emit(slotNodes, loops, f, null), false);
+					say({ kind: 'setSlot', component: cv, name: slotName, scope: scoped('region'), viewMark: b.viewMark, body: b });
+				}
+			} finally {
+				slotTargets.pop();
+			}
+		}
 		const write = (p: string): PropWrite => {
 			const a = given(p);
 			return { component: cv, prop: p, setter: setter(p), throwingSetter: !!info.throwingSetters?.includes(p), convert: a ? conversion(p, a) : null, changes: !!info.changes, inputChanged: onPush && !!info.onPush };
@@ -575,9 +598,21 @@ export function renderPlan(c: ComponentIR, components: ReadonlyMap<string, Compo
 				continue;
 			}
 			if (node.kind === 'template') throw new Error(`${c.name}: an item template outside a ListView or Pager`);
+			if (node.kind === 'slot') {
+				if (!parent) throw new Error(`${c.name}: a slot at the root of a non-fragment template`);
+				const r = `r${n++}`;
+				say({ kind: 'region', name: r, parent, detached: false });
+				let fallback: Block | null = null;
+				if (node.fallback?.length) {
+					const f = `f${n++}`;
+					fallback = template(block([], f, viewMark(node.fallback)), () => emit(node.fallback!, loops, f, null), false);
+				}
+				say({ kind: 'slot', name: node.name, host: { region: r }, fallback });
+				continue;
+			}
 			if (!parent) throw new Error(`${c.name}: an if/for at the root of a template`);
 			// A component whose views join its parent (no single root) is a region of the body it is in.
-			const nested = (body: TNode[]) => withoutLocals(body).some((x) => x.kind === 'if' || x.kind === 'for' || (x.kind === 'component' && !!components.get(x.name)?.fragment));
+			const nested = (body: TNode[]) => withoutLocals(body).some((x) => x.kind === 'if' || x.kind === 'for' || x.kind === 'slot' || (x.kind === 'component' && !!components.get(x.name)?.fragment));
 			const nestedBody = node.kind === 'if' ? node.branches.some((b) => nested(b.body)) : nested(node.body);
 			// A framework that inserts top-down puts a branch's views in place as it builds them; a body with regions of its own attaches as a fragment.
 			const live = insertion !== 'built' && !nestedBody ? `r${n++}` : null;
@@ -694,6 +729,7 @@ export function renderPlan(c: ComponentIR, components: ReadonlyMap<string, Compo
 	};
 	const plan: Omit<RenderPlan, 'root'> = {
 		fragment,
+		hasSlots: !!c.slots?.length,
 		scope: scoped('template'),
 		viewMark: viewMark(c.template),
 		derived: (c.derived ?? []).map((x) => ({ name: x.name, call: member(x.method) })),
@@ -740,7 +776,7 @@ export function renderPlan(c: ComponentIR, components: ReadonlyMap<string, Compo
 	return { ...plan, root: { kind: 'view', body, view: roots[0] } };
 }
 
-/** Whether a template holds an `if` or `for` of its own (not inside an item template). */
+/** Whether a template holds an `if`, `for`, or projected slot content of its own (not inside an item template). */
 function hasRegion(nodes: TNode[]): boolean {
-	return withoutLocals(nodes).some((n) => n.kind === 'if' || n.kind === 'for' || (n.kind === 'element' && !TEMPLATE_HOSTS.has(n.tag) && hasRegion(n.children)));
+	return withoutLocals(nodes).some((n) => n.kind === 'if' || n.kind === 'for' || (n.kind === 'component' && !!n.slots && Object.keys(n.slots).length > 0) || (n.kind === 'slot' && !!n.fallback && hasRegion(n.fallback)) || (n.kind === 'element' && !TEMPLATE_HOSTS.has(n.tag) && hasRegion(n.children)));
 }

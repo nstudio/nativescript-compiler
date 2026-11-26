@@ -115,6 +115,9 @@ export class PropertyGuard {
 						// Attributes that are not the component's props fall through to its root view.
 						const tag = rootTag(n.name);
 						if (tag) for (const a of n.props) if (!props.get(n.name)?.includes(a.name)) check(tag, a.name);
+						if (n.slots) for (const slotNodes of Object.values(n.slots)) walk(slotNodes);
+					} else if (n.kind === 'slot') {
+						if (n.fallback) walk(n.fallback);
 					} else if (n.kind === 'if') for (const b of n.branches) walk(b.body);
 					else walk(n.body);
 				}

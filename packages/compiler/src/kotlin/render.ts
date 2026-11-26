@@ -173,6 +173,29 @@ export function render(c: ComponentIR, components: Map<string, ComponentInfo>, o
 				return say(depth, s.detached ? `val ${s.name} = Region(null)` : `val ${s.name} = ${s.parent}.kitAddRegion()`);
 			case 'addRegion':
 				return say(depth, `${s.parent}.kitAddRegion(${s.region})`);
+			case 'setSlot': {
+				say(depth, `${s.component}.__slots[${kotlinString(s.name)}] = { __sr: Region ->`);
+				const wrap = s.scope ? scope(s.scope) : null;
+				const d = wrap ? depth + 2 : depth + 1;
+				if (wrap) say(depth + 1, wrap);
+				if (s.viewMark) say(d, 'val __view = EffectOrder.current');
+				say(d, `val ${s.body.fragment} = RegionFragment(__sr)`);
+				steps(s.body.steps, d);
+				say(d, `${s.body.fragment}.fill()`);
+				if (wrap) say(depth + 1, '}');
+				return say(depth, '}');
+			}
+			case 'slot': {
+				const host = regionHost(s.host);
+				if (s.fallback) {
+					say(depth, `this.__slots[${kotlinString(s.name)}]?.invoke(${host}) ?: run {`);
+					say(depth + 1, `val ${s.fallback.fragment} = RegionFragment(${host})`);
+					steps(s.fallback.steps, depth + 1);
+					say(depth + 1, `${s.fallback.fragment}.fill()`);
+					return say(depth, '}');
+				}
+				return say(depth, `this.__slots[${kotlinString(s.name)}]?.invoke(${host})`);
+			}
 			case 'choose': {
 				const host = regionHost(s.host);
 				const which = s.conds.map((k, i) => (k ? `if (${cond(k, s.caught)}) ${i} else ` : `${i}`)).join('') + (s.conds.at(-1) ? `${s.conds.length}` : '');
@@ -254,6 +277,7 @@ export function render(c: ComponentIR, components: Map<string, ComponentInfo>, o
 
 	const passes = plan.passes;
 	const m = plan.members;
+	if (plan.hasSlots) say(1, 'var __slots: MutableMap<String, (Region) -> Unit> = mutableMapOf()');
 	if (passes) {
 		// Both passes, with the hooks a parent runs for its child between and after them.
 		const hooks = (list: RootHook[]) => list.map((h) => (h.flush ? `${h.flush}(this)` : h.every ? `${h.every} { this.${h.member}() }` : `this.${h.member}()`)).join('; ');

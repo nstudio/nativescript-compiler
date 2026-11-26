@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CoreApi, FrameworkAdapter, TemplateBehaviour } from '@nstudio/nativescript-compiler/adapter-api';
-import { angularComponent, angularDirectives, angularPipes, angularRoutes, angularRouteTree, componentOf, declarableSource, declarablesIn, hostedComponent, routedComponents, selectorElements, type HostedComponent } from './angular.ts';
+import { angularComponents, angularDirectives, angularPipes, angularRoutes, angularRouteTree, componentsOf, declarableSource, declarablesIn, hostedComponents, routedComponents, selectorElements, type HostedComponent, type ViewQuery } from './angular.ts';
 import { angularLibraries, registeredElements } from './angular-libraries.ts';
 import { refuseBaseUses } from './component-bases.ts';
 import { useCore } from './core-api.ts';
@@ -69,12 +69,17 @@ export default function adapter(core: CoreApi): FrameworkAdapter {
       sources.push(...libraries);
       const selectors = new Map<string, string>();
       const hosts: HostedComponent[] = [];
+      const componentSlots = new Map<string, string[]>();
+      const componentContentQueries = new Map<string, { file: string; queries: ViewQuery[] }>();
       for (const f of sources) {
         const text = read(f);
-        const c = componentOf(f, text);
-        for (const tag of c?.selector ? selectorElements(c.selector) : []) selectors.set(tag, c!.name);
-        const hosted = c ? hostedComponent(f, text) : null;
-        if (hosted) hosts.push(hosted);
+        const found = componentsOf(f, text);
+        for (const c of found) {
+          for (const tag of c.selector ? selectorElements(c.selector) : []) selectors.set(tag, c.name);
+          if (c.slots?.length) componentSlots.set(c.name, c.slots);
+          if (c.contentQueries?.length) componentContentQueries.set(c.name, { file: f, queries: c.contentQueries });
+        }
+        if (found.length) hosts.push(...hostedComponents(f, text));
       }
       // The configuration the entry provides, lazy routes followed into their files; else one routes file read flat.
       const tree = angularRouteTree(entry, read, app.aliased);
@@ -95,7 +100,7 @@ export default function adapter(core: CoreApi): FrameworkAdapter {
       const ngModuleNames = new Map(sources.flatMap((f) => [...declarablesIn(f, read(f), !libraries.includes(f)).modules]));
       const runtimeModule = join(appDir, COMMON_MODULE);
       refuseBaseUses(sources, undefined, app.aliased);
-      const components = sources.map((f) => angularComponent(f, read(f), selectors, { platform, pipes, runtimeModule, directives, ngModules: ngModuleNames, hosts, aliased: app.aliased, elements: new Map([...elements].map(([tag, e]) => [tag, e.name])), elementMeta: new Map([...elements].flatMap(([tag, e]) => (e.meta === undefined || (e.meta === null && e.fromApp) ? [] : [[tag, e.meta] as const]))) })).filter((c): c is NonNullable<typeof c> => !!c);
+      const components = sources.flatMap((f) => angularComponents(f, read(f), selectors, { platform, pipes, runtimeModule, directives, ngModules: ngModuleNames, hosts, componentSlots, componentContentQueries, aliased: app.aliased, elements: new Map([...elements].map(([tag, e]) => [tag, e.name])), elementMeta: new Map([...elements].flatMap(([tag, e]) => (e.meta === undefined || (e.meta === null && e.fromApp) ? [] : [[tag, e.meta] as const]))) }));
       const routed = new Set(tree ? routedComponents(tree.routes) : routes.map((r) => r.component));
       for (const c of components) c.page = routed.has(c.name);
       const overrides = new Map<string, string>();

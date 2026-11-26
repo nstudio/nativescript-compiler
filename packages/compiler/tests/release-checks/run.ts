@@ -1629,18 +1629,72 @@ console.log(testAll());
   }
 })();
 
-// ---- Vite ?raw asset imports and __WINDOWS__/__LINUX__ platform folding ----
+// ---- Vite ?raw asset imports, import.meta.glob(), and __WINDOWS__/__LINUX__ platform folding ----
 (() => {
   const dir = mkdtempSync(join(tmpdir(), 'ns-release-checks-raw-'));
   try {
+    writeFileSync(join(dir, 'package.json'), '{"name":"glob-test"}\n');
     writeFileSync(join(dir, 'sample.css'), '.btn { color: red; }\n');
+    mkdirSync(join(dir, 'pages'), { recursive: true });
+    writeFileSync(join(dir, 'pages', 'a.ts'), "export default 'page-a';\nexport const title = 'A';\n");
+    writeFileSync(join(dir, 'pages', 'b.ts'), "export default 'page-b';\nexport const title = 'B';\n");
+    writeFileSync(join(dir, 'pages', 'ignored.spec.ts'), "export default 'nope';\n");
+    writeFileSync(join(dir, 'pages', 'note.txt'), 'hello-raw');
     const app = join(dir, 'app.ts');
-    writeFileSync(app, "import css from './sample.css?raw';\nexport const text: string = css;\nexport const desk: boolean = __WINDOWS__ || __LINUX__;\n");
+    writeFileSync(app, `import css from './sample.css?raw';
+export const text: string = css;
+export const desk: boolean = __WINDOWS__ || __LINUX__;
+const eagerDefault = import.meta.glob(['./pages/*.ts', '!./pages/*.spec.ts'], { eager: true, import: 'default' });
+const eagerNamed = import.meta.glob('./pages/a.ts', { eager: true, import: 'title' });
+const lazyMods = import.meta.glob('./pages/b.ts');
+const rawNotes = import.meta.glob('./pages/*.txt', { query: '?raw', import: 'default', eager: true });
+const rootPages = import.meta.glob('/pages/a.ts', { eager: true, import: 'default' });
+export async function runGlob(): Promise<string> {
+  const bMod: any = await lazyMods['./pages/b.ts']();
+  return [
+    Object.keys(eagerDefault).join(','),
+    eagerDefault['./pages/a.ts'],
+    eagerDefault['./pages/b.ts'],
+    eagerNamed['./pages/a.ts'],
+    bMod.title,
+    rawNotes['./pages/note.txt'],
+    rootPages['/pages/a.ts'],
+  ].join('|');
+}
+`);
     const built = createProgram([app], new Map(), 'ios', modulesDir);
     const rawFile = built.resolved(app, './sample.css?raw') ?? '';
     check(rawFile.startsWith('/__raw__/') && built.pluginFiles.includes(rawFile) && (built.program.getSourceFile(rawFile)?.text ?? '').includes('.btn { color: red; }'), 'Vite ?raw asset import resolves to a synthesized default-export module');
     const folded = built.program.getSourceFile(app)?.text ?? '';
     check(!folded.includes('__WINDOWS__') && !folded.includes('__LINUX__'), '__WINDOWS__ and __LINUX__ fold away on iOS/Android');
+    check(!folded.includes('import.meta.glob') && folded.includes('./pages/a.ts') && !folded.includes('ignored.spec.ts') && folded.includes('./pages/note.txt?raw'), 'static Vite import.meta.glob() expands eager, lazy, named, negative, ?raw, and root-relative globs');
+
+    const expectedGlob = './pages/a.ts,./pages/b.ts|page-a|page-b|A|B|hello-raw|page-a';
+    // Verify compiled execution on Swift and Kotlin!
+    {
+      let swGot = '';
+      try {
+        buildSwiftRuntime(nativeBuild, '-Onone');
+        const out = join(dir, 'swift-glob');
+        const mods = translateSwift([app], out);
+        writeFileSync(join(out, 'main.swift'), `import Foundation\nimport NativeScriptKit\n${mods.flatMap((m) => (m.init ? [`${m.initThrows ? 'try ' : ''}${m.init}()`] : [])).join('\n')}\n_ = runGlob().then({ (v: String) -> Any? in print(v); return nil }, { (e: Any?) -> Any? in print("ERR:", e ?? ""); return nil })\nMicrotasks.checkpoint()\n`);
+        const errors = swiftc(readdirSync(out).map((f) => join(out, f)), join(dir, 'main-glob'), nativeBuild, '-Onone');
+        swGot = errors ? errors[0] : spawnSync(join(dir, 'main-glob'), { encoding: 'utf8' }).stdout.trim();
+      } catch (e) { swGot = String(e); }
+      check(swGot === expectedGlob, `import.meta.glob() compiles and runs identically (Swift${swGot === expectedGlob ? '' : `: ${swGot.slice(0, 300)}`})`);
+    }
+    {
+      let ktGot = '';
+      try {
+        const out = join(dir, 'kotlin-glob');
+        const mods = translateKotlin([app], out, 'org.example.glob');
+        writeFileSync(join(out, '__Main.kt'), `package org.example.glob\nimport org.nativescript.kit.*\nfun main() {\n${mods.flatMap((m) => (m.init ? [`    ${m.init}()`] : [])).join('\n')}\n    runGlob().then({ println(it); null }, { println("ERR: $it"); null })\n    Microtasks.checkpoint()\n}\n`);
+        const runtime = buildKotlinRuntime(nativeBuild);
+        const errors = kotlinc(readdirSync(out).filter((f) => f.endsWith('.kt')).map((f) => join(out, f)), join(dir, 'classes-glob'), [runtime]);
+        ktGot = errors ? errors[0] : spawnSync('java', ['-cp', [join(dir, 'classes-glob'), runtime, kotlinStdlib()].join(':'), 'org.example.glob.__MainKt'], { encoding: 'utf8' }).stdout.trim();
+      } catch (e) { ktGot = String(e); }
+      check(ktGot === expectedGlob, `import.meta.glob() compiles and runs identically (Kotlin${ktGot === expectedGlob ? '' : `: ${ktGot.slice(0, 300)}`})`);
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

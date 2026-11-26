@@ -1,6 +1,7 @@
 import ts from 'typescript';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
+import { globMatchedFiles } from './glob.ts';
 
 /** How the app's TypeScript files import each other, as its bundler resolves the specifiers. */
 export interface AppImports {
@@ -16,7 +17,7 @@ export interface AppImports {
  * The imports among `files`: relative specifiers and those the app's tsconfig `paths` alias (`aliased`), each completed
  * as the bundler does, the platform's own file (`thisPlatform`, `.ios.ts`) beside the shared one.
  */
-export function appImports(files: string[], aliased: (specifier: string) => string | undefined, thisPlatform: string): AppImports {
+export function appImports(files: string[], aliased: (specifier: string) => string | undefined, thisPlatform: string, appRoot: string | null = null): AppImports {
 	const out: AppImports = { importsOf: new Map(), usedBy: new Map(), workerScripts: new Set() };
 	const known = new Set(files);
 	for (const f of files.filter((x) => /\.tsx?$/.test(x) && !x.endsWith('.d.ts'))) {
@@ -31,6 +32,11 @@ export function appImports(files: string[], aliased: (specifier: string) => stri
 				else out.usedBy.set(c, (out.usedBy.get(c) ?? new Set()).add(f));
 				out.importsOf.set(f, (out.importsOf.get(f) ?? new Set()).add(c));
 			}
+		}
+		for (const c of globMatchedFiles(text, f, appRoot)) {
+			if (!known.has(c)) continue;
+			out.usedBy.set(c, (out.usedBy.get(c) ?? new Set()).add(f));
+			out.importsOf.set(f, (out.importsOf.get(f) ?? new Set()).add(c));
 		}
 	}
 	return out;

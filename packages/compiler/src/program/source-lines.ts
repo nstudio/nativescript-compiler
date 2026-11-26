@@ -51,7 +51,9 @@ export class SourceLines {
 	/** Lines of a virtual file whose source is known exactly (a template binding's), which no matching then guesses. */
 	private pinned = new Map<string, Map<number, SourceLocation>>();
 	pin(virtualFile: string, file: string, lines: [number, number][]): void {
-		this.pinned.set(virtualFile, new Map(lines.map(([v, line]) => [v, { file, line }])));
+		const map = this.pinned.get(virtualFile) ?? new Map<number, SourceLocation>();
+		for (const [v, line] of lines) map.set(v, { file, line });
+		this.pinned.set(virtualFile, map);
 	}
 
 	/** The marker for the statement `s`; one that ends the current region when its source line is unknown. */

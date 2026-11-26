@@ -34,6 +34,8 @@ export interface QueryHook {
 	set: string;
 	unset?: string;
 	on: 'view' | 'instance';
+	/** A content query targeting the enclosing projected component instance (`$host` passed as first argument). */
+	contentHost?: boolean;
 }
 
 /**
@@ -69,6 +71,8 @@ export interface DirectiveUse {
 	 * directives made after it on the element, the element's bindings and events, its children and the nodes after it.
 	 */
 	exposed?: boolean;
+	/** Queries matched against this directive instance (e.g. `contentChild(SomeDirective)`). */
+	queries?: QueryHook[];
 }
 
 export type TNode =
@@ -87,7 +91,9 @@ export type TNode =
 			/** A ListView whose items are sections (`sectioned`), each holding its rows in `items`. */
 			sections?: boolean;
 	  }
-	| { kind: 'component'; name: string; props: Attr[]; events: Event[]; queries?: QueryHook[] }
+	| { kind: 'component'; name: string; props: Attr[]; events: Event[]; queries?: QueryHook[]; slots?: Record<string, TNode[]> }
+	/** A content projection slot (`<ng-content>`): `name` is `'default'` or the `select` selector; `fallback` renders when the parent gives no content. */
+	| { kind: 'slot'; name: string; fallback?: TNode[] }
 	| { kind: 'if'; branches: { cond: string | null; body: TNode[] }[] }
 	/**
 	 * A value of the view the body is in, made when the view is (a pipe): `make` is called with the names in
@@ -176,6 +182,8 @@ export interface ComponentIR {
 	onPush?: boolean;
 	/** The component's own stylesheets, scoped by its framework, which the app's build adds after app.css. */
 	styles?: ComponentStyle[];
+	/** Content projection slot names declared in this component's template (`'default'` or `select` selectors). */
+	slots?: string[];
 	/** Lines of the virtual file (0-based) its template's bindings were made from, with their line (1-based) in `file`, the template's own. */
 	templateLines?: { file: string; lines: [number, number][] };
 }
@@ -199,6 +207,10 @@ export function scopeTemplate(nodes: TNode[], attribute: string): TNode[] {
 			case 'local':
 			case 'let':
 				return { ...n, body: scopeTemplate(n.body, attribute) };
+			case 'component':
+				return n.slots ? { ...n, slots: Object.fromEntries(Object.entries(n.slots).map(([k, v]) => [k, scopeTemplate(v, attribute)])) } : n;
+			case 'slot':
+				return n.fallback ? { ...n, fallback: scopeTemplate(n.fallback, attribute) } : n;
 			default:
 				return n;
 		}

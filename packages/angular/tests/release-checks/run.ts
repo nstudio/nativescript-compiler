@@ -29,7 +29,7 @@ import { adapterModule, suiteAdapter, suiteAdapterBuild, suiteAdapterPackage } f
 const angular = suiteAdapter!;
 const angularPackage = suiteAdapterPackage!;
 // Its front end's functions, as the adapter's entry loaded them.
-const { angularComponent, angularDirectives, angularRouteTree, angularRoutes, componentOf, declarableSource, declarablesIn, hostedComponent, routedComponents } = await adapterModule('angular');
+const { angularComponent, angularComponents, angularDirectives, angularRouteTree, angularRoutes, componentOf, componentsOf, declarableSource, declarablesIn, hostedComponent, routedComponents } = await adapterModule('angular');
 const { angularLibraries, registeredElements } = await adapterModule('angular-libraries');
 type AngularComponent = any;
 type RouteNode = any;
@@ -1720,7 +1720,7 @@ export function openSheet(dialogs: NativeDialogService, cmp: any, config?: Nativ
   const meta = (fields: string, members = '') => thrown(() => angularComponent('/app/c.component.ts', `import { Component, input, output, viewChild, booleanAttribute } from '@angular/core';\nconst template = '';\n@Component({ selector: 'C', template: '<Label></Label>', ${fields} })\nexport class C { ${members} }\n`, new Map()));
   for (const [fields, text] of [
     ["inputs: ['x']", "@Component's inputs"], ["outputs: ['y']", "@Component's outputs"], ["preserveWhitespaces: true", "@Component's preserveWhitespaces"],
-    ["hostDirectives: []", "@Component's hostDirectives"], ["interpolation: ['[[', ']]']", "@Component's interpolation"],
+    ["interpolation: ['[[', ']]']", "@Component's interpolation"],
   ]) {
     const e = meta(fields);
     check(e.includes(`${text} is not supported in a release build yet`), `${text} stops the build${e ? '' : ': it compiled'}`);
@@ -1738,7 +1738,6 @@ export function openSheet(dialogs: NativeDialogService, cmp: any, config?: Nativ
   check(!meta("standalone: true, schemas: [], exportAs: 'c', animations: [], preserveWhitespaces: false, encapsulation: 2"), '@Component fields that only steer the compiler compile');
   for (const [members, text] of [
     ["done = output<void>({ alias: 'finished' });", "output()'s alias (done) is not supported in a release build yet"],
-    ["box = contentChild('box');", 'the signal query contentChild() (box) is not supported in a release build yet'],
   ]) {
     const e = meta('standalone: true', members);
     check(e.includes(text), `${text.split(' is ')[0]} stops the build${e ? '' : ': it compiled'}`);
@@ -3856,6 +3855,305 @@ fun main() {
       ktGot = errors ? errors.join('\n').slice(0, 800) : spawnSync('java', ['-cp', [join(dir, 'classes-attrs'), runtime, kotlinStdlib()].join(':'), 'MainKt'], { encoding: 'utf8' }).stdout.trim();
     } catch (e) { ktGot = String(e); }
     check(ktGot === expected, `booleanAttribute and numberAttribute match Angular (Kotlin${ktGot === expected ? '' : `: ${ktGot}`})`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+})();
+
+// ---- Wave 2 Angular AOT: <ng-content>, contentChild/contentChildren, hostDirectives, multi-@Component files (IR + Swift & Kotlin native) ----
+(() => {
+  const dir = mkdtempSync(join(nativeBuild, 'release-checks-wave2-'));
+  try {
+    const dirFile = join(dir, 'focusable.directive.ts');
+    writeFileSync(dirFile, `import { Directive, EventEmitter, input } from '@angular/core';
+@Directive({ standalone: true, host: { role: 'widget', '[attr.data-level]': 'level()' } })
+export class Focusable {
+  level = input(1);
+  pinged = new EventEmitter<string>();
+  trigger(msg: string) { this.pinged.emit(msg); }
+}
+`);
+    const togglesFile = join(dir, 'toggles.component.ts');
+    writeFileSync(togglesFile, `import { Component, input } from '@angular/core';
+const PREFIX = 'tg:';
+@Component({ selector: 'my-badge', template: '<Label [text]="full()"></Label>' })
+export class MyBadge {
+  label = input('b');
+  full() { return PREFIX + this.label(); }
+}
+@Component({ selector: 'my-tag', template: '<Label [text]="name()"></Label>' })
+export class MyTag {
+  name = input('t');
+}
+`);
+    const cardFile = join(dir, 'card.component.ts');
+    writeFileSync(cardFile, `import { Component, contentChild, contentChildren, input } from '@angular/core';
+import { Focusable } from './focusable.directive';
+import { MyBadge, MyTag } from './toggles.component';
+@Component({
+  selector: 'my-card',
+  hostDirectives: [{ directive: Focusable, inputs: ['level: strength'], outputs: ['pinged: fired'] }],
+  template: \`<StackLayout>
+    <ng-content select="[hdr]"></ng-content>
+    @if (showBody()) { <ng-content></ng-content> }
+    <ng-content select="[ftr]"><Label text="default-ftr"></Label></ng-content>
+  </StackLayout>\`,
+})
+export class MyCard {
+  showBody = input(true);
+  badge = contentChild(MyBadge);
+  tags = contentChildren(MyTag);
+  summary(): string {
+    const b = this.badge();
+    return (b ? b.full() : 'none') + '#' + this.tags().map((t) => t.name()).join(',');
+  }
+}
+`);
+    const hostFile = join(dir, 'host.component.ts');
+    writeFileSync(hostFile, `import { Component, signal, viewChild } from '@angular/core';
+import { MyCard } from './card.component';
+import { MyBadge, MyTag } from './toggles.component';
+@Component({
+  selector: 'Host',
+  imports: [MyCard, MyBadge, MyTag],
+  template: \`<StackLayout>
+    <my-card [showBody]="open()" [strength]="7" (fired)="onFired($event)">
+      <Label hdr text="HEAD"></Label>
+      <Label [text]="bodyText()"></Label>
+      <my-badge label="VIP"></my-badge>
+      <my-tag name="x"></my-tag>
+      <my-tag name="y"></my-tag>
+    </my-card>
+  </StackLayout>\`,
+})
+export class Host {
+  card = viewChild(MyCard);
+  open = signal(true);
+  bodyText = signal('BODY1');
+  lastFired = '';
+  onFired(v: string) { this.lastFired = v; }
+  cardSummary(): string { return this.card()?.summary() ?? 'missing'; }
+}
+`);
+    const allSources = [dirFile, togglesFile, cardFile, hostFile];
+    const read = (f: string) => readFileSync(f, 'utf8');
+    const directives = angularDirectives([dirFile], read);
+    check(directives.length === 1 && directives[0].selector === '', 'selectorless @Directive() for hostDirectives parses cleanly');
+
+    const selectors = new Map<string, string>();
+    const componentSlots = new Map<string, string[]>();
+    const componentContentQueries = new Map<string, { file: string; queries: any[] }>();
+    for (const f of allSources) {
+      for (const c of componentsOf(f, read(f))) {
+        if (c.selector) selectors.set(c.selector, c.name);
+        if (c.slots?.length) componentSlots.set(c.name, c.slots);
+        if (c.contentQueries?.length) componentContentQueries.set(c.name, { file: f, queries: c.contentQueries });
+      }
+    }
+    check(selectors.get('my-badge') === 'MyBadge' && selectors.get('my-tag') === 'MyTag', 'componentsOf discovers multiple @Component classes in one file');
+    check(componentSlots.get('MyCard')?.join(',') === '[hdr],default,[ftr]', 'componentsOf discovers multi-slot <ng-content> selectors');
+    check(componentContentQueries.get('MyCard')?.queries.length === 2, 'componentsOf discovers contentChild and contentChildren queries');
+
+    const irs = allSources.flatMap((f) => angularComponents(f, read(f), selectors, { directives, componentSlots, componentContentQueries }));
+    check(irs.length === 4 && irs.filter((c) => c.file === togglesFile.replace(/\.ts$/, '.release.ts')).length === 2, 'angularComponents compiles multiple @Component classes in one file into a shared virtual file');
+    const cardIr = irs.find((c) => c.name === 'MyCard')!;
+    check(cardIr.slots?.length === 3 && cardIr.propAliases?.$hdIn0 === 'strength' && cardIr.outputs?.includes('fired') && cardIr.outputFields?.fired === '$hdOut1', 'hostDirectives exposes aliased inputs & outputs and <ng-content> populates ComponentIR.slots');
+
+    const overrides = new Map<string, string>();
+    const dirClean = declarableSource(dirFile, read(dirFile));
+    if (dirClean) overrides.set(dirFile, dirClean);
+    for (const ir of irs) overrides.set(ir.file, ir.source);
+    const programFiles = [dirFile, ...new Set(irs.map((c) => c.file))];
+
+    const buildInfo = (platform: 'ios' | 'android') => {
+      const p = createProgram(programFiles, overrides, platform, modulesDir);
+      const classOf = (ir: AngularComponent) => p.program.getSourceFile(ir.file)!.statements.find((s): s is ts.ClassDeclaration => ts.isClassDeclaration(s) && s.name?.text === ir.name)!;
+      const infos = new Map(irs.map((ir) => [ir.name, {
+        name: ir.name, props: ir.props, optional: ir.optional, outputs: ir.outputs, outputFields: ir.outputFields,
+        propAliases: ir.propAliases, setters: ir.setters, changes: ir.changes, onPush: ir.onPush,
+        slots: ir.slots, members: componentMembersOf(classOf(ir), p.checker),
+      }]));
+      return { ...p, classOf, infos };
+    };
+
+    const expected = 'role=widget|data-level=7|q1=tg:VIP#x,y|q2=none#|texts=HEAD,BODY1,tg:VIP,x,y,default-ftr|after=HEAD,BODY2,tg:VIP,x,y,default-ftr|closed=HEAD,default-ftr';
+    // Swift native execution
+    {
+      let swGot = '';
+      try {
+        buildSwiftRuntime(nativeBuild, '-Onone');
+        const { program, files: sourceFiles, checker, classOf, infos } = buildInfo('ios');
+        const sw = new SwiftTranslator(checker, infos, sourceFiles, { plainFields: true, hooks: angular.swift });
+        const out = join(dir, 'swift');
+        mkdirSync(out, { recursive: true });
+        const modFiles = [...new Set([dirFile, ...irs.map((c) => c.file)])];
+        writeFileSync(join(out, 'app.swift'), `import Foundation\nimport NativeScriptKit\n${translateModules(sw, program, modFiles).map((m) => m.code).join('\n')}\n`);
+        for (const ir of irs) {
+          const cls = classOf(ir);
+          writeFileSync(join(out, `${ir.name}.swift`), `import Foundation\nimport NativeScriptKit\nfinal class ${ir.name} {\n${[...sw.componentMembers(cls, ir.props), ...render(ir, infos, (m) => sw.memberThrows(cls, m), angular.behaviour)].join('\n')}\n}\n`);
+        }
+        writeFileSync(join(out, 'views.swift'), `import NativeScriptKit
+class View {
+  var attrs: [String: String] = [:]
+  var slots: [Any] = []
+  init() throws {}
+  func kitSet(_ key: String, _ value: Any?) { attrs[key] = value.map { jsToString($0) } ?? "" }
+  func kitAddChild(_ view: View) { slots.append(view) }
+  func kitAddRegion() -> Region { let r = Region(); slots.append(r); return r }
+  func allViews() -> [View] {
+    var out: [View] = [self]
+    for s in slots {
+      if let v = s as? View { out.append(contentsOf: v.allViews()) }
+      else if let r = s as? Region { for v in r.allViews() { out.append(contentsOf: v.allViews()) } }
+    }
+    return out
+  }
+}
+final class Label: View {}
+final class StackLayout: View {}
+enum RegionPart { case view(View); case region(Region) }
+final class Region {
+  var parts: [RegionPart] = []
+  func attach(_ view: View) { parts.append(.view(view)) }
+  func set(parts: [RegionPart]) { self.parts = parts }
+  func allViews() -> [View] {
+    parts.flatMap { switch $0 { case .view(let v): return [v]; case .region(let r): return r.allViews() } }
+  }
+}
+final class RegionFragment {
+  let owner: Region
+  var parts: [RegionPart] = []
+  init(_ owner: Region) { self.owner = owner }
+  func kitAddChild(_ v: View) { parts.append(.view(v)) }
+  func kitAddRegion() -> Region { let r = Region(); parts.append(.region(r)); return r }
+}
+func ChooseFragment(_ region: Region, _ which: @escaping () throws -> Int, site: String = "", render: @escaping (Int) throws -> RegionFragment) {
+  var cur: Int? = nil
+  var branchOwner: Owner? = nil
+  Effect {
+    let idx = (try? which()) ?? -1
+    if idx == cur { return }
+    cur = idx
+    untrack {
+      branchOwner?.dispose()
+      let o = Owner(parent: nil)
+      branchOwner = o
+      let frag = (try? o.run { try render(idx) }) ?? RegionFragment(region)
+      region.set(parts: frag.parts)
+    }
+  }
+}
+`);
+        writeFileSync(join(out, 'main.swift'), `import Foundation
+import NativeScriptKit
+Reactivity.schedule = .microtask
+let h = AngularView.construct { Host() }
+let rootView = try h.render()
+let all1 = rootView.allViews()
+let cardView = all1.first { $0.attrs["role"] != nil }!
+let texts1 = all1.compactMap { ($0 as? Label)?.attrs["text"] }.joined(separator: ",")
+let q1 = h.cardSummary()
+h.bodyText.value = "BODY2"
+Microtasks.checkpoint()
+let texts2 = rootView.allViews().compactMap { ($0 as? Label)?.attrs["text"] }.joined(separator: ",")
+h.open.value = false
+Microtasks.checkpoint()
+let q2 = h.cardSummary()
+let texts3 = rootView.allViews().compactMap { ($0 as? Label)?.attrs["text"] }.joined(separator: ",")
+print("role=\\(cardView.attrs["role"] ?? "")|data-level=\\(cardView.attrs["data-level"] ?? "")|q1=\\(q1)|q2=\\(q2)|texts=\\(texts1)|after=\\(texts2)|closed=\\(texts3)")
+`);
+        const errors = swiftc(readdirSync(out).map((f) => join(out, f)), join(dir, 'main-wave2'), nativeBuild, '-Onone');
+        swGot = errors ? errors.join('\n').slice(0, 1200) : spawnSync(join(dir, 'main-wave2'), { encoding: 'utf8' }).stdout.trim();
+      } catch (e) { swGot = String(e); }
+      check(swGot === expected, `Wave 2 (<ng-content> multi-slot + fallback + @if, contentChild/Children, hostDirectives, multi-@Component) compiles & runs natively (Swift${swGot === expected ? '' : `: ${swGot}`})`);
+    }
+    // Kotlin native execution
+    {
+      let ktGot = '';
+      try {
+        const { program, files: sourceFiles, checker, classOf, infos } = buildInfo('android');
+        const kt = new Translator(checker, infos, sourceFiles, { appModule: 'org.example.wave2', plainFields: true, hooks: angular.kotlin, native: (t) => new AndroidNativeAPI(t, androidClassPath(null, { archives: [], dependencies: [] })) });
+        const out = join(dir, 'kotlin');
+        mkdirSync(out, { recursive: true });
+        const modFiles = [...new Set([dirFile, ...irs.map((c) => c.file)])];
+        const head = 'package org.example.wave2\nimport org.nativescript.kit.*\n';
+        writeFileSync(join(out, 'App.kt'), head + translateKotlinModules(kt, program, modFiles).map((m) => m.code).join('\n') + '\n');
+        for (const ir of irs) {
+          const cls = classOf(ir);
+          const { params, lines } = kt.componentMembers(cls, ir.props);
+          writeFileSync(join(out, `${ir.name}.kt`), `${head}class ${ir.name}(${params.join(', ')}) {\n${[...lines, ...renderKotlin(ir, infos, { behaviour: angular.behaviour })].join('\n')}\n}\n`);
+        }
+        writeFileSync(join(out, 'Views.kt'), `${head}open class View {
+  val attrs = mutableMapOf<String, String>()
+  val slots = mutableListOf<Any>()
+  fun kitSet(key: String, value: Any?) { attrs[key] = if (value == null) "" else jsToString(value) }
+  fun kitAddChild(view: View) { slots.add(view) }
+  fun kitAddRegion(): Region { val r = Region(); slots.add(r); return r }
+  fun allViews(): List<View> {
+    val out = mutableListOf<View>(this)
+    for (s in slots) {
+      if (s is View) out.addAll(s.allViews())
+      else if (s is Region) for (v in s.allViews()) out.addAll(v.allViews())
+    }
+    return out
+  }
+}
+class Label : View()
+class StackLayout : View()
+sealed class RegionPart { class Child(val v: View) : RegionPart(); class Nested(val r: Region) : RegionPart() }
+class Region {
+  private var items: List<RegionPart> = emptyList()
+  fun attach(view: View) { items = items + RegionPart.Child(view) }
+  fun setParts(p: List<RegionPart>) { items = p }
+  fun allViews(): List<View> = items.flatMap { when (it) { is RegionPart.Child -> listOf(it.v); is RegionPart.Nested -> it.r.allViews() } }
+}
+class RegionFragment(private val owner: Region) {
+  val parts = mutableListOf<RegionPart>()
+  fun kitAddChild(v: View) { parts.add(RegionPart.Child(v)) }
+  fun kitAddRegion(): Region { val r = Region(); parts.add(RegionPart.Nested(r)); return r }
+  fun fill() { owner.setParts(parts.toList()) }
+}
+fun ChooseFragment(region: Region, which: () -> Int, site: String = "", render: (Int) -> RegionFragment) {
+  var cur: Int? = null
+  var branchOwner: Owner? = null
+  Effect {
+    val idx = try { which() } catch (_: Throwable) { -1 }
+    if (idx == cur) return@Effect
+    cur = idx
+    untrack {
+      branchOwner?.dispose()
+      val o = Owner(null)
+      branchOwner = o
+      val frag = try { o.run { render(idx) } } catch (_: Throwable) { RegionFragment(region) }
+      region.setParts(frag.parts.toList())
+    }
+  }
+}
+`);
+        writeFileSync(join(out, 'Main.kt'), `${head}fun main() {
+  Reactivity.schedule = Reactivity.Schedule.MICROTASK
+  val h = AngularView.construct { Host() }
+  val rootView = h.render()
+  val all1 = rootView.allViews()
+  val cardView = all1.first { it.attrs.containsKey("role") }
+  val texts1 = all1.filterIsInstance<Label>().mapNotNull { it.attrs["text"] }.joinToString(",")
+  val q1 = h.cardSummary()
+  h.bodyText.value = "BODY2"
+  Microtasks.checkpoint()
+  val texts2 = rootView.allViews().filterIsInstance<Label>().mapNotNull { it.attrs["text"] }.joinToString(",")
+  h.open.value = false
+  Microtasks.checkpoint()
+  val q2 = h.cardSummary()
+  val texts3 = rootView.allViews().filterIsInstance<Label>().mapNotNull { it.attrs["text"] }.joinToString(",")
+  println("role=\${cardView.attrs["role"]}|data-level=\${cardView.attrs["data-level"]}|q1=$q1|q2=$q2|texts=$texts1|after=$texts2|closed=$texts3")
+}
+`);
+        const runtime = buildKotlinRuntime(nativeBuild);
+        const errors = kotlinc(readdirSync(out).map((f) => join(out, f)), join(dir, 'classes-wave2'), [runtime]);
+        ktGot = errors ? errors.join('\n').slice(0, 1200) : spawnSync('java', ['-cp', [join(dir, 'classes-wave2'), runtime, kotlinStdlib()].join(':'), 'org.example.wave2.MainKt'], { encoding: 'utf8' }).stdout.trim();
+      } catch (e) { ktGot = String(e); }
+      check(ktGot === expected, `Wave 2 (<ng-content> multi-slot + fallback + @if, contentChild/Children, hostDirectives, multi-@Component) compiles & runs natively (Kotlin${ktGot === expected ? '' : `: ${ktGot}`})`);
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

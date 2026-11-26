@@ -71,6 +71,52 @@ const COMMON_PIPES: Record<string, PipeDecl> = {
 };
 const UNSUPPORTED_COMMON_PIPES = new Set(['currency', 'i18nPlural', 'i18nSelect']);
 
+export interface AngularComponentOptions {
+  elements?: Map<string, string>;
+  platform?: 'ios' | 'android';
+  pipes?: Map<string, PipeDecl>;
+  runtimeModule?: string;
+  directives?: DirectiveDecl[];
+  ngModules?: Map<string, string[]>;
+  hosts?: HostedComponent[];
+  elementMeta?: Map<string, string[] | null>;
+  aliased?: (specifier: string) => string | undefined;
+  /** Declared `<ng-content>` slot names per component class name (`'default'` or `select` selector). */
+  componentSlots?: Map<string, string[]>;
+  /** Declared `contentChild` / `contentChildren` queries per component class name. */
+  componentContentQueries?: Map<string, { file: string; queries: ViewQuery[] }>;
+}
+
+/**
+ * Every NativeScript Angular `@Component` class in `path` as a virtual class: the file's own source with one method
+ * appended per template expression on each component class. Multiple `@Component` classes in one file share one virtual
+ * `.release.ts` file so imports and file-local helpers resolve without duplication.
+ */
+export function angularComponents(path: string, text: string, selectors: Map<string, string>, options: AngularComponentOptions = {}): AngularComponent[] {
+  if (!text.includes('@Component')) return [];
+  const initialSf = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const targets = initialSf.statements
+    .filter((s): s is ts.ClassDeclaration => ts.isClassDeclaration(s) && !!s.name && !!decorator(s, 'Component'))
+    .map((s) => s.name!.text);
+  if (!targets.length) return [];
+  let currentText = text;
+  const results: AngularComponent[] = [];
+  for (const targetName of targets) {
+    const beforeLines = currentText.split('\n').length;
+    const { component, nextText, prependedLines } = compileOneComponent(path, text, currentText, targetName, selectors, options);
+    if (prependedLines > 0) {
+      for (const prev of results) {
+        if (prev.templateLines) prev.templateLines.lines = prev.templateLines.lines.map(([v, src]) => [v + prependedLines, src]);
+      }
+    }
+    void beforeLines;
+    currentText = nextText;
+    results.push(component);
+  }
+  for (const c of results) c.source = currentText;
+  return results;
+}
+
 /**
  * A NativeScript Angular standalone component (`@Component` with a template
  * of @nativescript/core elements, signals, `input()`/`output()`, `inject()`)
@@ -78,27 +124,31 @@ const UNSUPPORTED_COMMON_PIPES = new Set(['currency', 'i18nPlural', 'i18nSelect'
  * per template expression. The class keeps Angular's API; the translator
  * knows what `signal()`, `computed()`, `input()`, `output()` and `inject()` mean.
  */
-export function angularComponent(path: string, text: string, selectors: Map<string, string>, options: { elements?: Map<string, string>; platform?: 'ios' | 'android'; pipes?: Map<string, PipeDecl>; runtimeModule?: string; directives?: DirectiveDecl[]; ngModules?: Map<string, string[]>; hosts?: HostedComponent[]; elementMeta?: Map<string, string[] | null>; aliased?: (specifier: string) => string | undefined } = {}): AngularComponent | null {
-  const written = text;
+export function angularComponent(path: string, text: string, selectors: Map<string, string>, options: AngularComponentOptions = {}): AngularComponent | null {
+  return angularComponents(path, text, selectors, options)[0] ?? null;
+}
+
+function compileOneComponent(path: string, written: string, text: string, targetName: string, selectors: Map<string, string>, options: AngularComponentOptions): { component: AngularComponent; nextText: string; prependedLines: number } {
+  const findTarget = (source: ts.SourceFile) =>
+    source.statements.find((s): s is ts.ClassDeclaration => ts.isClassDeclaration(s) && s.name?.text === targetName && !!decorator(s, 'Component'));
   let sf = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  let cls = sf.statements.find((s): s is ts.ClassDeclaration => ts.isClassDeclaration(s) && !!decorator(s, 'Component'));
-  if (!cls || !cls.name) return null;
-  const others = sf.statements.filter((s) => s !== cls && ts.isClassDeclaration(s) && !!decorator(s, 'Component'));
-  if (others.length) throw new Error(`${path}: ${others.length + 1} components in one file; a compiled release takes one @Component per file`);
+  let cls = findTarget(sf)!;
   const asWritten = cls;
-  const flat = flattenComponent(path, text, cls.name.text, undefined, undefined, options.aliased);
-  const opened = openStatics(flat ?? text, flat === null ? cls : ts.createSourceFile(path, flat, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS).statements.find((s): s is ts.ClassDeclaration => ts.isClassDeclaration(s) && !!decorator(s, 'Component'))!);
+  let prependedLines = 0;
+  const flat = flattenComponent(path, text, cls.name!.text, undefined, undefined, options.aliased);
+  const opened = openStatics(flat ?? text, flat === null ? cls : findTarget(ts.createSourceFile(path, flat, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS))!);
   if (opened !== text) {
     text = opened;
     sf = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-    cls = sf.statements.find((s): s is ts.ClassDeclaration => ts.isClassDeclaration(s) && !!decorator(s, 'Component'))!;
+    cls = findTarget(sf)!;
   }
   // A class with decorated inputs and outputs, or constructor injection, as the signal-style class the translator reads.
   const classic = classicClass(path, text, cls);
   if (classic) {
+    prependedLines += classic.prependedLines;
     text = classic.text;
     sf = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-    cls = sf.statements.find((s): s is ts.ClassDeclaration => ts.isClassDeclaration(s) && !!decorator(s, 'Component'))!;
+    cls = findTarget(sf)!;
   }
   const meta = decorator(cls, 'Component')!.arguments[0] as ts.ObjectLiteralExpression;
   const prop = (name: string) => meta.properties.find((p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && (p.name as ts.Identifier).text === name)?.initializer;
@@ -116,10 +166,11 @@ export function angularComponent(path: string, text: string, selectors: Map<stri
     refuseScopedInjection(path, asWritten);
     text = withInjector(path, text, cls, providers, viewProviders);
     sf = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-    cls = sf.statements.find((s): s is ts.ClassDeclaration => ts.isClassDeclaration(s) && !!decorator(s, 'Component'))!;
+    cls = findTarget(sf)!;
   }
   const hostMeta = prop('host');
-  const selector = (prop('selector') as ts.StringLiteral | undefined)?.text ?? cls.name.text;
+  const hostDirectivesMeta = prop('hostDirectives');
+  const selector = (prop('selector') as ts.StringLiteral | undefined)?.text ?? cls.name!.text;
   const inline = prop('template');
   const templateUrl = (prop('templateUrl') as ts.StringLiteral | undefined)?.text;
   const template = inline && (ts.isNoSubstitutionTemplateLiteral(inline) || ts.isStringLiteral(inline)) ? inline.text : templateUrl && existsSync(join(dirname(path), templateUrl)) ? readFileSync(join(dirname(path), templateUrl), 'utf8') : '';
@@ -301,6 +352,48 @@ export function angularComponent(path: string, text: string, selectors: Map<stri
     return m;
   };
 
+  /** Enclosing projected component whose `contentChild`/`contentChildren` queries match nodes inside its slots. */
+  const activeContentHost: { name: string; alias: string; queries: ViewQuery[]; depth: number }[] = [];
+  const contentQueryHooks = (refs: string[], component: string | null, tag: string | null, loops: Loop[]): QueryHook[] => {
+    const host = activeContentHost.at(-1);
+    if (!host) return [];
+    const hooks: QueryHook[] = [];
+    for (const q of host.queries) {
+      if (q.descendants === false && host.depth > 0) continue;
+      if (q.ref ? !refs.includes(q.ref) : q.type !== component && q.type !== tag) continue;
+      const instance = !!component && (q.read === null || q.read === component);
+      const wrapped = q.read === 'ElementRef' || (q.read === null && !component);
+      if (wrapped) usesElementRef = true;
+      const own = instance ? component : !wrapped && q.read === tag ? tag : null;
+      const value = wrapped ? 'new $ElementRef($q)' : own || !q.read ? '$q' : `($q as ${q.read})`;
+      const inner = [...loops, { item: '$host', param: `$host: ${host.alias}` }, { item: '$q', param: `$q: ${own ?? 'any'}` }];
+      const set = q.many && !q.signal
+        ? handlerOf(`$host.$cqSet_${q.field}($q, ${value})`, inner)
+        : handlerOf(`$host.$cqSet_${q.field}(${value})`, inner);
+      const unset = q.signal
+        ? handlerOf(`$host.$cqUnset_${q.field}(${value})`, inner)
+        : q.many ? handlerOf(`$host.$cqUnset_${q.field}($q)`, inner) : undefined;
+      hooks.push({ set, ...(unset ? { unset } : {}), on: instance ? 'instance' : 'view', contentHost: true });
+    }
+    return hooks;
+  };
+  const directiveContentHooks = (d: DirectiveDecl, loops: Loop[]): QueryHook[] => {
+    const host = activeContentHost.at(-1);
+    if (!host) return [];
+    const hooks: QueryHook[] = [];
+    for (const q of host.queries) {
+      if (q.descendants === false && host.depth > 0) continue;
+      if (q.ref || q.type !== d.className) continue;
+      const inner = [...loops, { item: '$host', param: `$host: ${host.alias}` }, { item: '$q', param: `$q: any` }];
+      const set = q.many && !q.signal
+        ? handlerOf(`$host.$cqSet_${q.field}($q, $q)`, inner)
+        : handlerOf(`$host.$cqSet_${q.field}($q)`, inner);
+      const unset = q.signal || q.many ? handlerOf(`$host.$cqUnset_${q.field}($q)`, inner) : undefined;
+      hooks.push({ set, ...(unset ? { unset } : {}), on: 'instance', contentHost: true });
+    }
+    return hooks;
+  };
+
   /**
    * The view queries an element or a component's host matches (`#ref`, or the component's class), as the methods that
    * set and clear each one's field: an ElementRef of the view, the component itself, or the view read as its class.
@@ -326,11 +419,14 @@ export function angularComponent(path: string, text: string, selectors: Map<stri
         : q.many ? handlerOf(`this.${q.field}.$remove($q)`, inner) : undefined;
       hooks.push({ set, ...(unset ? { unset } : {}), on: instance ? 'instance' : 'view' });
     }
+    hooks.push(...contentQueryHooks(refs, component, tag, loops));
     return hooks;
   };
   let usesElementRef = false;
   let usesUnset = false;
   const queries = classic?.queries ?? [];
+  const contentQueries = classic?.contentQueries ?? [];
+  const slotNames = new Set<string>();
   /** The `#refs` of the template's own elements, outside any embedded view: what a static query can resolve. */
   const staticRefs = new Set<string>();
   /** The static queries not yet resolved where the template walk is; ngOnInit waits for them. */
@@ -353,7 +449,7 @@ export function angularComponent(path: string, text: string, selectors: Map<stri
   expand(importsMeta && ts.isArrayLiteralExpression(importsMeta) ? importsMeta.elements.filter(ts.isIdentifier).map((e) => e.text) : []);
   for (const [, names] of options.ngModules ?? []) if (names.includes(cls.name!.text)) expand(names);
   const matcher = new ng.SelectorMatcher<DirectiveDecl>();
-  for (const d of options.directives ?? []) if (inScope.has(d.className)) matcher.addSelectables(ng.CssSelector.parse(d.selector), d);
+  for (const d of options.directives ?? []) if (d.selector && inScope.has(d.className)) matcher.addSelectables(ng.CssSelector.parse(d.selector), d);
   /** The directives an element matches: its name, attributes, bound inputs and outputs, as Angular matches them. */
   const matched = (name: string, attributes: string[][], bound: string[]): DirectiveDecl[] => {
     const css = new ng.CssSelector();
@@ -418,7 +514,8 @@ export function angularComponent(path: string, text: string, selectors: Map<stri
       const m = hook(h);
       return m ? [[field, m]] : [];
     }));
-    return { name, make, inputs, listeners, bindings, ...hooks, ...(d.hooks.has('ngOnChanges') ? { changes: true } : {}), attributes: d.attributes };
+    const dirQueries = directiveContentHooks(d, loops);
+    return { name, make, inputs, listeners, bindings, ...hooks, ...(d.hooks.has('ngOnChanges') ? { changes: true } : {}), ...(dirQueries.length ? { queries: dirQueries } : {}), attributes: d.attributes };
   };
 
   /** A function or class of the build's Angular runtime module, imported into the component's file under a name of its own. */
@@ -821,7 +918,7 @@ export function angularComponent(path: string, text: string, selectors: Map<stri
           const unsupported = (what: string) => new Error(`${path}: ${what} on <${n.name}>, the host of ${hosted.name}, is not supported in a release build yet`);
           if (hosted.readsHost) throw unsupported(`${hosted.name}'s own ElementRef or host bindings`);
           if (isList) throw unsupported('item templates');
-          if (n.children.some((c) => !(c instanceof ng.TmplAstText) || c.value.trim())) throw unsupported('content');
+          if (!hosted.slots?.length && n.children.some((c) => !(c instanceof ng.TmplAstText) || c.value.trim())) throw unsupported('content');
           for (const i of n.inputs) if (hosted.inputs.has(i.name) && i.type === ng.BindingType.TwoWay) throw unsupported(`[(${i.name})]`);
           for (const o of n.outputs) if (hosted.models.has(o.name.replace(/Change$/, ''))) throw unsupported(`(${o.name})`);
         }
@@ -840,11 +937,16 @@ export function angularComponent(path: string, text: string, selectors: Map<stri
           attrs.push({ name: a.name, value: a.value });
           if (hosted?.inputs.has(a.name)) hostProps.push({ name: a.name, value: a.value });
         }
-        for (const c of n.children) {
-          if (c instanceof ng.TmplAstText && c.value.trim()) attrs.push({ name: 'text', value: c.value });
-          if (c instanceof ng.TmplAstBoundText) {
-            at(c.sourceSpan);
-            attrs.push({ name: 'text', method: expr(code(c.value, scoped), scoped) });
+        const targetComponent = selectors.get(n.name);
+        const targetSlots = targetComponent ? options.componentSlots?.get(targetComponent) : hosted?.slots;
+        const projectsContent = !!(targetSlots?.length && n.children.some((c) => !(c instanceof ng.TmplAstText) || c.value.trim()));
+        if (!projectsContent) {
+          for (const c of n.children) {
+            if (c instanceof ng.TmplAstText && c.value.trim()) attrs.push({ name: 'text', value: c.value });
+            if (c instanceof ng.TmplAstBoundText) {
+              at(c.sourceSpan);
+              attrs.push({ name: 'text', method: expr(code(c.value, scoped), scoped) });
+            }
           }
         }
         // The static classes, `[class.on]="cond"` toggles and NgClass: one bound `class` naming them all.
@@ -898,11 +1000,81 @@ export function angularComponent(path: string, text: string, selectors: Map<stri
           }
           events.push({ name: o.name, method: handler(code(o.handler, scoped), scoped, selectors.has(n.name)), ...(selectors.has(n.name) ? { payload: true } : {}) });
         }
+        const projectChildren = (compName: string, declared: string[] | undefined): Record<string, TNode[]> | undefined => {
+          const meaningful = n.children.filter((c) => !(c instanceof ng.TmplAstText) || c.value.trim());
+          if (!meaningful.length) return undefined;
+          const slotMatcher = new ng.SelectorMatcher<string>();
+          for (const sel of declared ?? []) {
+            if (sel === 'default') continue;
+            try { slotMatcher.addSelectables(ng.CssSelector.parse(sel), sel); } catch {}
+          }
+          const buckets = new Map<string, ng.TmplAstNode[]>();
+          const push = (slot: string, child: ng.TmplAstNode) => {
+            const list = buckets.get(slot) ?? [];
+            list.push(child);
+            buckets.set(slot, list);
+          };
+          for (const ch of meaningful) {
+            let slot = 'default';
+            if (ch instanceof ng.TmplAstElement) {
+              const projectAs = ch.attributes.find((a) => a.name === 'ngProjectAs')?.value;
+              const cssList = projectAs ? ng.CssSelector.parse(projectAs) : [(() => {
+                const css = new ng.CssSelector();
+                css.setElement(ch.name);
+                for (const a of ch.attributes) {
+                  css.addAttribute(a.name, a.value);
+                  if (a.name === 'class') for (const c of a.value.split(/\s+/).filter(Boolean)) css.addClassName(c);
+                }
+                for (const b of [...ch.inputs.map((i) => i.name), ...ch.outputs.map((o) => o.name)]) css.addAttribute(b, '');
+                return css;
+              })()];
+              for (const css of cssList) {
+                slotMatcher.match(css, (_s, matchedSlot) => { if (slot === 'default') slot = matchedSlot; });
+              }
+            }
+            push(slot, ch);
+          }
+          const cqInfo = options.componentContentQueries?.get(compName);
+          let pushedHost = false;
+          if (cqInfo?.queries.length) {
+            let alias = compName;
+            if (compName !== cls.name!.text && cqInfo.file !== path) {
+              const releaseFile = cqInfo.file.replace(/\.ts$/, '.release.ts');
+              const names = imported.get(releaseFile) ?? new Map<string, string>();
+              imported.set(releaseFile, names);
+              if (!names.has(compName)) names.set(compName, `$Comp_${compName}`);
+              alias = names.get(compName)!;
+            }
+            activeContentHost.push({ name: compName, alias, queries: cqInfo.queries, depth: 0 });
+            pushedHost = true;
+          }
+          const slotsOut: Record<string, TNode[]> = {};
+          try {
+            for (const [slotName, asts] of buckets) {
+              const built: TNode[] = [];
+              for (const ch of asts) {
+                if (ch instanceof ng.TmplAstText && ch.value.trim()) {
+                  built.push({ kind: 'element', tag: 'Label', attrs: [{ name: 'text', value: ch.value.trim() }], events: [], children: [] });
+                } else if (ch instanceof ng.TmplAstBoundText) {
+                  at(ch.sourceSpan);
+                  built.push({ kind: 'element', tag: 'Label', attrs: [{ name: 'text', method: expr(code(ch.value, scoped), scoped) }], events: [], children: [] });
+                } else {
+                  built.push(...nodes([ch], scoped));
+                }
+              }
+              if (built.length) slotsOut[slotName] = built;
+            }
+          } finally {
+            if (pushedHost) activeContentHost.pop();
+          }
+          return Object.keys(slotsOut).length ? slotsOut : undefined;
+        };
         const component = selectors.get(n.name);
         const refs = n.references.map((r) => r.name);
         if (component) {
           const hooks = queryHooks(refs, component, null, loops);
-          out.push({ kind: 'component', name: component, props: attrs, events, ...(hooks.length ? { queries: hooks } : {}) });
+          const projected = projectChildren(component, options.componentSlots?.get(component));
+          out.push({ kind: 'component', name: component, props: attrs, events, ...(hooks.length ? { queries: hooks } : {}), ...(projected ? { slots: projected } : {}) });
           continue;
         }
         if (n.name === 'page-router-outlet' || n.name === 'router-outlet') {
@@ -926,7 +1098,16 @@ export function angularComponent(path: string, text: string, selectors: Map<stri
         const matches = queryHooks(refs.filter((r) => !forms?.refs.has(r)), hosted?.name ?? null, tag, loops);
         const hooks = matches.filter((h) => h.on !== 'instance');
         const own = matches.filter((h) => h.on === 'instance');
-        const below = () => (isList ? listTemplates(n, attrs, scoped) : hosted ? [{ kind: 'component' as const, name: hosted.name, props: hostProps, events: hostEvents, ...(own.length ? { queries: own } : {}) }] : nodes(n.children, scoped));
+        const below = () => {
+          if (isList) return listTemplates(n, attrs, scoped);
+          if (hosted) {
+            const hostedProjected = hosted.slots?.length ? projectChildren(hosted.name, hosted.slots) : undefined;
+            return [{ kind: 'component' as const, name: hosted.name, props: hostProps, events: hostEvents, ...(own.length ? { queries: own } : {}), ...(hostedProjected ? { slots: hostedProjected } : {}) }];
+          }
+          const ch = activeContentHost.at(-1);
+          if (ch) ch.depth++;
+          try { return nodes(n.children, scoped); } finally { if (ch) ch.depth--; }
+        };
         // A form or group directive is the ControlContainer of the forms directives below it.
         const children = () => {
           if (forms?.container) formContainers.push(forms.container);
@@ -995,6 +1176,14 @@ export function angularComponent(path: string, text: string, selectors: Map<stri
         });
         // The default group renders when no case matches, wherever it is written.
         out.push({ kind: 'if', branches: [...branches.filter((b) => b.cond), ...branches.filter((b) => !b.cond)] });
+        continue;
+      }
+      if (n instanceof ng.TmplAstContent) {
+        at(n.sourceSpan);
+        const name = !n.selector || n.selector === '*' ? 'default' : n.selector;
+        slotNames.add(name);
+        const fallback = n.children?.length ? nodes(n.children, loops) : [];
+        out.push({ kind: 'slot', name, ...(fallback.length ? { fallback } : {}) });
         continue;
       }
       // Text in an element is its `text` (@nativescript/angular's renderer sets it on the parent): a template's text nodes bind there.
@@ -1412,6 +1601,124 @@ export function angularComponent(path: string, text: string, selectors: Map<stri
     };
     for (const rootNode of tree) if (rootNode.kind === 'element') applyHost(rootNode);
   }
+  // `@Component({ hostDirectives: [...] })`: Directive Composition API — attach host directives to root element(s) and forward exposed inputs/outputs.
+  const hdOutputFields: Record<string, string> = {};
+  let hdNeedsInput = false;
+  let hdNeedsOutput = false;
+  if (hostDirectivesMeta) {
+    if (!ts.isArrayLiteralExpression(hostDirectivesMeta)) throw new Error(`${path}: @Component's hostDirectives is read as an array literal in a release build`);
+    const unwrapDir = (e: ts.Expression): string | null => {
+      if (ts.isIdentifier(e)) return e.text;
+      if (ts.isCallExpression(e) && e.expression.getText() === 'forwardRef' && e.arguments[0] && ts.isArrowFunction(e.arguments[0]) && ts.isIdentifier(e.arguments[0].body)) {
+        return e.arguments[0].body.text;
+      }
+      return null;
+    };
+    const stringList = (e: ts.Expression | undefined, label: string): string[] => {
+      if (!e) return [];
+      if (!ts.isArrayLiteralExpression(e)) throw new Error(`${path}: hostDirectives ${label} must be an array of string literals in a release build`);
+      return e.elements.map((el) => {
+        if (!ts.isStringLiteralLike(el)) throw new Error(`${path}: hostDirectives ${label} entries must be string literals in a release build`);
+        return el.text;
+      });
+    };
+    let hdFieldCount = 0;
+    const hdUses: DirectiveUse[] = [];
+    for (const el of hostDirectivesMeta.elements) {
+      let dirName: string | null = null;
+      let hdInputs: string[] = [];
+      let hdOutputs: string[] = [];
+      if (ts.isObjectLiteralExpression(el)) {
+        const get = (k: string) => el.properties.find((p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && p.name.getText() === k)?.initializer;
+        const dirExpr = get('directive');
+        dirName = dirExpr ? unwrapDir(dirExpr) : null;
+        hdInputs = stringList(get('inputs'), 'inputs');
+        hdOutputs = stringList(get('outputs'), 'outputs');
+      } else {
+        dirName = unwrapDir(el);
+      }
+      if (!dirName) throw new Error(`${path}: @Component's hostDirectives entry ${el.getText().split('\n')[0]} needs a directive class name in a release build`);
+      const decl = options.directives?.find((d) => d.className === dirName);
+      const dName = `$d${directiveCount++}`;
+      const make = expr(decl?.create ? `${dirName}.$create()` : `new ${dirName}()`, []);
+      const inner: Loop[] = [{ item: dName, param: `${dName}: ${dirName}` }];
+      const valued: Loop[] = [...inner, { item: '$v', param: '$v: any' }];
+      const dirInputs: DirectiveUse['inputs'] = [];
+      for (const mapping of hdInputs) {
+        const [internal, alias] = mapping.split(':').map((s) => s.trim());
+        const pub = alias || internal;
+        let readExpr: string;
+        if (members.has(pub)) {
+          readExpr = props.includes(pub) ? `this.${pub}()` : `this.${pub}`;
+        } else {
+          const field = `$hdIn${hdFieldCount++}`;
+          methods.push(`  readonly ${field} = input<any>(undefined);`);
+          hdNeedsInput = true;
+          props.push(field);
+          optional.push(field);
+          inputAliases[field] = pub;
+          readExpr = `this.${field}()`;
+        }
+        const member = decl?.inputs.get(internal) ?? internal;
+        const setStmt = decl
+          ? `if ($v !== undefined) { ${dName}.${member}${decl.signals.has(member) ? '.$assign($v)' : ' = $v'}${decl.hooks.has('ngOnChanges') ? `; ${dName}.$change(${JSON.stringify(member)}, $v)` : ''}; }`
+          : `if ($v !== undefined) { const $cur: any = (${dName} as any)[${JSON.stringify(member)}]; if ($cur && typeof $cur.$assign === 'function') { $cur.$assign($v); } else { (${dName} as any)[${JSON.stringify(member)}] = $v; } }`;
+        dirInputs.push({ set: handlerOf(setStmt, valued), method: expr(readExpr, [], true) });
+      }
+      const dirOutputs: { name: string; method: string }[] = [];
+      for (const mapping of hdOutputs) {
+        const [internal, alias] = mapping.split(':').map((s) => s.trim());
+        const pub = alias || internal;
+        const field = `$hdOut${hdFieldCount++}`;
+        methods.push(`  readonly ${field} = output<any>();`);
+        hdNeedsOutput = true;
+        outputs.push(pub);
+        hdOutputFields[pub] = field;
+        dirOutputs.push({ name: internal, method: handlerOf(`this.${field}.emit($event)`, [...inner, { item: '$event', param: '$event: any' }]) });
+      }
+      const own: Scope = { names: new Map((decl?.members ?? []).map((m) => [m, `${dName}.${m}`])) };
+      const listeners = (decl?.listeners ?? []).map((l) => ({ event: l.event, method: handlerOf(core.rewrite(l.code, { names: new Map([...own.names, ['$event', '$event']]) }, 'statements'), [...inner, { item: '$event', param: '$event: any' }]) }));
+      const bindings = (decl?.bindings ?? []).map((b) => ({ prop: b.prop, method: expr(core.rewrite(b.code, own), inner, true) }));
+      const dHook = (h: string) => (decl?.hooks.has(h) ? handlerOf(`${dName}.${h}()`, inner) : undefined);
+      const hooks = Object.fromEntries((['init:ngOnInit', 'doCheck:ngDoCheck', 'destroy:ngOnDestroy', 'afterContentInit:ngAfterContentInit', 'afterContentChecked:ngAfterContentChecked', 'afterViewInit:ngAfterViewInit', 'afterViewChecked:ngAfterViewChecked'] as const).flatMap((e) => {
+        const [field, h] = e.split(':');
+        const m = dHook(h);
+        return m ? [[field, m]] : [];
+      }));
+      hdUses.push({
+        name: dName,
+        make,
+        inputs: dirInputs,
+        listeners,
+        bindings,
+        attributes: decl?.attributes ?? [],
+        ...hooks,
+        ...(decl?.hooks.has('ngOnChanges') ? { changes: true } : {}),
+        ...(dirOutputs.length ? { outputs: dirOutputs } : {}),
+      });
+    }
+    if (hdUses.length) {
+      for (const rootNode of tree) {
+        if (rootNode.kind === 'element') rootNode.directives = [...hdUses, ...(rootNode.directives ?? [])];
+      }
+    }
+  }
+  // Content queries (`contentChild` / `contentChildren` / `@ContentChild` / `@ContentChildren`): public setters called by parent slot projections.
+  for (const cq of contentQueries) {
+    const paramType = cq.typeArg ?? 'any';
+    if (cq.signal && !cq.many) {
+      methods.push(`  $cqSet_${cq.field}(v: ${paramType}) { this.${cq.field}.set(v); }`);
+      methods.push(`  $cqUnset_${cq.field}(_v?: ${paramType}) { this.${cq.field}.set(undefined as any); }`);
+    } else if (cq.signal && cq.many) {
+      methods.push(`  $cqSet_${cq.field}(v: ${paramType}) { this.${cq.field}.update((xs) => [...xs, v]); }`);
+      methods.push(`  $cqUnset_${cq.field}(v: ${paramType}) { this.${cq.field}.update((xs) => xs.filter((x) => x !== v)); }`);
+    } else if (!cq.many) {
+      methods.push(`  $cqSet_${cq.field}(v: any) { this.${cq.field} = v; }`);
+    } else {
+      methods.push(`  $cqSet_${cq.field}(k: any, v: any) { this.${cq.field}.$add(k, v); }`);
+      methods.push(`  $cqUnset_${cq.field}(k: any) { this.${cq.field}.$remove(k); }`);
+    }
+  }
   // Signal inputs with `{ transform }`: emit `$set_<prop>` that runs the transform before writing the input signal.
   for (const [field, fn] of inputTransforms) {
     const call = /^[A-Za-z_$][\w$.]*$/.test(fn.trim()) ? `${fn.trim()}(value)` : `(${fn})(value)`;
@@ -1428,25 +1735,32 @@ export function angularComponent(path: string, text: string, selectors: Map<stri
     methods.push(...changesMembers(onChanges.parameters.length > 0));
   }
   const cached = [...sites.values()].some((x) => x.cache);
-  let imports = `${cached ? "import { PurePipeCache as $PurePipeCache } from '@angular#kit';\n" : ''}${lets ? "import { LetSlot as $LetSlot } from '@angular#kit';\n" : ''}import { type EventData as $EventData } from '@nativescript/release';\n`;
-  if (usesElementRef) imports += `import { ElementRef as $ElementRef } from '@angular/core';\n`;
-  if (usesUnset) imports += `import { unsetValue as $unsetValue } from '@nativescript/core';\n`;
-  if (hasProviders) imports += `import { NodeInjector } from '@angular#kit';\n`;
+  let imports = '';
+  if (cached && !declares(sf, '$PurePipeCache')) imports += "import { PurePipeCache as $PurePipeCache } from '@angular#kit';\n";
+  if (lets && !declares(sf, '$LetSlot')) imports += "import { LetSlot as $LetSlot } from '@angular#kit';\n";
+  if (!declares(sf, '$EventData')) imports += "import { type EventData as $EventData } from '@nativescript/release';\n";
+  if (usesElementRef && !declares(sf, '$ElementRef')) imports += `import { ElementRef as $ElementRef } from '@angular/core';\n`;
+  if (usesUnset && !declares(sf, '$unsetValue')) imports += `import { unsetValue as $unsetValue } from '@nativescript/core';\n`;
+  if (hasProviders && !declares(sf, 'NodeInjector')) imports += `import { NodeInjector } from '@angular#kit';\n`;
+  if (hdNeedsInput && !importsAs(sf, 'input', '@angular/core')) imports += `import { input } from '@angular/core';\n`;
+  if (hdNeedsOutput && !importsAs(sf, 'output', '@angular/core')) imports += `import { output } from '@angular/core';\n`;
   if (onChanges) {
-    imports += `import { SimpleChange as $SimpleChange } from '@angular/core';\n`;
+    if (!declares(sf, '$SimpleChange')) imports += `import { SimpleChange as $SimpleChange } from '@angular/core';\n`;
     if (!importsAs(sf, 'signal', '@angular/core')) {
       if (declares(sf, 'signal')) throw new Error(`${path}: ngOnChanges needs Angular's signal, which this file's own "signal" hides`);
       imports += `import { signal } from '@angular/core';\n`;
     }
   }
-  if (queries.some((q) => q.many)) {
+  if ((queries.some((q) => q.many && !q.signal) || contentQueries.some((q) => q.many && !q.signal)) && !declares(sf, '$QueryList')) {
     usesRuntime = true;
     const from = options.runtimeModule ?? RUNTIME;
     imports += `import { QueryList as $QueryList } from '${isAbsolute(from) ? relativeSpecifier(dirname(path), from) : from}';\n`;
   }
   for (const [from, names] of imported) {
+    const needed = [...names].filter(([, a]) => !declares(sf, a));
+    if (!needed.length) continue;
     const spec = isAbsolute(from) ? relativeSpecifier(dirname(path), from) : from;
-    imports += `import { ${[...names].map(([c, a]) => `${c} as ${a}`).join(', ')} } from '${spec}';\n`;
+    imports += `import { ${needed.map(([c, a]) => `${c} as ${a}`).join(', ')} } from '${spec}';\n`;
   }
   if (routed) {
     // The translator knows `inject` by its name, and a framework token through any alias.
@@ -1454,9 +1768,12 @@ export function angularComponent(path: string, text: string, selectors: Map<stri
       if (declares(sf, 'inject')) throw new Error(`${path}: nsRouterLink needs Angular's inject, which this file's own "inject" hides`);
       imports += `import { inject } from '@angular/core';\n`;
     }
-    imports += `import { ActivatedRoute as $ActivatedRoute } from '@angular/router';\nimport { RouterExtensions as $RouterExtensions } from '@nativescript/angular';\n`;
+    if (!declares(sf, '$ActivatedRoute')) imports += `import { ActivatedRoute as $ActivatedRoute } from '@angular/router';\n`;
+    if (!declares(sf, '$RouterExtensions')) imports += `import { RouterExtensions as $RouterExtensions } from '@nativescript/angular';\n`;
     methods.push('  readonly $router = inject($RouterExtensions);', '  readonly $route = inject($ActivatedRoute);');
   }
+  const importLineCount = imports ? imports.split('\n').length - 1 : 0;
+  prependedLines += importLineCount;
   const head = imports + text.slice(0, end) + '\n';
   const source = head + methods.join('\n') + '\n' + text.slice(end);
   // Each template method's lines in the virtual file, at its binding's line in the template it was written in.
@@ -1474,7 +1791,36 @@ export function angularComponent(path: string, text: string, selectors: Map<stri
   const { styles, scope: styleScope } = angularStyles(path, prop);
   const scoped = styleScope ? core.scopeTemplate(tree, styleScope.content).map((n) => (n.kind === 'element' ? { ...n, attrs: [...n.attrs, { name: styleScope.host, value: '' }] } : n)) : tree;
   const allSetters = new Set([...(classic?.setters ?? []), ...inputTransforms.keys()]);
-  return { name: cls.name.text, file: path.replace(/\.ts$/, '.release.ts'), source, ...(usesRuntime ? { usesRuntime } : {}), props, optional, outputs, template: scoped, selector, styles, ...(init ? { init: 'ngOnInit' } : {}), ...(init && lateInit ? { lateInit } : {}), ...(hook('ngDoCheck') ? { doCheck: 'ngDoCheck' } : {}), ...(hook('ngAfterContentInit') ? { afterContentInit: 'ngAfterContentInit' } : {}), ...(hook('ngAfterContentChecked') ? { afterContentChecked: 'ngAfterContentChecked' } : {}), ...(hook('ngAfterViewInit') ? { afterViewInit: 'ngAfterViewInit' } : {}), ...(hook('ngAfterViewChecked') ? { afterViewChecked: 'ngAfterViewChecked' } : {}), ...(hook('ngOnDestroy') ? { destroy: 'ngOnDestroy' } : {}), ...(onChanges ? { changes: true } : {}), ...(onPush ? { onPush } : {}), ...(classic?.host ? { host: '$host' } : {}), ...(hasProviders ? { injector: '$injector' } : {}), ...(allSetters.size ? { setters: [...allSetters] } : {}), ...(Object.keys(inputAliases).length ? { propAliases: inputAliases } : {}), ...(lines.length ? { templateLines: { file: templateFile, lines } } : {}) } as AngularComponent;
+  const component: AngularComponent = {
+    name: cls.name!.text,
+    file: path.replace(/\.ts$/, '.release.ts'),
+    source,
+    ...(usesRuntime ? { usesRuntime } : {}),
+    props,
+    optional,
+    outputs,
+    ...(Object.keys(hdOutputFields).length ? { outputFields: hdOutputFields } : {}),
+    template: scoped,
+    selector,
+    styles,
+    ...(slotNames.size ? { slots: [...slotNames] } : {}),
+    ...(init ? { init: 'ngOnInit' } : {}),
+    ...(init && lateInit ? { lateInit } : {}),
+    ...(hook('ngDoCheck') ? { doCheck: 'ngDoCheck' } : {}),
+    ...(hook('ngAfterContentInit') ? { afterContentInit: 'ngAfterContentInit' } : {}),
+    ...(hook('ngAfterContentChecked') ? { afterContentChecked: 'ngAfterContentChecked' } : {}),
+    ...(hook('ngAfterViewInit') ? { afterViewInit: 'ngAfterViewInit' } : {}),
+    ...(hook('ngAfterViewChecked') ? { afterViewChecked: 'ngAfterViewChecked' } : {}),
+    ...(hook('ngOnDestroy') ? { destroy: 'ngOnDestroy' } : {}),
+    ...(onChanges ? { changes: true } : {}),
+    ...(onPush ? { onPush } : {}),
+    ...(classic?.host ? { host: '$host' } : {}),
+    ...(hasProviders ? { injector: '$injector' } : {}),
+    ...(allSetters.size ? { setters: [...allSetters] } : {}),
+    ...(Object.keys(inputAliases).length ? { propAliases: inputAliases } : {}),
+    ...(lines.length ? { templateLines: { file: templateFile, lines } } : {}),
+  } as AngularComponent;
+  return { component, nextText: source, prependedLines };
 }
 
 /**
@@ -1645,15 +1991,15 @@ export function angularDirectives(files: string[], read: (file: string) => strin
       const meta = call?.arguments[0];
       if (!call) continue;
       const where = `${file}: the directive ${st.name.text}`;
-      if (!meta || !ts.isObjectLiteralExpression(meta)) throw new Error(`${where} needs a selector`);
-      const get = (k: string) => meta.properties.find((p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && p.name.getText() === k)?.initializer;
+      if (meta && !ts.isObjectLiteralExpression(meta)) throw new Error(`${where} needs a selector`);
+      const get = (k: string) => (meta && ts.isObjectLiteralExpression(meta) ? meta.properties.find((p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && p.name.getText() === k)?.initializer : undefined);
       const selector = get('selector');
-      if (!selector || !ts.isStringLiteralLike(selector)) throw new Error(`${where} needs a string selector in a release build`);
+      if (selector && !ts.isStringLiteralLike(selector)) throw new Error(`${where} needs a string selector in a release build`);
       if (!(ts.getModifiers(st) ?? []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) throw new Error(`${where} is not exported`);
-      const d: DirectiveDecl = { className: st.name.text, file, selector: selector.text, inputs: new Map(), listeners: [], bindings: [], attributes: [], create: false, hooks: new Set(), structural: false, signals: new Set(), members: st.members.flatMap((m) => (m.name && ts.isIdentifier(m.name) ? [m.name.text] : [])) };
-      for (const p of meta.properties) {
+      const d: DirectiveDecl = { className: st.name.text, file, selector: selector && ts.isStringLiteralLike(selector) ? selector.text : '', inputs: new Map(), listeners: [], bindings: [], attributes: [], create: false, hooks: new Set(), structural: false, signals: new Set(), members: st.members.flatMap((m) => (m.name && ts.isIdentifier(m.name) ? [m.name.text] : [])) };
+      for (const p of meta && ts.isObjectLiteralExpression(meta) ? meta.properties : []) {
         const key = ts.isPropertyAssignment(p) ? p.name.getText() : p.getText();
-        if (!['selector', 'inputs', 'host', 'standalone', 'jit'].includes(key)) throw new Error(`${where}: its ${key} ${PLURAL_FIELDS.has(key) ? 'are' : 'is'} not supported in a release build yet`);
+        if (!['selector', 'inputs', 'host', 'standalone', 'jit', 'hostDirectives', 'providers'].includes(key)) throw new Error(`${where}: its ${key} ${PLURAL_FIELDS.has(key) ? 'are' : 'is'} not supported in a release build yet`);
       }
       const inputs = get('inputs');
       for (const e of inputs && ts.isArrayLiteralExpression(inputs) ? inputs.elements : []) {
@@ -1704,7 +2050,10 @@ export function angularDirectives(files: string[], read: (file: string) => strin
           } else throw new Error(`${where}: @${which} is not supported in a release build yet`);
         }
       }
-      for (const b of d.bindings) if (/^(class|style|attr)\./.test(b.prop)) throw new Error(`${where}: the host binding [${b.prop}] is not supported in a release build yet`);
+      for (const b of d.bindings) {
+        if (b.prop.startsWith('attr.')) b.prop = b.prop.slice(5);
+        else if (/^(class|style)\./.test(b.prop)) throw new Error(`${where}: the host binding [${b.prop}] is not supported in a release build yet`);
+      }
       const ctor = st.members.find(ts.isConstructorDeclaration);
       d.create = !!ctor?.parameters.length;
       d.structural = /\bTemplateRef\b/.test(ctor?.getText() ?? '') || /inject\(\s*TemplateRef\b/.test(st.getText());
@@ -1784,6 +2133,8 @@ export function declarableSource(path: string, text: string): string | null {
 /** What `classicClass` read from a decorated class beside its rewritten source. */
 interface Classic {
   text: string;
+  /** Number of import lines prepended to `text`. */
+  prependedLines: number;
   /** `@Input()` fields, now input signals read as `this.x()`. */
   inputs: Set<string>;
   /** `@Input()` setters, now `$set_<name>` methods the parent calls when its binding changes. */
@@ -1792,14 +2143,16 @@ interface Classic {
   aliases: Map<string, string>;
   /** Inputs the parent may leave out. */
   optional: Set<string>;
-  /** `@ViewChild` and `@ViewChildren` fields. */
+  /** `@ViewChild`, `@ViewChildren`, `viewChild()`, `viewChildren()` fields. */
   queries: ViewQuery[];
+  /** `@ContentChild`, `@ContentChildren`, `contentChild()`, `contentChildren()` fields. */
+  contentQueries: ViewQuery[];
   /** The class injects its own ElementRef, now its `$host` field. */
   host: boolean;
 }
 
 /**
- * A view query (`@ViewChild('ref')`, `@ViewChild(ChildComponent)`, `@ViewChildren`): the field it fills, what it
+ * A view or content query (`@ViewChild('ref')`, `viewChild()`, `contentChild()`, etc.): the field it fills, what it
  * matches, and what it reads there (`read: ElementRef`, a view class) when that is not the match itself.
  */
 export interface ViewQuery {
@@ -1809,8 +2162,12 @@ export interface ViewQuery {
   read: string | null;
   static: boolean;
   many: boolean;
-  /** Signal-based query (`viewChild` / `viewChild.required` / `viewChildren`): backed by a WritableSignal. */
+  /** Signal-based query (`viewChild` / `contentChild` / `viewChildren` / `contentChildren`): backed by a WritableSignal. */
   signal?: boolean;
+  /** For content queries: whether descendants beyond direct projected children match (`descendants` option). */
+  descendants?: boolean;
+  /** Resolved TypeScript element type text for signal queries (used by `$cqSet_*` / `$cqUnset_*`). */
+  typeArg?: string;
 }
 
 /**
@@ -1827,6 +2184,7 @@ function classicClass(path: string, text: string, cls: ts.ClassDeclaration): Cla
   const aliases = new Map<string, string>();
   const optional = new Set<string>();
   const queries: ViewQuery[] = [];
+  const contentQueries: ViewQuery[] = [];
   const used = new Set<string>();
   const injected: string[] = [];
   let ctor: ts.ConstructorDeclaration | undefined;
@@ -1875,9 +2233,10 @@ function classicClass(path: string, text: string, cls: ts.ClassDeclaration): Cla
         if (!init || !ts.isNewExpression(init) || init.expression.getText() !== 'EventEmitter') throw new Error(`${path}: @Output() ${name} needs = new EventEmitter<T>()`);
         edits.push({ start: m.getStart(), end: m.getEnd(), text: `readonly ${name} = output<${init.typeArguments?.[0]?.getText() ?? 'void'}>();` });
         used.add('output');
-      } else if (which === 'ViewChild' || which === 'ViewChildren') {
+      } else if (which === 'ViewChild' || which === 'ViewChildren' || which === 'ContentChild' || which === 'ContentChildren') {
+        const isContent = which === 'ContentChild' || which === 'ContentChildren';
         const [what, options] = d.arguments;
-        const query: ViewQuery = { field: name, read: null, static: false, many: which === 'ViewChildren' };
+        const query: ViewQuery = { field: name, read: null, static: false, many: which === 'ViewChildren' || which === 'ContentChildren', ...(isContent ? { descendants: which === 'ContentChild' } : {}) };
         if (what && ts.isStringLiteralLike(what)) {
           if (what.text.includes(',')) throw new Error(`${path}: @${which}('${what.text}'), a query of several names, is not supported in a release build yet`);
           query.ref = what.text.trim();
@@ -1887,12 +2246,13 @@ function classicClass(path: string, text: string, cls: ts.ClassDeclaration): Cla
           const key = p.name?.getText();
           const value = ts.isPropertyAssignment(p) ? p.initializer : undefined;
           if (key === 'static' && value) query.static = value.kind === ts.SyntaxKind.TrueKeyword;
+          else if (key === 'descendants' && isContent && value) query.descendants = value.kind === ts.SyntaxKind.TrueKeyword;
           else if (key === 'read' && value && ts.isIdentifier(value)) query.read = value.text;
           else throw new Error(`${path}: @${which}'s ${p.getText()} (${name}) is not supported in a release build yet`);
         }
         if (options && !ts.isObjectLiteralExpression(options)) throw new Error(`${path}: @${d.getText()} ${name} is not supported in a release build yet`);
         if (query.read && /^(ViewContainerRef|TemplateRef|ChangeDetectorRef|Injector)$/.test(query.read)) throw new Error(`${path}: @${which}'s read: ${query.read} (${name}) is not supported in a release build yet`);
-        queries.push(query);
+        (isContent ? contentQueries : queries).push(query);
         const decorator = ts.getDecorators(m)![0];
         if (query.many) {
           // A QueryList the template's matches are added to and removed from, in the order they render.
@@ -1921,10 +2281,13 @@ function classicClass(path: string, text: string, cls: ts.ClassDeclaration): Cla
     if (decorators.length) throw new Error(`${path}: @${decorators[0].getText()} is not supported in a release build yet`);
     if (ts.isPropertyDeclaration(m) && m.initializer && ts.isCallExpression(m.initializer)) {
       const callee = m.initializer.expression.getText();
-      if (callee === 'viewChild' || callee === 'viewChild.required' || callee === 'viewChildren') {
+      if (callee === 'viewChild' || callee === 'viewChild.required' || callee === 'viewChildren' || callee === 'contentChild' || callee === 'contentChild.required' || callee === 'contentChildren') {
+        const isContent = callee.startsWith('content');
+        const isMany = callee === 'viewChildren' || callee === 'contentChildren';
+        const isRequired = callee.endsWith('.required');
         const name = m.name.getText();
         const [what, options] = m.initializer.arguments;
-        const query: ViewQuery = { field: name, read: null, static: false, many: callee === 'viewChildren', signal: true };
+        const query: ViewQuery = { field: name, read: null, static: false, many: isMany, signal: true, ...(isContent ? { descendants: !isMany } : {}) };
         if (what && ts.isStringLiteralLike(what)) {
           if (what.text.includes(',')) throw new Error(`${path}: ${callee}('${what.text}'), a query of several names, is not supported in a release build yet`);
           query.ref = what.text.trim();
@@ -1935,17 +2298,19 @@ function classicClass(path: string, text: string, cls: ts.ClassDeclaration): Cla
           const value = ts.isPropertyAssignment(p) ? p.initializer : undefined;
           if (key === 'read' && value && (ts.isIdentifier(value) || (ts.isExpressionWithTypeArguments(value) && ts.isIdentifier(value.expression)))) {
             query.read = ts.isIdentifier(value) ? value.text : (value.expression as ts.Identifier).text;
-          }
-          else if (key === 'debugName') continue;
+          } else if (key === 'descendants' && isContent && value) {
+            query.descendants = value.kind === ts.SyntaxKind.TrueKeyword;
+          } else if (key === 'debugName') continue;
           else throw new Error(`${path}: ${callee}()'s ${p.getText()} (${name}) is not supported in a release build yet`);
         }
         if (options && !ts.isObjectLiteralExpression(options)) throw new Error(`${path}: ${callee}() (${name}) options are read as an object literal in a release build`);
         if (query.read && /^(ViewContainerRef|TemplateRef|ChangeDetectorRef|Injector)$/.test(query.read)) throw new Error(`${path}: ${callee}()'s read: ${query.read} (${name}) is not supported in a release build yet`);
-        queries.push(query);
         const typeArg = m.initializer.typeArguments?.[0]?.getText() ?? (query.read === 'ElementRef' ? 'ElementRef' : query.type ?? 'any');
-        const sigInit = query.many
+        query.typeArg = typeArg;
+        (isContent ? contentQueries : queries).push(query);
+        const sigInit = isMany
           ? `signal<${typeArg}[]>([])`
-          : callee === 'viewChild.required'
+          : isRequired
             ? `signal<${typeArg}>(undefined as any)`
             : `signal<${typeArg} | undefined>(undefined)`;
         edits.push({ start: m.initializer.getStart(), end: m.initializer.getEnd(), text: sigInit });
@@ -2044,7 +2409,8 @@ function classicClass(path: string, text: string, cls: ts.ClassDeclaration): Cla
   for (const e of edits.sort((a, b) => b.start - a.start || b.end - a.end)) out = out.slice(0, e.start) + e.text + out.slice(e.end);
   const imported = new Set(cls.getSourceFile().statements.flatMap((st) => ts.isImportDeclaration(st) && st.importClause?.namedBindings && ts.isNamedImports(st.importClause.namedBindings) ? st.importClause.namedBindings.elements.map((e) => e.name.text) : []));
   const missing = [...used].filter((u) => !imported.has(u));
-  return { text: (missing.length ? `import { ${missing.join(', ')} } from '@angular/core';\n` : '') + out, inputs, setters, aliases, optional, queries, host };
+  const prependedLines = missing.length ? 1 : 0;
+  return { text: (missing.length ? `import { ${missing.join(', ')} } from '@angular/core';\n` : '') + out, prependedLines, inputs, setters, aliases, optional, queries, contentQueries, host };
 }
 
 function literalType(e: ts.Expression | undefined): string | undefined {
@@ -2101,7 +2467,6 @@ function publicMembers(path: string, cls: ts.ClassDeclaration, classic: Classic 
     members.add(m.name.text);
     if (ts.isPropertyDeclaration(m) && m.initializer && ts.isCallExpression(m.initializer)) {
       const callee = m.initializer.expression.getText();
-      if (/^(contentChild|contentChildren)(\.required)?$/.test(callee)) throw new Error(`${path}: the signal query ${callee}() (${m.name.text}) is not supported in a release build yet`);
       const optionsOf = (k: number, allowed: string[]) => {
         const o = (m.initializer as ts.CallExpression).arguments[k];
         if (!o) return undefined;
@@ -2143,30 +2508,41 @@ export interface HostedComponent {
   models: Set<string>;
   /** It reads its host element (`inject(ElementRef)`, `host: {…}`, `@HostBinding`, `@HostListener`). */
   readsHost: boolean;
+  /** Content projection slots declared in this component's template. */
+  slots?: string[];
+}
+
+/** Every attribute-selected component in `path` as an element hosting it sees it. */
+export function hostedComponents(path: string, text: string): HostedComponent[] {
+  const out: HostedComponent[] = [];
+  for (const found of componentsOf(path, text)) {
+    if (!found.selector || !ng.CssSelector.parse(found.selector).some((s) => s.attrs.length || s.classNames.length)) continue;
+    let sf = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const named = (f: ts.SourceFile) => f.statements.find((s): s is ts.ClassDeclaration => ts.isClassDeclaration(s) && s.name?.text === found.name)!;
+    let cls = named(sf);
+    const meta = decorator(cls, 'Component')!.arguments[0];
+    const hostMeta = !!meta && ts.isObjectLiteralExpression(meta) && meta.properties.some((p) => p.name?.getText() === 'host');
+    const hostDecorators = cls.members.some((m) => (ts.canHaveDecorators(m) ? ts.getDecorators(m) ?? [] : []).some((d) => /^(HostBinding|HostListener)\b/.test(d.expression.getText())));
+    const classic = classicClass(path, text, cls);
+    if (classic) cls = named((sf = ts.createSourceFile(path, classic.text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)));
+    const api = publicMembers(path, cls, classic);
+    const models = cls.members.filter((m): m is ts.PropertyDeclaration => ts.isPropertyDeclaration(m) && !!m.initializer && ts.isCallExpression(m.initializer) && /^model(\.required)?$/.test(m.initializer.expression.getText())).map((m) => m.name.getText());
+    out.push({
+      name: found.name,
+      selector: found.selector,
+      inputs: new Set(api.props.map((p) => api.inputAliases[p] ?? p)),
+      outputs: new Set(api.outputs),
+      models: new Set(models),
+      readsHost: hostMeta || hostDecorators || !!classic?.host || /\binject\(\s*ElementRef\b/.test(cls.getText()),
+      ...(found.slots?.length ? { slots: found.slots } : {}),
+    });
+  }
+  return out;
 }
 
 /** A file's component as an element hosting it sees it, when its selector names attributes. */
 export function hostedComponent(path: string, text: string): HostedComponent | null {
-  const found = componentOf(path, text);
-  if (!found?.selector || !ng.CssSelector.parse(found.selector).some((s) => s.attrs.length || s.classNames.length)) return null;
-  let sf = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const named = (f: ts.SourceFile) => f.statements.find((s): s is ts.ClassDeclaration => ts.isClassDeclaration(s) && s.name?.text === found.name)!;
-  let cls = named(sf);
-  const meta = decorator(cls, 'Component')!.arguments[0];
-  const hostMeta = !!meta && ts.isObjectLiteralExpression(meta) && meta.properties.some((p) => p.name?.getText() === 'host');
-  const hostDecorators = cls.members.some((m) => (ts.canHaveDecorators(m) ? ts.getDecorators(m) ?? [] : []).some((d) => /^(HostBinding|HostListener)\b/.test(d.expression.getText())));
-  const classic = classicClass(path, text, cls);
-  if (classic) cls = named((sf = ts.createSourceFile(path, classic.text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)));
-  const api = publicMembers(path, cls, classic);
-  const models = cls.members.filter((m): m is ts.PropertyDeclaration => ts.isPropertyDeclaration(m) && !!m.initializer && ts.isCallExpression(m.initializer) && /^model(\.required)?$/.test(m.initializer.expression.getText())).map((m) => m.name.getText());
-  return {
-    name: found.name,
-    selector: found.selector,
-    inputs: new Set(api.props.map((p) => api.inputAliases[p] ?? p)),
-    outputs: new Set(api.outputs),
-    models: new Set(models),
-    readsHost: hostMeta || hostDecorators || !!classic?.host || /\binject\(\s*ElementRef\b/.test(cls.getText()),
-  };
+  return hostedComponents(path, text)[0] ?? null;
 }
 
 /** The element names a component's selector matches (`resource, [talkResource]` is `<resource>`; its attribute is `hostedComponent`'s). */
@@ -2174,17 +2550,100 @@ export function selectorElements(selector: string): string[] {
   return ng.CssSelector.parse(selector).flatMap((s) => (s.element && s.element !== '*' && !s.attrs.length && !s.classNames.length && !s.notSelectors.length ? [s.element] : []));
 }
 
-/** A file's `@Component` class and the selector it declares. */
-export function componentOf(path: string, text: string): { name: string; selector?: string } | null {
-  if (!text.includes('@Component')) return null;
+/** Extracts `<ng-content>` slot names from a template string. */
+function templateSlots(path: string, template: string): string[] {
+  if (!template.includes('ng-content')) return [];
+  const parsed = ng.parseTemplate(template, path + '.html', { preserveWhitespaces: false });
+  const slots = new Set<string>();
+  const walk = (list: ng.TmplAstNode[]) => {
+    for (const n of list) {
+      if (n instanceof ng.TmplAstContent) slots.add(!n.selector || n.selector === '*' ? 'default' : n.selector);
+      if (n instanceof ng.TmplAstElement || n instanceof ng.TmplAstTemplate || n instanceof ng.TmplAstForLoopBlock) walk(n.children);
+      if (n instanceof ng.TmplAstIfBlock) for (const b of n.branches) walk(b.children);
+      if (n instanceof ng.TmplAstForLoopBlock && n.empty) walk(n.empty.children);
+      if (n instanceof ng.TmplAstSwitchBlock) for (const g of n.groups) walk(g.children);
+    }
+  };
+  walk(parsed.nodes);
+  return [...slots];
+}
+
+/** Extracts declared content queries (`contentChild`, `contentChildren`, `@ContentChild`, `@ContentChildren`) on `cls`. */
+function classContentQueries(cls: ts.ClassDeclaration): ViewQuery[] {
+  const out: ViewQuery[] = [];
+  for (const m of cls.members) {
+    if (!ts.isPropertyDeclaration(m) || !m.name) continue;
+    const field = m.name.getText();
+    const decs = ts.canHaveDecorators(m) ? ts.getDecorators(m) ?? [] : [];
+    for (const dec of decs) {
+      if (!ts.isCallExpression(dec.expression)) continue;
+      const which = dec.expression.expression.getText();
+      if (which !== 'ContentChild' && which !== 'ContentChildren') continue;
+      const [what, opts] = dec.expression.arguments;
+      const q: ViewQuery = { field, read: null, static: false, many: which === 'ContentChildren', descendants: which === 'ContentChild' };
+      if (what && ts.isStringLiteralLike(what)) q.ref = what.text.trim();
+      else if (what && ts.isIdentifier(what)) q.type = what.text;
+      else continue;
+      for (const p of opts && ts.isObjectLiteralExpression(opts) ? opts.properties : []) {
+        const key = p.name?.getText();
+        const value = ts.isPropertyAssignment(p) ? p.initializer : undefined;
+        if (key === 'descendants' && value) q.descendants = value.kind === ts.SyntaxKind.TrueKeyword;
+        else if (key === 'read' && value && ts.isIdentifier(value)) q.read = value.text;
+      }
+      out.push(q);
+    }
+    if (m.initializer && ts.isCallExpression(m.initializer)) {
+      const callee = m.initializer.expression.getText();
+      if (callee === 'contentChild' || callee === 'contentChild.required' || callee === 'contentChildren') {
+        const [what, opts] = m.initializer.arguments;
+        const isMany = callee === 'contentChildren';
+        const q: ViewQuery = { field, read: null, static: false, many: isMany, signal: true, descendants: !isMany };
+        if (what && ts.isStringLiteralLike(what)) q.ref = what.text.trim();
+        else if (what && ts.isIdentifier(what)) q.type = what.text;
+        else continue;
+        for (const p of opts && ts.isObjectLiteralExpression(opts) ? opts.properties : []) {
+          const key = p.name?.getText();
+          const value = ts.isPropertyAssignment(p) ? p.initializer : undefined;
+          if (key === 'descendants' && value) q.descendants = value.kind === ts.SyntaxKind.TrueKeyword;
+          else if (key === 'read' && value && (ts.isIdentifier(value) || (ts.isExpressionWithTypeArguments(value) && ts.isIdentifier(value.expression)))) {
+            q.read = ts.isIdentifier(value) ? value.text : (value.expression as ts.Identifier).text;
+          }
+        }
+        out.push(q);
+      }
+    }
+  }
+  return out;
+}
+
+/** Every `@Component` class in `path`, with its selector, declared `<ng-content>` slots, and content queries. */
+export function componentsOf(path: string, text: string): { name: string; selector?: string; slots?: string[]; contentQueries?: ViewQuery[] }[] {
+  if (!text.includes('@Component')) return [];
   const sf = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const out: { name: string; selector?: string; slots?: string[]; contentQueries?: ViewQuery[] }[] = [];
   for (const st of sf.statements) {
     const meta = ts.isClassDeclaration(st) && st.name ? decorator(st, 'Component')?.arguments[0] : undefined;
-    if (!meta) continue;
-    const selector = ts.isObjectLiteralExpression(meta) ? meta.properties.find((p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && p.name.getText() === 'selector')?.initializer : undefined;
-    return { name: (st as ts.ClassDeclaration).name!.text, selector: selector && ts.isStringLiteralLike(selector) ? selector.text : undefined };
+    if (!meta || !ts.isClassDeclaration(st) || !st.name) continue;
+    const get = (k: string) => (ts.isObjectLiteralExpression(meta) ? meta.properties.find((p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && p.name.getText() === k)?.initializer : undefined);
+    const selector = get('selector');
+    const inline = get('template');
+    const templateUrl = get('templateUrl');
+    const tpl = inline && ts.isStringLiteralLike(inline) ? inline.text : templateUrl && ts.isStringLiteralLike(templateUrl) && existsSync(join(dirname(path), templateUrl.text)) ? readFileSync(join(dirname(path), templateUrl.text), 'utf8') : '';
+    const slots = templateSlots(path, tpl);
+    const contentQueries = classContentQueries(st);
+    out.push({
+      name: st.name.text,
+      selector: selector && ts.isStringLiteralLike(selector) ? selector.text : undefined,
+      ...(slots.length ? { slots } : {}),
+      ...(contentQueries.length ? { contentQueries } : {}),
+    });
   }
-  return null;
+  return out;
+}
+
+/** A file's first `@Component` class and the selector it declares. */
+export function componentOf(path: string, text: string): { name: string; selector?: string; slots?: string[]; contentQueries?: ViewQuery[] } | null {
+  return componentsOf(path, text)[0] ?? null;
 }
 
 /** @nativescript/angular's platform filters (`<android>`, `<ios>`, `<apple>`) and the platforms each renders its content on. */
@@ -2282,7 +2741,7 @@ function checkProvider(path: string, e: ts.Expression, field = 'providers'): voi
  */
 const COMPONENT_META = new Set([
   'selector', 'template', 'templateUrl', 'styles', 'styleUrl', 'styleUrls', 'imports', 'changeDetection', 'encapsulation',
-  'standalone', 'schemas', 'moduleId', 'jit', 'exportAs', 'animations', 'preserveWhitespaces', 'providers', 'viewProviders', 'host',
+  'standalone', 'schemas', 'moduleId', 'jit', 'exportAs', 'animations', 'preserveWhitespaces', 'providers', 'viewProviders', 'host', 'hostDirectives',
 ]);
 
 /** Decorator fields named in the plural, for messages. */

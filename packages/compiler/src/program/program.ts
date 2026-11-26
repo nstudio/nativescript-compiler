@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, resolve, sep } from 'node:path';
 import { foldPlatform, type Platform } from './platform.ts';
 import { desugarConstructorFactories } from './constructor-factories.ts';
+import { expandImportMetaGlob } from './glob.ts';
 import { NATIVE_CONTROLLERS, NATIVE_VIEWS, nativeViewOf } from './core-facts.ts';
 import type { PluginSources } from '../plugins/source.ts';
 import { packageOf, runtimeFile } from '../plugins/resolve.ts';
@@ -179,6 +180,30 @@ export interface Program {
 const NOT_PLUGINS = /^(@nativescript\/(core|types|types-ios|types-android|types-minimal|webpack|vite|tailwind|android|ios)|tslib|typescript|vite)$/;
 
 /**
+ * Rewrites ES `export default <expr>;` (`ts.ExportAssignment`) into `export { <id> as default };` (introducing
+ * `const __nsDefault = <expr>;` when `<expr>` is not already a plain identifier) so TypeScript's `getAliasedSymbol`
+ * resolves default and namespace imports directly to a real declaration in both Swift and Kotlin backends.
+ */
+function desugarDefaultExport(code: string, name: string): string {
+	if (!code.includes('export default')) return code;
+	const sf = ts.createSourceFile(name, code, ts.ScriptTarget.Latest, true);
+	const edits: { start: number; end: number; text: string }[] = [];
+	for (const st of sf.statements) {
+		if (!ts.isExportAssignment(st) || st.isExportEquals) continue;
+		const exprText = code.slice(st.expression.getStart(sf), st.expression.getEnd());
+		if (ts.isIdentifier(st.expression)) {
+			edits.push({ start: st.getStart(sf), end: st.getEnd(), text: `export { ${exprText} as default };` });
+		} else {
+			edits.push({ start: st.getStart(sf), end: st.getEnd(), text: `const __nsDefault = ${exprText}; export { __nsDefault as default };` });
+		}
+	}
+	if (!edits.length) return code;
+	let out = code;
+	for (const e of edits.sort((a, b) => b.start - a.start)) out = out.slice(0, e.start) + e.text + out.slice(e.end);
+	return out;
+}
+
+/**
  * A program over the app's modules and the components' virtual classes,
  * typed by the real ES2022 library, @nativescript/core's own declarations
  * and the platform's native API typings. `appLenient` says whether the app's
@@ -242,16 +267,18 @@ export function createProgram(roots: string[], virtual: Map<string, string>, pla
 		for (const [, ref] of code.matchAll(/^\/\/\/\s*<reference\s+path="([^"]*\.tsx?)"\s*\/>/gm)) if (!ref.endsWith('.d.ts')) pluginFiles.add(resolve(dirname(name), ref));
 		return pluginDeclaredExports(code, name, platform);
 	};
+	const appRoot = plugins?.options?.app ? resolve(plugins.options.app) : null;
 	host.getSourceFile = (name, version, onError) => {
 		const text = files.get(name) ?? (isSource(name) && existsSync(name) ? readFileSync(name, 'utf8') : appTypings.has(name) ? nativeReferences(readFileSync(name, 'utf8'), name) : undefined);
 		if (text === undefined) {
 			// A package's own TypeScript (or pure-JS ESM) source.
 			if (!/\.(tsx?|m?js)$/.test(name) || name.endsWith('.d.ts') || !existsSync(name)) return readLib(name, version, onError);
-			const raw = readFileSync(name, 'utf8');
+			const raw = desugarDefaultExport(expandImportMetaGlob(readFileSync(name, 'utf8'), name, appRoot), name);
 			if (/\.m?js$/.test(name)) return ts.createSourceFile(name, raw, version, true, ts.ScriptKind.JS);
 			return ts.createSourceFile(name, desugarConstructorFactories(declaredExports(name, raw), name), version, true);
 		}
-		const code = /\.tsx?$/.test(name) && !name.endsWith('.d.ts') ? desugarConstructorFactories(declaredExports(name, text), name) : text;
+		const expanded = !name.startsWith('/__shims__/') && !name.endsWith('.d.ts') ? desugarDefaultExport(expandImportMetaGlob(text, name, appRoot), name) : text;
+		const code = /\.tsx?$/.test(name) && !name.endsWith('.d.ts') ? desugarConstructorFactories(declaredExports(name, expanded), name) : expanded;
 		return ts.createSourceFile(name, isSource(name) ? foldPlatform(code, name, platform, modules, build.defines) : code, version, true);
 	};
 	const fileExists = host.fileExists.bind(host);
@@ -275,7 +302,6 @@ export function createProgram(roots: string[], virtual: Map<string, string>, pla
 			if (r.resolvedModule) resolutions.set(`${containing}\0${lit.text}`, r.resolvedModule.resolvedFileName);
 			return r;
 		});
-	const appRoot = plugins?.options?.app ? resolve(plugins.options.app) : null;
 	const localPackages = appRoot ? localFilePackages(appRoot) : new Map<string, string>();
 	const resolveLiteral = (lit: ts.StringLiteralLike, containing: string): ts.ResolvedModuleWithFailedLookupLocations => {
 		{
@@ -285,8 +311,9 @@ export function createProgram(roots: string[], virtual: Map<string, string>, pla
 				const aliasedRaw = isApp(containing) ? aliased(rawSpec) : undefined;
 				const candidate = aliasedRaw ?? (rawSpec.startsWith('.') || isAbsolute(rawSpec) ? resolve(dirname(containing), rawSpec) : resolve(modules, rawSpec));
 				if (existsSync(candidate)) {
-					const rawPath = `/__raw__/${createHash('sha256').update(candidate).digest('hex').slice(0, 16)}.ts`;
-					if (!files.has(rawPath)) files.set(rawPath, `export default ${JSON.stringify(readFileSync(candidate, 'utf8'))};\n`);
+					const hash = createHash('sha256').update(candidate).digest('hex').slice(0, 16);
+					const rawPath = `/__raw__/${hash}.ts`;
+					if (!files.has(rawPath)) files.set(rawPath, `const __nsRaw_${hash}: string = ${JSON.stringify(readFileSync(candidate, 'utf8'))};\nexport { __nsRaw_${hash} as default };\n`);
 					pluginFiles.add(rawPath);
 					return { resolvedModule: { resolvedFileName: rawPath, extension: ts.Extension.Ts } };
 				}

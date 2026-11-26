@@ -49,7 +49,7 @@ export interface AndroidBuild {
 	checker: ts.TypeChecker;
 	/** The app's files and the components' virtual files, in translation order. */
 	files: readonly ts.SourceFile[];
-	infos: Map<string, { name: string; props: string[]; members: ComponentMembers; outputs?: string[]; outputFields?: Record<string, string>; setters?: string[]; propAliases?: Record<string, string>; changes?: boolean }>;
+	infos: Map<string, { name: string; props: string[]; members: ComponentMembers; outputs?: string[]; outputFields?: Record<string, string>; setters?: string[]; propAliases?: Record<string, string>; changes?: boolean; slots?: string[] }>;
 	/** The app's classes its templates create as elements (registered elements). */
 	elementClasses: ReadonlySet<string>;
 	root: string;
@@ -139,7 +139,7 @@ export async function writeAndroid(b: AndroidBuild): Promise<void> {
 		const writes = sharedWorkerState(b.program, b.workers, new Set([...b.modules, ...b.components.map((c) => c.file), ...(b.compiledPlugins ?? [])]), b.resolved);
 		if (writes.length) throw sharedWorkerStateError(writes, b.app);
 	}
-	const moduleFiles = [...b.modules, ...b.components.map((c) => c.file), ...(b.compiledPlugins ?? [])];
+	const moduleFiles = [...new Set([...b.modules, ...b.components.map((c) => c.file), ...(b.compiledPlugins ?? [])])];
 	// Which modules run on the main thread only; a worker's script reaching one stops the build with the import chain.
 	const threads = moduleThreads({ program: b.program, modules: moduleFiles, workers: b.workers, resolved: b.resolved, coreModuleOf: (f) => /[\\/]@nativescript[\\/]core[\\/](.+)$/.exec(f)?.[1] ?? null });
 	// A module only `await import(…)` reaches (and what only it imports) runs when it is imported, as the bundle evaluates
@@ -175,9 +175,13 @@ export async function writeAndroid(b: AndroidBuild): Promise<void> {
 	// Components whose class could not be written (`--keep-going`): a root view of one is left as it is.
 	const unwritten = new Set<string>();
 	const kotlinClass = (name: string) => programClassName(translator, name);
+	const componentClass = (name: string) => {
+		const c = b.components.find((x) => x.name === name);
+		const sf = c && b.program.getSourceFile(c.file);
+		return sf?.statements.find((s): s is ts.ClassDeclaration => ts.isClassDeclaration(s) && s.name?.text === name) ?? sf?.statements.find(ts.isClassDeclaration);
+	};
 	const rootView = (name: string, make: string) => {
-		const c = b.translatorHooks?.wrapsRootViews && !unwritten.has(name) ? b.components.find((x) => x.name === name) : undefined;
-		const cls = c && b.program.getSourceFile(c.file)?.statements.find(ts.isClassDeclaration);
+		const cls = b.translatorHooks?.wrapsRootViews && !unwritten.has(name) ? componentClass(name) : undefined;
 		return cls ? translator.rootView(cls, kotlinClass(name), make) : make;
 	};
 	const table: Record<string, [number, string, number][]> = {};
@@ -232,13 +236,8 @@ export async function writeAndroid(b: AndroidBuild): Promise<void> {
 	const header = (from: string, template?: string) => `${headerLine(sourceName(b.app, from, b.context.adapter), template && (dirname(template) === dirname(from) ? basename(template) : sourceName(b.app, template, b.context.adapter)))}\npackage ${pkg}\n\nimport org.nativescript.kit.*\n\n`;
 	// A component's file is a module too: what it declares beside the component (its constants and helpers).
 	const modules = translateKotlinModules(translator, b.program, moduleFiles, b.resolved, b.app);
-	const componentClass = (name: string) => {
-		const c = b.components.find((x) => x.name === name);
-		return c && b.program.getSourceFile(c.file)?.statements.find(ts.isClassDeclaration);
-	};
 	for (const c of b.components) {
-		const sf = b.program.getSourceFile(c.file)!;
-		const cls = sf.statements.find(ts.isClassDeclaration)!;
+		const cls = componentClass(c.name)!;
 		try {
 			const { params, lines, statics } = translator.componentMembers(cls, c.props);
 			const conformance = translator.componentConformance(cls);
@@ -325,6 +324,8 @@ export async function writeAndroid(b: AndroidBuild): Promise<void> {
 				if ('children' in n && Array.isArray(n.children)) visit(n.children as TNode[]);
 				if ('body' in n && Array.isArray(n.body)) visit(n.body as TNode[]);
 				if ('branches' in n && Array.isArray(n.branches)) for (const br of n.branches as { body: TNode[] }[]) visit(br.body);
+				if ('fallback' in n && Array.isArray(n.fallback)) visit(n.fallback as TNode[]);
+				if ('slots' in n && n.slots) for (const slotNodes of Object.values(n.slots as Record<string, TNode[]>)) visit(slotNodes);
 			}
 		};
 		for (const c of b.components) visit(c.template);

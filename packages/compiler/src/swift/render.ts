@@ -190,6 +190,31 @@ export function render(c: ComponentIR, components: Map<string, ComponentInfo>, t
 				return say(depth, s.detached ? `let ${s.name} = Region(host: nil)` : `let ${s.name} = ${s.parent}.kitAddRegion()`);
 			case 'addRegion':
 				return say(depth, `${s.parent}.kitAddRegion(${s.region})`);
+			case 'setSlot': {
+				say(depth, `${s.component}.__slots[${swiftString(s.name)}] = { (__sr: Region) throws -> Void in`);
+				const wrap = s.scope ? scope(s.scope, 'Void') : null;
+				const d = wrap ? depth + 2 : depth + 1;
+				if (wrap) say(depth + 1, wrap);
+				if (s.viewMark) say(d, 'let __view = EffectOrder.current');
+				say(d, `let ${s.body.fragment} = RegionFragment(__sr)`);
+				steps(s.body.steps, d);
+				say(d, `__sr.set(parts: ${s.body.fragment}.parts)`);
+				if (wrap) say(depth + 1, '}');
+				return say(depth, '}');
+			}
+			case 'slot': {
+				const host = regionHost(s.host);
+				if (s.fallback) {
+					say(depth, `if let __slot = self.__slots[${swiftString(s.name)}] {`);
+					say(depth + 1, `try __slot(${host})`);
+					say(depth, '} else {');
+					say(depth + 1, `let ${s.fallback.fragment} = RegionFragment(${host})`);
+					steps(s.fallback.steps, depth + 1);
+					say(depth + 1, `${host}.set(parts: ${s.fallback.fragment}.parts)`);
+					return say(depth, '}');
+				}
+				return say(depth, `if let __slot = self.__slots[${swiftString(s.name)}] { try __slot(${host}) }`);
+			}
 			case 'choose': {
 				const host = regionHost(s.host);
 				const which = s.conds.map((k, i) => (k ? `${cond(k, s.caught)} ? ${i} : ` : `${i}`)).join('') + (s.conds.at(-1) ? `${s.conds.length}` : '');
@@ -285,6 +310,7 @@ export function render(c: ComponentIR, components: Map<string, ComponentInfo>, t
 
 	const passes = plan.passes;
 	const m = plan.members;
+	if (plan.hasSlots) say(1, 'var __slots: [String: (Region) throws -> Void] = [:]');
 	if (passes) {
 		// Both passes, with the hooks a parent runs for its child between and after them.
 		const hooks = (list: RootHook[]) => list.map((h) => (h.flush ? `${h.flush}(for: self)` : h.every ? `${h.every} { self.${h.member}() }` : `self.${h.member}()`)).join('; ');

@@ -54,6 +54,8 @@ export interface ComponentInfo {
 	afterViewChecked?: boolean;
 	/** Checked only once marked dirty (`ComponentIR.onPush`): under `check+onPush`, an input it is given a new value marks its view dirty. */
 	onPush?: boolean;
+	/** Content projection slot names declared by this component (`ComponentIR.slots`). */
+	slots?: string[];
 	/** The names of its generated members (`componentMembersOf`); `COMPONENT_MEMBERS` where none are given. */
 	members?: ComponentMembers;
 }

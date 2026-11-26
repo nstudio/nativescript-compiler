@@ -152,7 +152,7 @@ export async function compile(o: CompileOptions, build: BuildContext = new Build
 	// The app's own specifiers: relative ones and its tsconfig's path aliases (`~/app/x`).
 	const aliased = pathAliases(app);
 	const appSpecifier = (spec: string) => spec.startsWith('.') || aliased(spec) !== undefined;
-	const { importsOf, usedBy, workerScripts } = appImports(files, aliased, thisPlatform);
+	const { importsOf, usedBy, workerScripts } = appImports(files, aliased, thisPlatform, app);
 	// The modules of the build: what the bundler reaches. Some frameworks' bundle is what the entry imports, lazy routes
 	// included; another's, every file its tsconfig.json does not exclude (specs, mocks), and what those import.
 	const included = adapter?.reach === 'entry' ? null : tsconfigIncluded(app, appDir);
@@ -375,10 +375,11 @@ export async function compile(o: CompileOptions, build: BuildContext = new Build
 			) + '\n',
 		);
 	}
-	const infos = new Map<string, ComponentInfo & { outputs?: string[]; outputFields?: Record<string, string>; optional?: string[]; passed?: boolean; fragment?: boolean; initThrows?: boolean; setters?: string[]; throwingSetters?: string[]; propAliases?: Record<string, string>; changes?: boolean }>(
+	const infos = new Map<string, ComponentInfo & { outputs?: string[]; outputFields?: Record<string, string>; optional?: string[]; passed?: boolean; fragment?: boolean; initThrows?: boolean; setters?: string[]; throwingSetters?: string[]; propAliases?: Record<string, string>; changes?: boolean; slots?: string[] }>(
 		components.map((c) => {
-			const cls = program.getSourceFile(c.file)?.statements.find(ts.isClassDeclaration);
-			return [c.name, { name: c.name, props: c.props, members: cls ? componentMembersOf(cls, checker) : COMPONENT_MEMBERS, outputs: c.outputs, outputFields: c.outputFields, optional: c.optional, passed: c.passed, fragment: behaviour.fragments && !c.page && isFragment(c.template), setters: c.setters, propAliases: c.propAliases, changes: c.changes, ...(c.doCheck ? { doCheck: true } : {}), ...(c.afterContentInit ? { afterContentInit: true } : {}), ...(c.afterContentChecked ? { afterContentChecked: true } : {}), ...(c.afterViewChecked ? { afterViewChecked: true } : {}), onPush: c.onPush }];
+			const sf = program.getSourceFile(c.file);
+			const cls = sf?.statements.find((s): s is ts.ClassDeclaration => ts.isClassDeclaration(s) && s.name?.text === c.name) ?? sf?.statements.find(ts.isClassDeclaration);
+			return [c.name, { name: c.name, props: c.props, members: cls ? componentMembersOf(cls, checker) : COMPONENT_MEMBERS, outputs: c.outputs, outputFields: c.outputFields, optional: c.optional, passed: c.passed, fragment: behaviour.fragments && !c.page && isFragment(c.template), setters: c.setters, propAliases: c.propAliases, changes: c.changes, ...(c.doCheck ? { doCheck: true } : {}), ...(c.afterContentInit ? { afterContentInit: true } : {}), ...(c.afterContentChecked ? { afterContentChecked: true } : {}), ...(c.afterViewChecked ? { afterViewChecked: true } : {}), ...(c.slots?.length ? { slots: c.slots } : {}), onPush: c.onPush }];
 		}),
 	);
 	// A component whose template is one fragment component is a fragment too, however deep the chain.
@@ -395,7 +396,7 @@ export async function compile(o: CompileOptions, build: BuildContext = new Build
 		}
 	}
 	// A closed world: the plugin code the app reaches, checked against what npm installed before it is compiled.
-	const appFiles = [...modules, ...components.map((c) => c.file)];
+	const appFiles = [...new Set([...modules, ...components.map((c) => c.file)])];
 	const { reach, compiled: compiledPlugins } = closedWorld(program, resolved, appFiles, pluginFiles, platform, build);
 	plugins.verify(compiledPlugins);
 	const properties = collectProperties(checker, sourceFiles);
