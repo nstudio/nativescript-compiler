@@ -188,6 +188,7 @@ function acquire(dir: string, options: SourceOptions): PluginSource {
 	const shipped = !override && shipsSource(dir, pkg);
 	const shippedJs = !override && !shipped && shipsJsSource(dir, pkg);
 	const workspaceRoot = !override && !shipped && !shippedJs ? localWorkspaceSourceRoot(dir, pkg) : null;
+	let fromMaps = false;
 	if (override) {
 		if (!existsSync(override)) throw new Error(`${name}: the source configured in release.pluginSources (${override}) does not exist`);
 		root = override;
@@ -196,13 +197,26 @@ function acquire(dir: string, options: SourceOptions): PluginSource {
 	} else if (workspaceRoot) {
 		root = workspaceRoot;
 	} else {
-		repo = repositoryOf(pkg);
-		if (!repo) throw new Error(`${name}@${version}: package.json names no repository; point release.pluginSources['${name}'] at a checkout of its source`);
 		const checkout = join(options.cache ?? DEFAULT_CACHE, `${name.replace(/\//g, '+')}@${version}`);
-		const fetched = fetch(checkout, repo, pkg, dir, say);
-		repo = fetched.repo;
-		rev = fetched.rev;
-		root = join(checkout, 'repo');
+		repo = repositoryOf(pkg);
+		if (!repo) {
+			const extracted = extractSourcesContent(dir, checkout, name, version, options.app);
+			if (!extracted) throw new Error(`${name}@${version}: package.json names no repository; point release.pluginSources['${name}'] at a checkout of its source`);
+			root = extracted;
+			fromMaps = true;
+		} else {
+			try {
+				const fetched = fetch(checkout, repo, pkg, dir, say);
+				repo = fetched.repo;
+				rev = fetched.rev;
+				root = join(checkout, 'repo');
+			} catch (err) {
+				const extracted = extractSourcesContent(dir, checkout, name, version, options.app);
+				if (!extracted) throw err;
+				root = extracted;
+				fromMaps = true;
+			}
+		}
 	}
 
 	const repoFiles = listFiles(root);
@@ -250,8 +264,66 @@ function acquire(dir: string, options: SourceOptions): PluginSource {
 		options.platform,
 		root,
 	);
-	say(`${name}@${version}: source from ${override ? `${override} (not verified: a configured source)` : shipped ? 'the package (it ships its TypeScript)' : shippedJs ? 'the package (pure JavaScript ES modules)' : workspaceRoot ? `${workspaceRoot} (local workspace source)` : `${repo} @ ${rev!.slice(0, 7)}`}`);
+	say(`${name}@${version}: source from ${override ? `${override} (not verified: a configured source)` : shipped ? 'the package (it ships its TypeScript)' : shippedJs ? 'the package (pure JavaScript ES modules)' : workspaceRoot ? `${workspaceRoot} (local workspace source)` : fromMaps ? 'installed source maps (sourcesContent)' : `${repo} @ ${rev!.slice(0, 7)}`}`);
 	return { name, version, dir, root, repo, rev, files, bundles, typings, checked: new Set(), verified: override ? 'override' : shipped || shippedJs || workspaceRoot ? 'shipped' : 'published' };
+}
+
+/**
+ * Fallback for local tarballs, private packages, or untagged releases whose installed `.js.map`/`.mjs.map`
+ * files embed TypeScript `sourcesContent`: validates each map against its installed JS with `verifyMap`,
+ * extracts the `.ts`/`.tsx` sources into the plugin cache, and returns the extracted root directory.
+ */
+function extractSourcesContent(dir: string, checkout: string, name: string, version: string, app: string): string | null {
+	const maps = listFiles(dir).filter((f) => /\.m?js\.map$/.test(f) && !f.includes(`${sep}platforms${sep}`) && !/\.(config|webpack)\.js\.map$/.test(f));
+	const collected: { js: string; map: string; raw: string; files: { rel: string; content: string }[] }[] = [];
+	for (const map of maps) {
+		const js = map.slice(0, -'.map'.length);
+		if (!existsSync(js)) continue;
+		let raw: string;
+		let parsed: { sources?: unknown; sourcesContent?: unknown };
+		try {
+			raw = readFileSync(map, 'utf8');
+			parsed = JSON.parse(raw);
+		} catch {
+			continue;
+		}
+		if (!Array.isArray(parsed.sources) || !Array.isArray(parsed.sourcesContent)) continue;
+		const files: { rel: string; content: string }[] = [];
+		for (let k = 0; k < parsed.sources.length; k++) {
+			const s = parsed.sources[k];
+			const c = parsed.sourcesContent[k];
+			if (typeof s !== 'string' || typeof c !== 'string' || !/\.tsx?$/.test(s) || s.endsWith('.d.ts')) continue;
+			const parts = s
+				.replace(/^[a-zA-Z]+:\/\/[^/]*\//, '')
+				.replace(/\\/g, '/')
+				.split('/')
+				.filter((p) => p && p !== '.' && p !== '..');
+			if (!parts.length) continue;
+			files.push({ rel: parts.join(sep), content: c });
+		}
+		if (files.length) collected.push({ js, map, raw, files });
+	}
+	if (!collected.length) return null;
+	// Verify every source map against its installed JS before trusting its embedded sourcesContent.
+	for (const entry of collected) verifyMap(name, entry.js, app, version);
+	const hasher = createHash('sha1');
+	for (const entry of collected) hasher.update(`${relative(dir, entry.map)}\0${entry.raw}\0`);
+	const extracted = join(checkout, `extracted-${hasher.digest('hex').slice(0, 12)}`);
+	if (!existsSync(join(extracted, '.extracted'))) {
+		rmSync(extracted, { recursive: true, force: true });
+		mkdirSync(extracted, { recursive: true });
+		for (const entry of collected) {
+			for (const f of entry.files) {
+				const dest = resolve(extracted, f.rel);
+				if (!dest.startsWith(extracted + sep)) continue;
+				mkdirSync(dirname(dest), { recursive: true });
+				writeFileSync(dest, f.content);
+			}
+		}
+		writeFileSync(join(extracted, 'package.json'), JSON.stringify({ name, version }));
+		writeFileSync(join(extracted, '.extracted'), 'ok');
+	}
+	return extracted;
 }
 
 /**

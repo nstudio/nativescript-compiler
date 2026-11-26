@@ -91,11 +91,11 @@ for (const platform of ['ios', 'android'] as const) (() => {
   try {
     const snippets: Record<string, [string, RefusalId]> = {
       hole: ['export const xs = [1, , 3];', 'array-hole'],
-      args: ['export const f = function () { return arguments.length; };', 'function-arguments'],
+      args: ['export const f = function () { return arguments; };', 'function-arguments'],
       member: ["export const s = 'a'.normalize();", 'library-member'],
       proxy: ['export const p = new Proxy({}, {});', 'proxy'],
       value: ['export const L = JSON.stringify;', 'function-value'],
-      klass: ['export const o = new (class { x = 1; })();', 'class-expression'],
+      klass: ['export function f(v: number) { return new (class { x = v; })(); }', 'class-expression'],
       object: ['export const c = Object(5);', 'object-call'],
       base: ['class N extends null {} export const n = N;', 'unsupported-base'],
     };
@@ -1471,6 +1471,49 @@ fun main() {
     check(/CommonJS/.test(cjsError) && /pluginReplacements/.test(cjsError), `PluginSources refuses a CommonJS-only JS package with replacement guidance (${cjsError.slice(0, 120)})`);
     sources.get(tsNoMapPkg);
     check(sources.sourceOf(join(tsNoMapPkg, 'build', 'lib', 'index.js')) === join(resolve(tsNoMapPkg), 'lib', 'index.ts'), 'PluginSources maps build/lib/*.js to shipped lib/*.ts without .js.map');
+
+    // 3b. Local/private package with no repository whose .js.map embeds TypeScript sourcesContent.
+    const mapSrcPkg = join(jsApp, 'node_modules', 'local-map-pkg');
+    const staleMapPkg = join(jsApp, 'node_modules', 'stale-map-pkg');
+    mkdirSync(mapSrcPkg, { recursive: true });
+    mkdirSync(staleMapPkg, { recursive: true });
+    writeFileSync(join(mapSrcPkg, 'package.json'), JSON.stringify({ name: 'local-map-pkg', version: '1.0.0', main: 'index.js' }));
+    writeFileSync(join(mapSrcPkg, 'index.js'), 'export function quad(x) { return x * 4; }\n//# sourceMappingURL=index.js.map\n');
+    writeFileSync(
+      join(mapSrcPkg, 'index.js.map'),
+      JSON.stringify({
+        version: 3,
+        file: 'index.js',
+        sources: ['../src/index.ts'],
+        sourcesContent: ['export function quad(x: number): number { return x * 4; }\n'],
+        names: [],
+        mappings: 'AAAA',
+      }),
+    );
+    const extractedPkg = sources.get(mapSrcPkg);
+    const extractedSrc = sources.sourceOf(join(mapSrcPkg, 'index.js'));
+    check(!!extractedSrc && extractedSrc.endsWith(join('src', 'index.ts')) && extractedPkg.verified === 'published', `PluginSources extracts verified sourcesContent when package.json has no repository (${extractedSrc ?? 'none'})`);
+    let verifyExtractedOk = true;
+    try { sources.verify([extractedSrc!]); } catch { verifyExtractedOk = false; }
+    check(verifyExtractedOk, 'PluginSources verifies extracted sourcesContent against the installed JS');
+
+    writeFileSync(join(staleMapPkg, 'package.json'), JSON.stringify({ name: 'stale-map-pkg', version: '1.0.0', main: 'index.js' }));
+    writeFileSync(join(staleMapPkg, 'index.js'), 'export const x = 1;\n');
+    writeFileSync(
+      join(staleMapPkg, 'index.js.map'),
+      JSON.stringify({
+        version: 3,
+        file: 'index.js',
+        sources: ['../src/index.ts'],
+        sourcesContent: ['export const x: number = 1;\n'],
+        names: [],
+        // 6 empty lines: mapped line lies outside the 2-line index.js (stale map).
+        mappings: ';;;;;;AAAA',
+      }),
+    );
+    let staleRejected = false;
+    try { sources.get(staleMapPkg); } catch (e) { staleRejected = /stale/i.test((e as Error).message); }
+    check(staleRejected, 'PluginSources rejects stale source maps during sourcesContent fallback');
 
     const vDir = join(dir, 'verify-esbuild');
     mkdirSync(vDir, { recursive: true });
