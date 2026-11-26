@@ -65,10 +65,19 @@ permissions:
 jobs:
   build-kits:
     name: Build core, generate Swift & Kotlin kits, verify
-    runs-on: macos-15
+    runs-on: macos-26
     outputs:
       core_version: ${{ steps.core_meta.outputs.version }}
     steps:
+      - name: Select latest Xcode 26 (iOS 26 SDK required for kit generation)
+        run: |
+          XCODE_APP=$(ls -d /Applications/Xcode_26*.app /Applications/Xcode.app 2>/dev/null | sort -V | tail -n 1)
+          if [[ -n "$XCODE_APP" ]]; then
+            sudo xcode-select -s "${XCODE_APP}/Contents/Developer"
+          fi
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
       - name: Checkout nativescript-compiler
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
