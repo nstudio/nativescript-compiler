@@ -1,6 +1,6 @@
 {
   "name": "@nstudio/nativescript-compiler-vue",
-  "version": "9.2.0-alpha.9",
+  "version": "9.2.0-alpha.10",
   "description": "The Vue adapter of @nstudio/nativescript-compiler: compiles a NativeScript app written with Vue into a native iOS or Android app with no JavaScript runtime.",
   "type": "module",
   "exports": {
@@ -27,7 +27,7 @@
     "@vue/compiler-sfc": "^3.5.0"
   },
   "peerDependencies": {
-    "@nstudio/nativescript-compiler": "9.2.0-alpha.9"
+    "@nstudio/nativescript-compiler": "9.2.0-alpha.10"
   },
   "nativescript": {
     "compilerAdapter": {

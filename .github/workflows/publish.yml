@@ -1,6 +1,7 @@
 name: Publish to npm (OIDC)
 
-# Publishes @nstudio/nativescript-compiler and its framework adapters using npm Trusted Publishing (OIDC).
+# Publishes @nstudio/nativescript-compiler and its framework adapters using npm Trusted Publishing (OIDC),
+# tags the release, and creates a GitHub Release with an auto-generated changelog.
 #
 # One-time setup on npmjs.com for each published package:
 #   Package Settings -> Trusted Publisher -> GitHub Actions:
@@ -9,7 +10,7 @@ name: Publish to npm (OIDC)
 #     Workflow filename:    publish.yml
 #     Environment name:     npm-publish
 #
-# Packages published (in order):
+# Packages published (in order, skipping any package that is private, already published, or cannot be published):
 #   1. @nstudio/nativescript-compiler
 #   2. @nstudio/nativescript-compiler-angular
 #   3. @nstudio/nativescript-compiler-vue
@@ -49,7 +50,7 @@ on:
           - compiler-only
           - adapters-only
       dry_run:
-        description: 'Build, verify, and pack without publishing to npm'
+        description: 'Build, verify, and pack without publishing to npm or creating a GitHub Release'
         required: false
         default: true
         type: boolean
@@ -166,17 +167,19 @@ jobs:
           if-no-files-found: error
 
   publish:
-    name: ${{ inputs.dry_run && 'Pack (dry run)' || 'Publish to npm (OIDC)' }}
+    name: ${{ inputs.dry_run && 'Pack (dry run)' || 'Publish to npm (OIDC) & Release' }}
     needs: [build-kits]
     runs-on: ubuntu-latest
     environment:
       name: ${{ inputs.dry_run && 'npm-publish-dry-run' || 'npm-publish' }}
     permissions:
-      contents: read
+      contents: write # Required to create git tags and GitHub Releases with changelog
       id-token: write # Required for npm Trusted Publishing (OIDC) & provenance
     steps:
       - name: Checkout nativescript-compiler
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -231,31 +234,115 @@ jobs:
           npm run pack -- packed $FLAG
           ls -lh packed/
 
-      - name: Publish via npm OIDC Trusted Publishing
+      - name: Publish via npm OIDC Trusted Publishing (skip unpublishable packages)
+        id: npm_publish
         if: ${{ !inputs.dry_run }}
         env:
           NPM_CONFIG_PROVENANCE: true
           NODE_AUTH_TOKEN: ''
         run: |
-          set -euo pipefail
+          set -uo pipefail
           unset NODE_AUTH_TOKEN
           rm -f ~/.npmrc || true
           TAG="${{ inputs.dist_tag }}"
+          VERSION="${{ inputs.version }}"
 
+          TARGETS=()
           if [[ "${{ inputs.scope }}" != "adapters-only" ]]; then
-            echo "Publishing @nstudio/nativescript-compiler (${TAG})..."
-            npm publish packed/nstudio-nativescript-compiler-${{ inputs.version }}.tgz --access public --tag "$TAG"
+            TARGETS+=("@nstudio/nativescript-compiler|packed/nstudio-nativescript-compiler-${VERSION}.tgz")
           fi
-
           if [[ "${{ inputs.scope }}" != "compiler-only" ]]; then
             for fw in angular vue svelte react solid octane; do
-              echo "Publishing @nstudio/nativescript-compiler-${fw} (${TAG})..."
-              npm publish "packed/nstudio-nativescript-compiler-${fw}-${{ inputs.version }}.tgz" --access public --tag "$TAG"
+              TARGETS+=("@nstudio/nativescript-compiler-${fw}|packed/nstudio-nativescript-compiler-${fw}-${VERSION}.tgz")
             done
           fi
 
-      - name: Dry-run summary
+          PUBLISHED=()
+          SKIPPED=()
+
+          for entry in "${TARGETS[@]}"; do
+            PKG="${entry%%|*}"
+            TGZ="${entry#*|}"
+            if [[ ! -f "$TGZ" ]]; then
+              echo "::warning::Tarball missing for ${PKG} (${TGZ}) — skipping"
+              SKIPPED+=("\`${PKG}\` (tarball not found)")
+              continue
+            fi
+            if npm view "${PKG}@${VERSION}" version >/dev/null 2>&1; then
+              echo "::notice::${PKG}@${VERSION} is already published on npm — skipping"
+              SKIPPED+=("\`${PKG}\` (already published at \`${VERSION}\`)")
+              continue
+            fi
+            echo "Publishing ${PKG}@${VERSION} (${TAG})..."
+            if npm publish "$TGZ" --access public --tag "$TAG"; then
+              echo "✓ Published ${PKG}@${VERSION}"
+              PUBLISHED+=("$PKG")
+            else
+              echo "::warning::Failed to publish ${PKG}@${VERSION} — skipping and continuing"
+              SKIPPED+=("\`${PKG}\` (publish skipped/unavailable)")
+            fi
+          done
+
+          PUBLISHED_CSV=$(IFS=,; echo "${PUBLISHED[*]}")
+          SKIPPED_CSV=$(IFS=,; echo "${SKIPPED[*]}")
+          echo "published=${PUBLISHED_CSV}" >> "$GITHUB_OUTPUT"
+          echo "skipped=${SKIPPED_CSV}" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### npm Publish Summary (\`${VERSION}\`, tag \`${TAG}\`)"
+            echo ""
+            echo "**Published (${#PUBLISHED[@]}):** ${PUBLISHED_CSV:-none}"
+            echo ""
+            echo "**Skipped (${#SKIPPED[@]}):** ${SKIPPED_CSV:-none}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Generate changelog and publish GitHub Release with tag
+        if: ${{ !inputs.dry_run && steps.npm_publish.outputs.published != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ inputs.version }}"
+          TAG_NAME="v${VERSION}"
+
+          node scripts/generate-changelog.mjs \
+            --version "$VERSION" \
+            --core-version "${{ needs.build-kits.outputs.core_version }}" \
+            --core-ref "${{ inputs.core_ref }}" \
+            --dist-tag "${{ inputs.dist_tag }}" \
+            --published "${{ steps.npm_publish.outputs.published }}" \
+            --skipped "${{ steps.npm_publish.outputs.skipped }}" \
+            --out release-notes.md
+
+          cat release-notes.md
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if ! git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            git tag -a "$TAG_NAME" -m "Release ${TAG_NAME}"
+            git push origin "$TAG_NAME"
+          fi
+
+          PRERELEASE_FLAG=""
+          if [[ "$VERSION" == *-* ]]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release edit "$TAG_NAME" --title "$TAG_NAME" --notes-file release-notes.md $PRERELEASE_FLAG
+          else
+            gh release create "$TAG_NAME" --title "$TAG_NAME" --notes-file release-notes.md $PRERELEASE_FLAG
+          fi
+
+      - name: Dry-run summary & changelog preview
         if: ${{ inputs.dry_run }}
         run: |
           echo "Dry run complete — tarballs packed and verified (nothing published):"
           ls -lh packed/
+          node scripts/generate-changelog.mjs \
+            --version "${{ inputs.version }}" \
+            --core-version "${{ needs.build-kits.outputs.core_version }}" \
+            --core-ref "${{ inputs.core_ref }}" \
+            --dist-tag "${{ inputs.dist_tag }}" \
+            --published "@nstudio/nativescript-compiler,@nstudio/nativescript-compiler-angular,@nstudio/nativescript-compiler-vue,@nstudio/nativescript-compiler-svelte,@nstudio/nativescript-compiler-react,@nstudio/nativescript-compiler-solid,@nstudio/nativescript-compiler-octane"

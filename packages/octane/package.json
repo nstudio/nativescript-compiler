@@ -1,6 +1,6 @@
 {
   "name": "@nstudio/nativescript-compiler-octane",
-  "version": "9.2.0-alpha.9",
+  "version": "9.2.0-alpha.10",
   "description": "The Octane adapter of @nstudio/nativescript-compiler: compiles a NativeScript app written with Octane into a native iOS or Android app with no JavaScript runtime.",
   "type": "module",
   "exports": {
@@ -24,7 +24,7 @@
     "directory": "packages/octane"
   },
   "peerDependencies": {
-    "@nstudio/nativescript-compiler": "9.2.0-alpha.9"
+    "@nstudio/nativescript-compiler": "9.2.0-alpha.10"
   },
   "nativescript": {
     "compilerAdapter": {
