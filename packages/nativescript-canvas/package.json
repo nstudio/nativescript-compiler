@@ -1,6 +1,6 @@
 {
   "name": "@triniwiz/compiled-nativescript-canvas",
-  "version": "9.2.0-alpha.11",
+  "version": "9.2.0-alpha.12",
   "description": "The @nativescript/canvas binding of @nstudio/nativescript-compiler: the objects the plugin's native code installs into the JavaScript engine, in Swift and Kotlin over its native library, for an app compiled with no JavaScript engine.",
   "type": "module",
   "files": [
@@ -15,7 +15,7 @@
     "directory": "packages/nativescript-canvas"
   },
   "peerDependencies": {
-    "@nstudio/nativescript-compiler": "9.2.0-alpha.11"
+    "@nstudio/nativescript-compiler": "9.2.0-alpha.12"
   },
   "nativescript": {
     "compilerBinding": {

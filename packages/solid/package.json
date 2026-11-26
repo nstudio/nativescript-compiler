@@ -1,6 +1,6 @@
 {
   "name": "@nstudio/nativescript-compiler-solid",
-  "version": "9.2.0-alpha.11",
+  "version": "9.2.0-alpha.12",
   "description": "The Solid adapter of @nstudio/nativescript-compiler: compiles a NativeScript app written with Solid into a native iOS or Android app with no JavaScript runtime.",
   "type": "module",
   "exports": {
@@ -24,7 +24,7 @@
     "directory": "packages/solid"
   },
   "peerDependencies": {
-    "@nstudio/nativescript-compiler": "9.2.0-alpha.11"
+    "@nstudio/nativescript-compiler": "9.2.0-alpha.12"
   },
   "nativescript": {
     "compilerAdapter": {
