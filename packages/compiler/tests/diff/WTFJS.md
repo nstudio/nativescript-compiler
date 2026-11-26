@@ -16,11 +16,11 @@ commit where CI's differential and `wtfjs.ts --check` steps pass. To compare it 
 | | Swift | Kotlin |
 |---|---:|---:|
 | Examples covered | 61 of 66 | 61 of 66 |
-| Matches Node | 47 | 49 |
+| Matches Node | 48 | 50 |
 | Matches Node, the rest refused | 6 | 4 |
-| Partly fails | 1 | 1 |
-| Fails | 1 | 1 |
-| Refused | 6 | 6 |
+| Partly fails | 0 | 0 |
+| Fails | 0 | 0 |
+| Refused | 7 | 7 |
 | Not applicable to compiled module code | 5 | 5 |
 | Not covered | 0 | 0 |
 
@@ -58,7 +58,7 @@ commit where CI's differential and `wtfjs.ts --check` steps pass. To compare it 
 | 30 | Call call call | matches Node, the rest refused: 1567 ✓, 1578 R | matches Node: 1567 ✓, 1578 ✓ | other-receiver (Swift) |  |
 | 31 | A `constructor` property | matches Node: 1522 ✓ | matches Node: 1522 ✓ |  |  |
 | 32 | Object as a key of object's property | matches Node: 1547 ✓ | matches Node: 1547 ✓ |  |  |
-| 33 | Accessing prototypes with `__proto__` | fails: 1566 ✗ | fails: 1566 ✗ |  |  |
+| 33 | Accessing prototypes with `__proto__` | refused: 1566 R | refused: 1566 R | proto |  |
 | 34 | `` `${{Object}}` `` | matches Node: 1541 ✓, 1558 ✓ | matches Node: 1541 ✓, 1558 ✓ |  |  |
 | 35 | Destructuring with default values | matches Node: 1549 ✓, 1559 ✓ | matches Node: 1549 ✓, 1559 ✓ |  |  |
 | 36 | Dots and spreading | matches Node: 1545 ✓ | matches Node: 1545 ✓ |  |  |
@@ -70,7 +70,7 @@ commit where CI's differential and `wtfjs.ts --check` steps pass. To compare it 
 | 42 | A class of class | matches Node: 1550 ✓, 1570 ✓ | matches Node: 1550 ✓, 1570 ✓ |  |  |
 | 43 | Non-coercible objects | matches Node, the rest refused: 1553 ✓, 1571 R | matches Node, the rest refused: 1553 ✓, 1571 R | object-call |  |
 | 44 | Tricky arrow functions | matches Node: 1548 ✓ | matches Node: 1548 ✓ |  |  |
-| 45 | Arrow functions can not be a constructor | partly fails: 1530 ✗, 1548 ✓ | partly fails: 1530 ✗, 1548 ✓ |  |  |
+| 45 | Arrow functions can not be a constructor | matches Node: 1530 ✓, 1548 ✓ | matches Node: 1530 ✓, 1548 ✓ |  |  |
 | 46 | `arguments` and arrow functions | matches Node, the rest refused: 1533 ✓, 1572 R | matches Node, the rest refused: 1533 ✓, 1572 R | function-arguments |  |
 | 47 | Tricky return | matches Node: 1549 ✓ | matches Node: 1549 ✓ |  |  |
 | 48 | Chaining assignments on object | matches Node: 1549 ✓, 1559 ✓ | matches Node: 1549 ✓, 1559 ✓ |  |  |

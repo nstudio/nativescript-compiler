@@ -981,7 +981,7 @@ public final class JSObject: JSDynamic, JSSymbolKeyed, JSAccessorKeyed, JSReacti
     }
 
     public var jsKeys: [String] { keys }
-    public var jsClassName: String? { nil }
+    public var jsClassName: String? = nil
 
     public func jsMakeReactive() {
         if jsTracker == nil { jsTracker = JSTracker() }

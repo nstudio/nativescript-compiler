@@ -80,7 +80,7 @@ Measured in alternating 5-round A/B runs (`ns compile` vs `--release --no-compil
 
 | Suite | Swift (iOS) | Kotlin (Android) |
 | --- | ---: | ---: |
-| **Differential suite (990 cases)** | **924 / 979** match Node *(45 declared refusals, 10 known failures)* | **873 / 917** match Node *(39 declared refusals, 5 known failures)* |
+| **Differential suite (990 cases)** | **926 / 979** match Node *(46 declared refusals, 7 known failures)* | **874 / 917** match Node *(40 declared refusals, 3 known failures)* |
 | **Decision parity (shared front)** | **8,825,940** decisions across 48 cases — **0** answered differently | *(same)* |
 | **Module layering & shared-front tests** | **303** modules, **0** cycles · **23 / 23** semantics tests · **85 / 85** expression-parser checks | *(same)* |
 

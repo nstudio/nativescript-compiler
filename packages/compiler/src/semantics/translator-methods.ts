@@ -81,6 +81,11 @@ export const frontMethods = traceMethods('front', {
 		if (r) throw this.error(r.node, r.what, r.id);
 	},
 
+	/** Refuses reading or writing `__proto__` in app code (`proto` limit). */
+	refuseProto(this: Front, e: ts.Node): void {
+		if (!this.library && ts.isPropertyAccessExpression(e) && e.name.text === '__proto__') throw this.error(e, '`__proto__`', 'proto');
+	},
+
 	/** Refuses an unmodelled member read off `Intl.NumberFormat` or `Intl.DateTimeFormat` (`unmodelledIntlMember`). */
 	refuseIntlMember(this: Front, e: ts.Node): void {
 		if (!ts.isPropertyAccessExpression(e) && !ts.isElementAccessExpression(e)) return;

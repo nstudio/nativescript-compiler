@@ -340,7 +340,9 @@ private fun jsReceiving(f: Any): (Any?, Array<out Any?>) -> Any? = when (f) {
 /** A function that reads `this`: a method of an untyped object literal. `length` is script's count of its parameters. */
 class JSMethod(val call: (Any?, Array<out Any?>) -> Any?) : Function<Any?> {
     var length = 0
+    var name = ""
     constructor(length: Int, call: (Any?, Array<out Any?>) -> Any?) : this(call) { this.length = length }
+    constructor(name: String, length: Int, call: (Any?, Array<out Any?>) -> Any?) : this(call) { this.name = name; this.length = length }
 }
 
 /**

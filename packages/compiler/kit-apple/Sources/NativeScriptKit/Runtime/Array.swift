@@ -10,6 +10,8 @@ public protocol JSArrayProtocol: AnyObject {
     func jsHasElement(at index: Int) -> Bool
     /// `array[index] = value`; throws a TypeError when `value` is not an `Element`.
     func jsSetElement(_ value: Any?, at index: Int) throws
+    /// `delete array[index]`: turns the slot into a hole without changing `length`.
+    func jsDeleteElement(at index: Int)
     func jsSetLength(_ length: Int) throws
     /// Replaces every element; throws a TypeError, changing nothing, when one is not an `Element`.
     func jsSetElements(_ values: [Any?]) throws
@@ -44,6 +46,8 @@ open class JSArray<Element>: JSArrayProtocol, JSStandIn, JSReactiveConvertible, 
     /// The array a view made by `jsUntypedArray` or `jsArrayView` is: its elements are that array's, read and written
     /// through it, and it holds none of its own.
     @usableFromInline final var standingFor: JSArrayProtocol?
+    /// Indices that are holes in non-Double/non-String arrays (`new Array(n)`, `delete a[i]`, extended `length`); nil for dense arrays.
+    @usableFromInline final var jsHoles: Set<Int>?
     public final var jsTracker: JSTracker?
 
     public init() { held = [] }
@@ -193,12 +197,22 @@ open class JSArray<Element>: JSArrayProtocol, JSStandIn, JSReactiveConvertible, 
         }
         if n < storage.count {
             storage.removeLast(storage.count - n)
+            if jsHoles != nil {
+                jsHoles = jsHoles?.filter { $0 < n }
+                if jsHoles?.isEmpty == true { jsHoles = nil }
+            }
             trigger()
         } else if n > storage.count {
             guard let hole = JSArray.hole else {
                 fatalError("JSArray<\(Element.self)>: length \(n) beyond \(storage.count) needs an optional Element for the empty slots")
             }
-            storage.append(contentsOf: repeatElement(hole, count: n - storage.count))
+            let start = storage.count
+            storage.append(contentsOf: repeatElement(hole, count: n - start))
+            if !JSArray.holdsNumbers && !JSArray.holdsStrings {
+                var holes = jsHoles ?? Set<Int>()
+                for idx in start..<n { holes.insert(idx) }
+                jsHoles = holes
+            }
             trigger()
         }
     }
@@ -247,6 +261,10 @@ open class JSArray<Element>: JSArrayProtocol, JSStandIn, JSReactiveConvertible, 
             if JSArray.viewable {
                 if i >= 0 && i < held.count {
                     held[i] = newValue
+                    if jsHoles != nil {
+                        jsHoles?.remove(i)
+                        if jsHoles?.isEmpty == true { jsHoles = nil }
+                    }
                     trigger()
                     return
                 }
@@ -254,12 +272,22 @@ open class JSArray<Element>: JSArrayProtocol, JSStandIn, JSReactiveConvertible, 
             }
             if i >= 0 && i < held.count {
                 held[i] = newValue
+                if jsHoles != nil {
+                    jsHoles?.remove(i)
+                    if jsHoles?.isEmpty == true { jsHoles = nil }
+                }
             } else if i == held.count {
                 held.append(newValue)
             } else if i >= 4_294_967_295 {
                 return setNonIndexed(Double(i), newValue)
             } else if i > held.count, let hole = JSArray.hole {
-                held.append(contentsOf: repeatElement(hole, count: i - held.count))
+                let start = held.count
+                held.append(contentsOf: repeatElement(hole, count: i - start))
+                if !JSArray.holdsNumbers && !JSArray.holdsStrings {
+                    var holes = jsHoles ?? Set<Int>()
+                    for idx in start..<i { holes.insert(idx) }
+                    jsHoles = holes
+                }
                 held.append(newValue)
             } else {
                 outOfRange(i)
@@ -287,12 +315,22 @@ open class JSArray<Element>: JSArrayProtocol, JSStandIn, JSReactiveConvertible, 
         }
         if i >= 0 && i < held.count {
             held[i] = newValue
+            if jsHoles != nil {
+                jsHoles?.remove(i)
+                if jsHoles?.isEmpty == true { jsHoles = nil }
+            }
         } else if i == held.count {
             held.append(newValue)
         } else if i >= 4_294_967_295 {
             return setNonIndexed(Double(i), newValue)
         } else if i > held.count, let hole = JSArray.hole {
-            held.append(contentsOf: repeatElement(hole, count: i - held.count))
+            let start = held.count
+            held.append(contentsOf: repeatElement(hole, count: i - start))
+            if !JSArray.holdsNumbers && !JSArray.holdsStrings {
+                var holes = jsHoles ?? Set<Int>()
+                for idx in start..<i { holes.insert(idx) }
+                jsHoles = holes
+            }
             held.append(newValue)
         } else {
             outOfRange(i)
@@ -1080,13 +1118,28 @@ open class JSArray<Element>: JSArrayProtocol, JSStandIn, JSReactiveConvertible, 
     public final func jsElement(at index: Int) -> Any? {
         if let source = shared { return source.jsElement(at: index) }
         track()
-        return index >= 0 && index < storage.count && !JSArray.isHole(storage[index]) ? JSArray.untyped(read(index)) : nil
+        return index >= 0 && index < storage.count && !JSArray.isHole(storage[index]) && jsHoles?.contains(index) != true ? JSArray.untyped(read(index)) : nil
     }
 
     public final func jsHasElement(at index: Int) -> Bool {
         if let source = shared { return source.jsHasElement(at: index) }
         track()
-        return index >= 0 && index < storage.count && !JSArray.isHole(storage[index])
+        return index >= 0 && index < storage.count && !JSArray.isHole(storage[index]) && jsHoles?.contains(index) != true
+    }
+
+    public final func jsDeleteElement(at index: Int) {
+        if let source = shared {
+            source.jsDeleteElement(at: index)
+            return
+        }
+        guard index >= 0, index < held.count, let hole = JSArray.hole else { return }
+        held[index] = hole
+        if !JSArray.holdsNumbers && !JSArray.holdsStrings {
+            var holes = jsHoles ?? Set<Int>()
+            holes.insert(index)
+            jsHoles = holes
+        }
+        trigger()
     }
 
     public final func jsSetElement(_ value: Any?, at index: Int) throws {

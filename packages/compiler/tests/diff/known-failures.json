@@ -11,16 +11,6 @@
 			"cause": "A class's `prototype` read does not compile.",
 			"signature": "type 'Derived' has no member 'prototype'"
 		},
-		"1530-wtf-function-constructor": {
-			"owner": "Swift runtime",
-			"cause": "`new` on a function expression held untyped throws TypeError instead of constructing an object.",
-			"signature": "line 1: node \"new function ctor { a: 1 }\" native \"new function TypeError\""
-		},
-		"1566-wtf-proto-chain": {
-			"owner": "Swift translator",
-			"cause": "`__proto__` read through an untyped value is neither refused (proto) nor followed: it reads undefined.",
-			"signature": "line 1: node \"(1).__proto__.__proto__.__proto__ null\" native \"\""
-		},
 		"1836-detached-method-receiver": {
 			"owner": "Swift translator",
 			"cause": "A method value is bound to an object (a class's method value to the object it is read from, a literal's method to the literal it is made in): called alone it still reads that object, not undefined. Needs function values that take their receiver at the call.",
@@ -30,11 +20,6 @@
 			"owner": "Swift runtime",
 			"cause": "A typed object's declared field is a stored property: `delete` through an untyped value returns true and keeps the field and its key, and Object.defineProperty cannot make it read-only, hidden or non-configurable (TypeError \"Cannot restrict a typed object's field\").",
 			"signature": "line 1: node \"true false undefined a\" native \"true true 2 a,b\""
-		},
-		"1899-inspect-holes": {
-			"owner": "Swift runtime",
-			"cause": "A JSArray<Any?> keeps no holes (only arrays of numbers and strings have a hole marker): `new Array(n)`, `delete a[i]` and a longer `length` hold undefined, which console.log prints as such.",
-			"signature": "line 3: node \"[ <3 empty items> ]\" native \"[ undefined, undefined, undefined ]\""
 		},
 		"247-missing-values-throw": {
 			"owner": "Swift translator",
@@ -57,16 +42,6 @@
 			"owner": "Kotlin runtime",
 			"cause": "Object.getPrototypeOf of a derived class is not its base, and a method read from a class's prototype is undefined.",
 			"signature": "line 1: node \"prototype chain derived:base true true true Derived\" native \"prototype chain derived:base false true true Derived\""
-		},
-		"1530-wtf-function-constructor": {
-			"owner": "Kotlin runtime",
-			"cause": "`new` on a function expression held untyped throws TypeError instead of constructing an object.",
-			"signature": "line 1: node \"new function ctor { a: 1 }\" native \"new function TypeError\""
-		},
-		"1566-wtf-proto-chain": {
-			"owner": "Kotlin translator",
-			"cause": "`__proto__` read through an untyped value is neither refused (proto) nor followed: it reads undefined.",
-			"signature": "line 1: node \"(1).__proto__.__proto__.__proto__ null\" native \"\""
 		},
 		"1836-detached-method-receiver": {
 			"owner": "Kotlin translator",

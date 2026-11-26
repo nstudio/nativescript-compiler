@@ -189,6 +189,13 @@ export function canReadArguments(e: ts.Identifier, readsArguments: (fn: ts.Signa
 	return !!fn && readsArguments(fn) && (!ts.isFunctionExpression(fn) || library || !escapesArguments(e));
 }
 
+/** Script-visible name of a function expression/arrow (`fn.name`, else its variable/property binding's name, else `""`). */
+export function inferredFunctionName(fn: ts.FunctionLikeDeclaration): string {
+	if (fn.name && ts.isIdentifier(fn.name)) return fn.name.text;
+	if (ts.isVariableDeclaration(fn.parent) && ts.isIdentifier(fn.parent.name)) return fn.parent.name.text;
+	return '';
+}
+
 /** Static `fn.length` or `fn.name` read on a function literal, declared function, or `const` holding one. */
 export function functionProperty(e: ts.PropertyAccessExpression, checker: ts.TypeChecker): { kind: 'length'; value: number } | { kind: 'name'; value: string } | null {
 	const prop = e.name.text;

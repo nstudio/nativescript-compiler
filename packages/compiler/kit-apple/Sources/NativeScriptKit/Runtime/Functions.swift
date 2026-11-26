@@ -33,6 +33,7 @@ public let jsFunctionBindMethod = JSFunctionObject("bind", 1) { __this, __a in
 public final class JSFunctionObject: JSDynamic, CustomStringConvertible {
     public let name: String
     public let length: Int
+    public let constructible: Bool
     let body: JSMethod
     private var own: JSObject?
 
@@ -41,9 +42,10 @@ public final class JSFunctionObject: JSDynamic, CustomStringConvertible {
     /// The function this object is, to `===`, when not itself: a class's method, boxed from one receiver's method value.
     var identity: AnyObject?
 
-    public init(_ name: String, _ length: Int, _ body: @escaping JSMethod) {
+    public init(_ name: String, _ length: Int, constructible: Bool = false, _ body: @escaping JSMethod) {
         self.name = name
         self.length = length
+        self.constructible = constructible
         self.body = body
     }
 
@@ -110,7 +112,7 @@ public func jsFunction(_ name: String, _ length: Int, _ body: @escaping JSFuncti
 /// A function value that reads its receiver: a method held as a value.
 @inline(__always)
 public func jsMethodFunction(_ name: String, _ length: Int, _ body: @escaping JSMethod) -> JSFunctionObject {
-    JSFunctionObject(name, length, body)
+    JSFunctionObject(name, length, constructible: true, body)
 }
 
 /// `f(...arguments)` with a receiver: any function value the runtime holds.

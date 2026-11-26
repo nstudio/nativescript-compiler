@@ -34,6 +34,7 @@ export const accessMethods = {
 	property(this: Translator, e: ts.PropertyAccessExpression): string {
 		const name = e.name.text;
 		const target = e.expression;
+		this.refuseProto(e);
 		this.refuseIntlMember(e);
 		if (!e.questionDotToken && !isWriteTarget(e)) {
 			const continued = this.continuedChain(e, target, () => this.property(e));
@@ -429,6 +430,7 @@ export const accessMethods = {
 	},
 
 	elementAccess(this: Translator, e: ts.ElementAccessExpression): string {
+		this.refuseProto(e);
 		this.refuseIntlMember(e);
 		const key = e.argumentExpression;
 		// `Enum[name]`, `Enum[value]`: the object JavaScript makes of the enum, by key.

@@ -2,7 +2,7 @@
 import ts from 'typescript';
 import { declOf, ident, isFunctionType, isThisParameter, jsObjectCode, kotlinString, lambda, returnsNull, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
-import { methodValues } from '../semantics/lang.ts';
+import { inferredFunctionName, methodValues } from '../semantics/lang.ts';
 import { isUntyped, spelledType } from '../semantics/types.ts';
 import { isLibDeclaration, thisNodes, takesOwnThis } from '../semantics/ast.ts';
 import { isStatic } from '../semantics/throws.ts';
@@ -23,7 +23,9 @@ export const untypedValuesMethods = {
 		if (!isUntyped(spelledType(thisType))) binds.unshift(`val __this: ${thisType} = (__self as ${thisType})`);
 		else binds.unshift('val __this: Any? = __self');
 		const body = this.withThis(fn, '__this', isUntyped(spelledType(thisType)), () => this.functionBody(fn, ret, this.indent));
-		return `JSMethod ${lambda(['__self', '__a'], `${binds.map((b) => b + '; ').join('')}(fun()${ret === 'Unit' ? '' : `: ${ret}`} ${body})()`)}`;
+		const methodName = this.library ? '' : inferredFunctionName(fn);
+		const ctor = methodName ? `JSMethod(${kotlinString(methodName)}, ${params.length})` : 'JSMethod';
+		return `${ctor} ${lambda(['__self', '__a'], `${binds.map((b) => b + '; ').join('')}(fun()${ret === 'Unit' ? '' : `: ${ret}`} ${body})()`)}`;
 	},
 
 	/** Library mode: a function declared to return `string | null` (or a number or boolean): null kept, as callers test for it. */

@@ -60,7 +60,7 @@ export const constructionMethods = {
 	/** An array constructed by the global `Array`, with or without `new`; null when `Array` is the program's own. */
 	newArray(this: Translator, e: ts.NewExpression | ts.CallExpression, t: string, args: readonly ts.Expression[]): string | null {
 		// `new Array(n)` of a type holding undefined: n holes, each read as undefined.
-		if (args.length === 1 && this.typeOf(args[0]) === 'Double' && /^JSArray<(Any\?|.*\?)>$/.test(t)) return `${t}(Array(repeating: nil, count: ${this.arrayLength(args[0])}))`;
+		if (args.length === 1 && this.typeOf(args[0]) === 'Double' && /^JSArray<(Any\?|.*\?)>$/.test(t)) return `${t}.holes(Double(${this.arrayLength(args[0])}))`;
 		if (!isLibGlobal(this, e.expression as ts.Identifier)) return null;
 		const el = t.replace(/^JSArray<(.*)>$/, '$1');
 		if (args.length !== 1) return `${t}([${args.map((a) => this.coerce(a, el)).join(', ')}])`;

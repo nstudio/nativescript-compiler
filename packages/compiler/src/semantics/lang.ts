@@ -6,7 +6,7 @@ export { unsafeReceiver, uncheckedMatch, leadingNeverRead, redeclaredBeside, thi
 export type { ThisArgUse } from './lang/this-args.ts';
 export { isAmbientClass, ambientBase, ambientAddedMemberOf, implementedInterfaces, runtimeTypeName, mergedInterfaceMemberOf, augmentedPropertyRead, optionalBodilessMethod, undeclaredMemberOf, classesHeldUntyped, hasStatic, admitsUndefined, assertedOperand, undefinedLiteral, onlyUndefined, resultsAreUndefinedElements, implementedInterfaceDeclarations, accessedDeclaration, memberOwner, namesOwnTypeParameter } from './lang/members.ts';
 export { slotType, nullSetFields, initializedNull, assignedValues, definitelyAssignedFields, containsThis, alwaysThrows, alwaysEnds, statementLevel } from './lang/fields.ts';
-export { readWrite, compoundOperator, asOperation, assignmentOf, globalProxyUse, builtinPrototypeAlias, aliasedPrototypeMember, tokenClassBase, isArguments, escapesArguments, canReadArguments, functionProperty, isConstant, isSelf, objectMethod, literalMethod, prototypeAlias, methodValues } from './lang/prototypes.ts';
+export { readWrite, compoundOperator, asOperation, assignmentOf, globalProxyUse, builtinPrototypeAlias, aliasedPrototypeMember, tokenClassBase, isArguments, escapesArguments, canReadArguments, inferredFunctionName, functionProperty, isConstant, isSelf, objectMethod, literalMethod, prototypeAlias, methodValues } from './lang/prototypes.ts';
 export type { ReadWrite } from './lang/prototypes.ts';
 
 // JavaScript semantics both translators share, decided from the syntax tree and the checker.

@@ -39,10 +39,24 @@ public func jsConstruct(_ f: Any?, _ arguments: Any?...) throws -> Any? {
 
 /// `new f(...args)` on an untyped value.
 public func jsConstruct(_ f: Any?, spread arguments: [Any?]) throws -> Any? {
-    if let c = jsFlat(f) as? JSConstructor { return try c.make(arguments) }
-    if let c = jsFlat(f) as? JSConstructible { return try c.jsConstruct(arguments) }
-    if let c = jsFlat(f) as? JSConstructibleType.Type { return try c.jsConstruct(arguments) }
-    if let moot = jsFlat(f) as? JSMootValue { throw moot.unavailable() }
+    let flat = jsFlat(f)
+    if let c = flat as? JSConstructor { return try c.make(arguments) }
+    if let c = flat as? JSConstructible { return try c.jsConstruct(arguments) }
+    if let c = flat as? JSConstructibleType.Type { return try c.jsConstruct(arguments) }
+    if let fn = flat as? JSFunctionObject, fn.constructible {
+        let obj = JSObject()
+        if !fn.name.isEmpty { obj.jsClassName = fn.name }
+        let result = jsFlat(try fn.call(obj, arguments))
+        if let result, !(result is JSNull), jsIsObject(result) || jsIsFunction(result) { return result }
+        return obj
+    }
+    if let fn = flat as? JSMethod {
+        let obj = JSObject()
+        let result = jsFlat(try fn(obj, arguments))
+        if let result, !(result is JSNull), jsIsObject(result) || jsIsFunction(result) { return result }
+        return obj
+    }
+    if let moot = flat as? JSMootValue { throw moot.unavailable() }
     throw JSException(JSTypeError("\(jsInspect(f)) is not a constructor"))
 }
 

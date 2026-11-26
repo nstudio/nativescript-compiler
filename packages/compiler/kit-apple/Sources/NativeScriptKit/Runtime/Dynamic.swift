@@ -22,8 +22,12 @@ public func jsDelete(_ object: Any?, _ key: String) throws -> Bool {
     case let d as JSDeletable: return d.jsDeleteOwn(key)
     case is JSArrayProtocol where key == "length":
         throw JSException(JSTypeError("Cannot delete property 'length' of [object Array]"))
-    case let array as JSArrayProtocol where jsArrayIndex(key) == nil:
-        if jsSideProperties(array, create: false)?.delete(key) == false { throw JSException(JSTypeError("Cannot delete property '\(key)' of [object Array]")) }
+    case let array as JSArrayProtocol:
+        if let index = jsArrayIndex(key) {
+            array.jsDeleteElement(at: Int(index))
+        } else if jsSideProperties(array, create: false)?.delete(key) == false {
+            throw JSException(JSTypeError("Cannot delete property '\(key)' of [object Array]"))
+        }
         return true
     default: return true
     }

@@ -457,7 +457,7 @@ class JSObject() : JSDynamic, JSSymbolKeyed, JSAccessorKeyed, JSReactiveConverti
     override fun jsGet(key: String): Any? = this[key]
     override fun jsSet(key: String, value: Any?) { this[key] = value }
     override val jsKeys: List<String> get() = keys
-    override val jsClassName: String? get() = null
+    override var jsClassName: String? = null
 
     override fun jsMakeReactive() {
         if (jsTracker == null) jsTracker = JSTracker()

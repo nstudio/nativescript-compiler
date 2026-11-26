@@ -515,6 +515,12 @@ fun jsCallDeclared(target: Any?, name: String, vararg args: Any?): Any? {
 /** `new C(args)` where `C` is a class held as a value: the constructor the arguments fit best. */
 fun jsNew(cls: Any?, vararg args: Any?): Any? {
     if (cls is JSConstructible) return cls.jsConstruct(args)
+    if (cls is JSMethod) {
+        val obj = JSObject()
+        if (cls.name.isNotEmpty()) obj.jsClassName = cls.name
+        val result = jsBox(cls.call(obj, args))
+        return if (result != null && result !== JSNull && (jsTypeof(result) == "object" || jsIsFunction(result))) result else obj
+    }
     val c = cls as? Class<*> ?: throw JSException(JSTypeError("${jsTypeof(cls)} is not a constructor"))
     val chosen = c.constructors.filter { it.parameterCount == args.size }.mapNotNull { k ->
         var total = 0

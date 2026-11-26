@@ -72,6 +72,7 @@ export const accessMethods = {
 	propertyRead(this: Translator, e: ts.PropertyAccessExpression): string {
 		const name = e.name.text;
 		const target = e.expression;
+		this.refuseProto(e);
 		this.refuseIntlMember(e);
 		const fnObject = this.functionObjectOf(e);
 		if (fnObject) {
@@ -395,6 +396,7 @@ export const accessMethods = {
 	},
 
 	elementAccess(this: Translator, e: ts.ElementAccessExpression): string {
+		this.refuseProto(e);
 		this.refuseIntlMember(e);
 		const target = this.expr(e.expression);
 		const key = e.argumentExpression;

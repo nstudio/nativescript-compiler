@@ -1,8 +1,8 @@
 // Methods as values in Swift: types that hold methods, forwarding and `this` functions.
 import ts from 'typescript';
-import { ident, isMethodValue, optionalType, swiftString, RT } from './syntax.ts';
+import { ident, isMethodValue, optionalType, scriptLength, swiftString, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
-import { forwardedSetter, methodValues } from '../semantics/lang.ts';
+import { forwardedSetter, inferredFunctionName, methodValues } from '../semantics/lang.ts';
 import { thisNodes, declaresThis } from '../semantics/ast.ts';
 import { isUntyped, spelledType } from '../semantics/types.ts';
 import { isStatic } from '../semantics/throws.ts';
@@ -142,7 +142,9 @@ export const methodValuesMethods = {
 		const body = this.withThis(fn, !isUntyped(spelledType(selfType)) ? '__self' : '__this', isUntyped(spelledType(selfType)), () => this.functionBody(fn, ret, this.indent + '    '));
 		const call = this.marks.tryCode(`{ () throws -> ${ret} in${body.slice(1)}()`);
 		const result = ret === 'Void' ? `${call}; return nil` : `return ${this.convert(call, ret, 'Any?')}`;
-		return `({ (__this: Any?, __a: [Any?]) throws -> Any? in ${binds.join('; ')}${binds.length ? '; ' : ''}${result} } as JSMethod)`;
+		const method = `{ (__this: Any?, __a: [Any?]) throws -> Any? in ${binds.join('; ')}${binds.length ? '; ' : ''}${result} }`;
+		const fnName = !this.library ? inferredFunctionName(fn) : '';
+		return fnName ? `${RT.jsMethodFunction}(${swiftString(fnName)}, ${scriptLength(fn)}, ${method})` : `(${method} as JSMethod)`;
 	},
 
 	/** Runs `body` with `this` in `fn` (and in the arrow functions inside it) read as `name`. */
