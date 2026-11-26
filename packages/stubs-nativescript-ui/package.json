@@ -1,6 +1,6 @@
 {
   "name": "@nstudio/nativescript-compiler-stubs-nativescript-ui",
-  "version": "9.2.0-alpha.10",
+  "version": "9.2.0-alpha.11",
   "description": "No-op stand-ins for the binary-only nativescript-ui-* plugins, which @nstudio/nativescript-compiler builds when an app opts in with release.stubPlugins.",
   "type": "module",
   "files": [
@@ -13,7 +13,7 @@
     "directory": "packages/stubs-nativescript-ui"
   },
   "peerDependencies": {
-    "@nstudio/nativescript-compiler": "9.2.0-alpha.10"
+    "@nstudio/nativescript-compiler": "9.2.0-alpha.11"
   },
   "nativescript": {
     "compilerStubs": {

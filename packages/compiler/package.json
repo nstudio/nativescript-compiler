@@ -1,6 +1,6 @@
 {
   "name": "@nstudio/nativescript-compiler",
-  "version": "9.2.0-alpha.10",
+  "version": "9.2.0-alpha.11",
   "description": "NativeScript CLI plugin (`ns compile`) and compiler turning a NativeScript app into native Swift (iOS) or Kotlin (Android) with no JavaScript runtime; framework adapters (`@nstudio/nativescript-compiler-<framework>`) compile each framework.",
   "type": "module",
   "keywords": [
