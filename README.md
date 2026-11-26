@@ -153,13 +153,47 @@ Measured in alternating 5-round A/B runs (`ns compile` vs `--release --no-compil
 - **Android JIT-heavy pure JS microbenchmarks:** V8 on Android runs full TurboFan JIT, so tight numeric-array loops (`matmul` on boxed `JSArray<Double>` vs V8 unboxed double arrays) and repeated `+=` string concatenation loops favor V8 JIT today.
 - **JSON (`json-parse`/`json-stringify`):** V8's C++ JSON engine is currently 2×–9× faster than the Swift/Kotlin runtime JSON helpers.
 
-**Verification & correctness snapshot (Node is the oracle):**
+<details>
+<summary><strong>Correctness, Node Parity &amp; ECMA-262 (test262) Coverage</strong></summary>
+
+The compiler is continuously verified against **Node.js (V8) as the semantic oracle** across typed TypeScript programs, JavaScript edge cases (`wtfjs`), and the official `tc39/test262` conformance suite:
+
+#### 1. Differential Node Parity (Typed TypeScript — 990 Cases)
+
+Every case runs under Node.js and as a compiled native binary (Swift on macOS, Kotlin on JVM), comparing stdout, stderr, and exit status:
 
 | Suite | Swift (iOS) | Kotlin (Android) |
 | --- | ---: | ---: |
-| **Differential suite (990 cases)** | **926 / 979** match Node *(46 declared refusals, 7 known failures)* | **874 / 917** match Node *(40 declared refusals, 3 known failures)* |
-| **Decision parity (shared front)** | **8,825,940** decisions across 48 cases — **0** answered differently | *(same)* |
-| **Module layering & shared-front tests** | **306** modules, **0** cycles · **23 / 23** semantics tests · **85 / 85** expression-parser checks | *(same)* |
+| **Runnable cases matching Node** | **926 / 933 (99.2%)** *(46 declared refusals, 7 known failures)* | **874 / 877 (99.7%)** *(40 declared refusals, 3 known failures)* |
+| **wtfjs edge cases (61 applicable)** | **54 / 54 runnable match Node** *(0 failures, 7 refused)* | **54 / 54 runnable match Node** *(0 failures, 7 refused)* |
+| **Shared-front decision parity** | **8,825,940** decisions across 48 cases — **0** answered differently | *(same)* |
+| **Architecture &amp; layering gates** | **306** modules, **0** cycles · **23 / 23** semantics tests · **85 / 85** expression-parser checks | *(same)* |
+
+*(2 of Swift's 7 remaining known failures are inherent UTF-16 lone-surrogate limits of Swift `String`; full details in [tests/README.md](packages/compiler/tests/README.md#the-suite-today) and [WTFJS.md](packages/compiler/tests/diff/WTFJS.md).)*
+
+#### 2. ECMA-262 `tc39/test262` Native Conformance
+
+`test262` is untyped JavaScript mechanically adapted to TypeScript modules (`18,817` selected tests, `3,657` rejected by TypeScript's own type checker and `~3,300` intentionally refused for out-of-scope constructs like `eval`, `Proxy`, `Reflect`, and `with`). Across accepted tests, **4,240 Swift** and **4,408 Kotlin** official ECMAScript conformance tests pass natively with no JavaScript engine — with standout accepted pass rates across core built-ins:
+
+| test262 Area | Swift Accepted Pass Rate | Kotlin Accepted Pass Rate | Notes |
+| --- | ---: | ---: | --- |
+| **Math** | **85.5%** *(130 pass)* | **96.1%** *(146 pass)* | 0 wrong outputs on both |
+| **JSON** | **90.1%** *(73 pass)* | **91.5%** *(75 pass)* | — |
+| **Number** | **85.3%** *(151 pass)* | **92.4%** *(158 pass)* | — |
+| **`typeof` &amp; Equality** | **67.7%** *(21 pass)* | **93.5%** *(29 pass)* | — |
+| **Optional Chaining &amp; Nullish** | **69.8%** *(30 pass)* | **88.4%** *(38 pass)* | 0 wrong outputs on both |
+| **String** | **75.7%** *(253 pass)* | **87.0%** *(294 pass)* | — |
+| **Map** | **84.4%** *(38 pass)* | **84.4%** *(38 pass)* | 0 wrong outputs on both |
+| **Set** | **73.3%** *(44 pass)* | **86.7%** *(52 pass)* | 0 wrong outputs on both |
+| **RegExp** | **80.4%** *(242 pass)* | **72.2%** *(221 pass)* | — |
+| **Object** | **77.8%** *(288 pass)* | **68.6%** *(254 pass)* | — |
+| **Date** | **75.5%** *(142 pass)* | **69.1%** *(130 pass)* | — |
+| **BigInt** | **67.7%** *(21 pass)* | **70.0%** *(21 pass)* | 0 wrong outputs on both |
+| **Array** | **67.0%** *(825 pass)* | **64.2%** *(819 pass)* | — |
+
+See the full per-area report and reproduction instructions in [packages/compiler/tests/test262/README.md](packages/compiler/tests/test262/README.md#results).
+
+</details>
 
 ## Local Development
 
