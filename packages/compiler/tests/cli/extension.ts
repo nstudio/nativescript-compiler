@@ -102,10 +102,11 @@ check(
 	'buildCompileArgs respects --prepare-only and Android signing flags',
 );
 
-check(artifactPath('ios', '/out', 'DemoApp', {}).endsWith('/out/build/Build/Products/Release-iphonesimulator/DemoApp.app'), 'iOS simulator artifactPath resolves .app');
-check(artifactPath('ios', '/out', 'DemoApp', { forDevice: true }).endsWith('/out/build/DemoApp.ipa'), 'iOS device artifactPath resolves .ipa');
-check(artifactPath('android', '/out', 'DemoApp', {}).endsWith('/out/build/outputs/apk/release/DemoApp-release.apk'), 'Android artifactPath resolves .apk');
-check(artifactPath('android', '/out', 'DemoApp', { aab: true }).endsWith('/out/build/outputs/bundle/release/DemoApp-release.aab'), 'Android --aab artifactPath resolves .aab');
+const norm = (p: string) => p.replace(/\\/g, '/');
+check(norm(artifactPath('ios', '/out', 'DemoApp', {})).endsWith('/out/build/Build/Products/Release-iphonesimulator/DemoApp.app'), 'iOS simulator artifactPath resolves .app');
+check(norm(artifactPath('ios', '/out', 'DemoApp', { forDevice: true })).endsWith('/out/build/DemoApp.ipa'), 'iOS device artifactPath resolves .ipa');
+check(norm(artifactPath('android', '/out', 'DemoApp', {})).endsWith('/out/build/outputs/apk/release/DemoApp-release.apk'), 'Android artifactPath resolves .apk');
+check(norm(artifactPath('android', '/out', 'DemoApp', { aab: true })).endsWith('/out/build/outputs/bundle/release/DemoApp-release.aab'), 'Android --aab artifactPath resolves .aab');
 
 const dummyApk = join(work, 'DemoApp-release.apk');
 writeFileSync(dummyApk, 'apk');

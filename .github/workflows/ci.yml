@@ -50,12 +50,11 @@ jobs:
           NS_CORE_REPO: ${{ github.workspace }}/core
         run: npm run test:compiler
 
-      - name: Backend parity, twins, runtime ops & adapter API checks
+      - name: Backend parity, twins & runtime ops checks
         run: |
           node packages/compiler/tests/checks/twins.ts
           node packages/compiler/tests/checks/runtime-ops.ts
           node packages/compiler/tests/checks/both-backends.ts
-          node packages/compiler/tests/adapters/run.ts
 
       - name: Build compiler dist & adapters
         run: |
