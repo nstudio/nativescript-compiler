@@ -1,7 +1,7 @@
 // A class declaration's constructors as Kotlin: its own (with the private one statements before `super(…)` need), the one its base or Error gives it, and the one a literal makes it with.
 import ts from 'typescript';
 import { ERRORS } from '../semantics/globals.ts';
-import { assignsTo, ident, kotlinString, optionalType, RT } from './syntax.ts';
+import { assignsTo, ident, kotlinString, optionalType, splitTopLevel, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import type { ClassParts } from './class-declaration.ts';
 import { notesNull } from '../semantics/shapes.ts';
@@ -22,7 +22,17 @@ export const classConstructorMethods = {
 			if (baseCtor) lines.push(`    constructor(${this.params(baseCtor, false)}) : super(${this.readsArguments(baseCtor) ? '__arguments' : baseCtor.parameters.map((p) => ident((p.name as ts.Identifier).text)).join(', ')})${level.length ? ' {' : ''}`, ...(level.length ? [...level, '    }'] : []));
 			// `new HttpError(message, { cause })` of a class that declares no constructor: Error's.
 			else if (isError && base !== 'JSAggregateError') lines.push(`    constructor(message: Any? = null, options: Any? = null) : super(if (message == null) "" else ${RT.jsToString}(message), ${RT.jsGetIfPresent}(options, "cause"))`);
-			else lines.push(`    constructor() : super()${level.length ? ' {' : ''}`, ...(level.length ? [...level, '    }'] : []));
+			else if (k.collection) {
+				lines.push(`    constructor() : super()${level.length ? ' {' : ''}`, ...(level.length ? [...level, '    }'] : []));
+				const mapArgs = /^JSMap<(.*)>$/.exec(k.collection)?.[1];
+				const setArg = /^JSSet<(.*)>$/.exec(k.collection)?.[1];
+				if (mapArgs) {
+					const [kt, vt] = splitTopLevel(mapArgs);
+					lines.push(`    constructor(entries: Iterable<Pair<${kt}, ${vt}>>) : super(entries)${level.length ? ' {' : ''}`, ...(level.length ? [...level, '    }'] : []));
+				} else if (setArg) {
+					lines.push(`    constructor(values: Iterable<${setArg}>) : super(values)${level.length ? ' {' : ''}`, ...(level.length ? [...level, '    }'] : []));
+				}
+			} else lines.push(`    constructor() : super()${level.length ? ' {' : ''}`, ...(level.length ? [...level, '    }'] : []));
 		} else if (k.literalMade) {
 			const body = [...this.levelStart(cls), ...k.initsAfterParamProps];
 			lines.push(...(body.length ? ['    constructor() {', ...body, '    }'] : ['    constructor()']));
@@ -98,7 +108,7 @@ export const classConstructorMethods = {
 			return out;
 		});
 		const errorName = isError ? Object.keys(ERRORS).find((k) => ERRORS[k] === base) : undefined;
-		const superArgs = !superCall ? [] : errorName ? this.errorArgs(errorName, superCall.arguments) : kitRoot && !appBase && this.core?.superArgs ? this.core.superArgs(kitRoot, superCall, this.args(superCall)) : this.args(superCall);
+		const superArgs = !superCall ? [] : errorName ? this.errorArgs(errorName, superCall.arguments) : !appBase && k.collection && superCall.arguments.length === 1 && /^JS(Map|Set)</.test(k.collection) ? [this.iterable(superCall.arguments[0])] : kitRoot && !appBase && this.core?.superArgs ? this.core.superArgs(kitRoot, superCall, this.args(superCall)) : this.args(superCall);
 		const delegation = superCall ? ` : super(${superArgs.join(', ')})` : base ? ' : super()' : '';
 		this.indent = '    ';
 		k.lines.push(`    constructor(${signature})${delegation} {`, ...body, '    }');

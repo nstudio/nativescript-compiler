@@ -10,12 +10,12 @@ import { UNKEYED, memberPlanOf, notesNull, nullNames, definedNamesOf } from '../
 import { initializedNull } from '../semantics/lang.ts';
 import { isStatic } from '../semantics/throws.ts';
 import { isCoreDeclaration, isShimDeclaration } from '../program/core-facts.ts';
-import { programBase } from '../semantics/classes.ts';
+import { classExprCaptures, classExprScriptName, programBase } from '../semantics/classes.ts';
 import type { ClassPlan } from '../semantics/class-plan.ts';
 
 /** What a class declaration's steps share: its facts, computed once, and the parts each step adds to. */
 export interface ClassParts {
-	cls: ts.ClassDeclaration;
+	cls: ts.ClassLikeDeclaration;
 	name: string;
 	layout: ClassPlan;
 	heritage: ts.ExpressionWithTypeArguments | undefined;
@@ -57,13 +57,39 @@ export const classDeclMethods = {
 		}
 	},
 
-	classDeclaration(this: Translator, cls: ts.ClassDeclaration): string {
-		const nativeSubclass = this.native.classDecl(cls);
-		if (nativeSubclass) return nativeSubclass;
-		const name = ts.isModuleBlock(cls.parent) ? cls.name!.text : this.topName(cls, cls.name!.text);
+	emitClassExpr(this: Translator, cls: ts.ClassExpression): string {
+		if (classExprCaptures(cls, this.checker)) throw this.error(cls, 'expression', 'class-expression');
+		const name = this.classExprs.name(cls);
+		if (this.classExprs.emitted.has(cls)) return name;
+		this.classExprs.emitted.add(cls);
+		const savedIndent = this.indent;
+		const savedInits = this.staticInits;
+		const owner = this.declOwner;
+		this.indent = '';
+		this.staticInits = [];
+		this.declOwner = name;
+		let extraInits: string[];
+		try {
+			this.hoisted.push(this.classDeclaration(cls, name));
+		} finally {
+			extraInits = this.staticInits;
+			this.staticInits = savedInits;
+			this.indent = savedIndent;
+			this.declOwner = owner;
+		}
+		if (savedInits && extraInits.length) savedInits.push(...extraInits);
+		return name;
+	},
+
+	classDeclaration(this: Translator, cls: ts.ClassLikeDeclaration, explicitName?: string): string {
+		if (ts.isClassDeclaration(cls)) {
+			const nativeSubclass = this.native.classDecl(cls);
+			if (nativeSubclass) return nativeSubclass;
+		}
+		const name = explicitName ?? (ts.isModuleBlock(cls.parent) ? cls.name!.text : this.topName(cls, cls.name!.text));
 		// Before any member: the function cells their code makes are generic in the type parameters they name.
 		this.generics(cls);
-		if (this.framework.hooks.serviceClass && this.framework.classRole(cls, this.pluginFiles) === 'service') return this.framework.hooks.serviceClass(this, cls, name);
+		if (ts.isClassDeclaration(cls) && this.framework.hooks.serviceClass && this.framework.classRole(cls, this.pluginFiles) === 'service') return this.framework.hooks.serviceClass(this, cls, name);
 		const k = this.classParts(cls, name);
 		this.conversionMembers(k);
 		this.parameterPropertyFields(k);
@@ -83,7 +109,7 @@ export const classDeclMethods = {
 		return this.closeClass(k);
 	},
 
-	classParts(this: Translator, cls: ts.ClassDeclaration, name: string): ClassParts {
+	classParts(this: Translator, cls: ts.ClassLikeDeclaration, name: string): ClassParts {
 		const c = this.checker;
 		const layout = this.classPlan(cls);
 		const heritage = cls.heritageClauses?.find((h) => h.token === ts.SyntaxKind.ExtendsKeyword)?.types[0];
@@ -101,8 +127,6 @@ export const classDeclMethods = {
 			else if (collection) base = collection;
 			else throw this.error(heritage, `extending ${baseName}`, 'unsupported-base');
 		}
-		// The kit's collections are subclassed only through the initializers they declare.
-		if (collection && !appBase && (cls.members.some((m) => ts.isConstructorDeclaration(m)) || cls.members.some((m) => ts.isPropertyDeclaration(m) && !isStatic(m)))) throw this.error(cls.name ?? cls, `a class extending ${heritage!.expression.getText()} with its own constructor or fields`);
 		const isError = !!base && !appBase && !kitRoot && !collection;
 		// A class at the root of its hierarchy keeps what script adds to its instances (JSExpando): core's, and a
 		// plugin's, written as JavaScript is (`device[adapter_] = adapter`).
@@ -113,7 +137,7 @@ export const classDeclMethods = {
 		const { named, met, implemented } = this.implementedProtocols(cls, kitRoot, witnesses);
 		// What a protocol requires the class reads without throwing: a getter that throws reports instead.
 		const required = new Set([...named, ...met].filter((i) => implemented.includes(i.name)).flatMap((i) => i.type.getProperties().map((p) => p.name)));
-		const conformances = [...(base ? [base] : []), ...implemented];
+		const conformances = [...(base ? [base] : []), ...(collection && !appBase && !implemented.length ? ['JSDynamic'] : []), ...implemented];
 		// The methods JavaScript calls without the program naming them, each through the conformance that calls it:
 		// a plugin's class keeps them, where its other methods the app never names are left out.
 		const implicitlyCalled = new Set(['toString']);
@@ -251,7 +275,7 @@ export const classDeclMethods = {
 			if (this.states.declaresUnset(cls)) lines.push('    var jsUnset: Set<String>?');
 			const definable = definedNamesOf(cls, this.states, this.shapeFacts()).filter((n) => fields.some((f) => f.name === n));
 			this.keyedMembers(cls, !!appBase, lines, conformances);
-			lines.push(...this.dynamicMembers(memberPlanOf(cls, this.states, this.shapeFacts()), { fields, className: cls.name?.text ?? name, override: !!appBase || !!kitRoot, methods: k.dynMethods, symbols: k.symbolFields, symbolMethods: k.symbolMethods, raw, accessors: k.dynAccessors, symbolKeyedBase, byName, hasMember }));
+			lines.push(...this.dynamicMembers(memberPlanOf(cls, this.states, this.shapeFacts()), { fields, className: ts.isClassExpression(cls) ? classExprScriptName(cls) : (cls.name?.text ?? name), override: !!appBase || !!kitRoot, methods: k.dynMethods, symbols: k.symbolFields, symbolMethods: k.symbolMethods, raw, accessors: k.dynAccessors, symbolKeyedBase, byName, hasMember }));
 			if (definable.length) {
 				let inherited = false;
 				for (let b = programBase(cls, this.checker); b && !inherited; b = programBase(b, this.checker)) inherited = definedNamesOf(b, this.states, this.shapeFacts()).length > 0;
@@ -268,7 +292,7 @@ export const classDeclMethods = {
 		const { cls, appBase, lines } = k;
 		// Library mode: the class's `name`, which a static method reads of the class it is called on.
 		if (this.library && !this.errorBased(cls)) {
-			lines.push(`    ${appBase ? 'override ' : ''}class var jsName: String { ${swiftString(cls.name!.text)} }`);
+			lines.push(`    ${appBase ? 'override ' : ''}class var jsName: String { ${swiftString(cls.name ? cls.name.text : classExprScriptName(cls as ts.ClassExpression))} }`);
 			this.declare('jsName', { kind: 'var', mods: `${appBase ? 'override ' : ''}class `, type: 'String' });
 		}
 		// Library mode: the static members script can test for by name (`'tapEvent' in view.constructor`).
@@ -285,7 +309,7 @@ export const classDeclMethods = {
 
 	closeClass(this: Translator, k: ClassParts): string {
 		const { cls, name, base, lines, conformances } = k;
-		const extras = this.framework.hooks.classExtras?.(this, cls, name, lines.join('\n'));
+		const extras = ts.isClassDeclaration(cls) ? this.framework.hooks.classExtras?.(this, cls, name, lines.join('\n')) : undefined;
 		if (extras) {
 			conformances.push(...(extras.supertypes ?? []));
 			lines.push(...(extras.members ?? []));

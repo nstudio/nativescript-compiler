@@ -4,7 +4,7 @@ import { KIT_NAMES_ANDROID } from './library.ts';
 import { ERRORS } from '../semantics/globals.ts';
 import { IOS_TYPINGS, ident, isThisParameter, kotlinString, lambda, optionalType, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
-import { accessedDeclaration, isArguments, objectMethod } from '../semantics/lang.ts';
+import { accessedDeclaration, canReadArguments, isArguments, objectMethod } from '../semantics/lang.ts';
 import { hasModifier, isAppDeclarationFile, isLibDeclaration, isWriteTarget } from '../semantics/ast.ts';
 import { isCoreDeclaration } from '../program/core-facts.ts';
 import { isStatic } from '../semantics/throws.ts';
@@ -20,11 +20,9 @@ export const namesMethods = {
 		const builtinDecl = (ts.isShorthandPropertyAssignment(p0) && p0.name === e ? this.checker.getShorthandAssignmentValueSymbol(p0) : this.resolve(e))?.declarations?.[0];
 		if (asValue && (ERRORS[e.text] || ['Number', 'String', 'Boolean'].includes(e.text)) && isLibDeclaration(builtinDecl)) {
 			if (ERRORS[e.text]) return `${ERRORS[e.text]}::class.java`;
-			// Placed untyped (`const f: any = Number`), it sees how many arguments it is given: `Number()` is 0, `String()` "".
+			// Placed untyped or compared (`const f: any = Number`, `s.constructor === String`): singleton builtin constructor.
 			const context = this.checker.getContextualType(e);
-			if (context && !this.checker.getNonNullableType(context).getCallSignatures()[0] && e.text !== 'Boolean') {
-				return `${RT.jsFunction}(1) { a -> if (a.isEmpty()) ${e.text === 'Number' ? '0.0' : '""'} else ${e.text === 'Number' ? RT.jsToNumber : RT.jsToString}(a[0]) }`;
-			}
+			if (!context || !this.checker.getNonNullableType(context).getCallSignatures()[0]) return `js${e.text}Constructor`;
 			return `{ value: Any? -> ${e.text === 'Number' ? RT.jsToNumber : e.text === 'String' ? RT.jsToString : RT.jsTruthy}(value) }`;
 		}
 		// `Promise`, `Date`, `Array`, `Object` as values (`const { isArray } = Array`, a `PromiseConstructorLike` default): the runtime's.
@@ -99,8 +97,8 @@ export const namesMethods = {
 		const shorthandFunction = this.library ? null : this.shorthandFunction(e);
 		if (shorthandFunction) return shorthandFunction;
 		if (isArguments(e, this.checker)) {
-			const fn = ts.findAncestor(e.parent, (n) => ts.isFunctionLike(n) && !ts.isArrowFunction(n)) as ts.SignatureDeclaration | undefined;
-			if (!fn || !this.readsArguments(fn) || (ts.isFunctionExpression(fn) && !this.library)) throw this.error(e, '`arguments` of a function expression', 'function-arguments');
+			const ok = canReadArguments(e, (fn) => this.readsArguments(fn), Boolean(this.library));
+			if (!ok) throw this.error(e, '`arguments` of a function expression', 'function-arguments');
 			return '__arguments';
 		}
 		if (name === 'undefined') return this.marks.pureCode('null');
@@ -174,7 +172,7 @@ export const namesMethods = {
 			if ((self || this.implicitThis(fnDecl)) && !this.readsArguments(fnDecl)) {
 				const thisType = self ? this.type(this.checker.getTypeAtLocation(self.name), self) : 'Any?';
 				const args = fnDecl.parameters.filter((q) => !isThisParameter(q)).map((q, k) => (q.dotDotDotToken ? `JSArray(__a.drop(${k}).map { ${this.fromAnyCode('it', this.typeOf(q.name).replace(/^JSArray<(.*)>$/, '$1'), true)} }.toMutableList())` : this.fromAnyCode(this.marks.pureCode(`__a.getOrNull(${k})`), this.paramType(q), true)));
-				return `JSMethod ${lambda(['__self', '__a'], `${ref}(${[isUntyped(spelledType(thisType)) ? '__self' : `(__self as ${thisType})`, ...args].join(', ')})`)}`;
+				return `JSMethod ${lambda(['__self', '__a'], `${ref}(${[isUntyped(spelledType(thisType)) ? '__self' : this.fromAnyCode('__self', thisType, true), ...args].join(', ')})`)}`;
 			}
 			// Library mode: a function of an optional string, number or boolean held as a value (a shorthand's converter) may be given
 			// anything (core probes converters with `unsetValue`): another kind of value is none of them, as `typeof` finds it.

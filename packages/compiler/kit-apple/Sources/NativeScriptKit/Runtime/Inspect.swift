@@ -515,7 +515,11 @@ private final class JSInspectContext {
         } else if let dynamic = value as? JSDynamic {
             keys = dynamic.jsKeys + ((dynamic as? JSSymbolKeyed)?.jsSymbolKeys ?? [])
             keyed = dynamic
-            if var className = dynamic.jsClassName {
+            if let plain = dynamic as? JSObject, plain.jsPrototype is JSNull {
+                name = "[Object: null prototype]"
+                if keys.isEmpty { return "\(name) {}" }
+                braces.0 = "\(name) {"
+            } else if var className = dynamic.jsClassName {
                 if let tag = (dynamic as? JSToStringTag)?.jsToStringTag, tag != className { className += " [\(tag)]" }
                 name = className
                 if keys.isEmpty { return "\(className) {}" }
@@ -531,7 +535,7 @@ private final class JSInspectContext {
             return String(describing: value)
         }
 
-        if recurseTimes > depth { return "[\(name)]" }
+        if recurseTimes > depth { return name.hasPrefix("[") ? name : "[\(name)]" }
 
         let level = recurseTimes + 1
         let id = jsIsObject(value) ? ObjectIdentifier(value as AnyObject) : nil

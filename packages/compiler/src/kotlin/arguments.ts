@@ -109,7 +109,8 @@ export const argumentsMethods = {
 		for (let k = 0; k < list.length; k++) {
 			const a = list[k];
 			if (restAt >= 0 && k >= restAt && appDeclared) {
-				const rest = this.restType(params[restAt]);
+				const calleeParam = ts.isCallExpression(e) ? functionTypeParts(this.typeOf(e.expression).replace(/^\((.*)\)\?$/, '$1'))?.params[restAt] : undefined;
+				const rest = calleeParam?.startsWith('JSArray<') && calleeParam.endsWith('>') ? calleeParam : this.restType(params[restAt]);
 				out.push(this.packed(list.slice(k), rest, this.restSlot(e, rest.replace(/^JSArray<(.*)>$/, '$1'), params[restAt].valueDeclaration)));
 				break;
 			}

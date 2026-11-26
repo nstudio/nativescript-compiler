@@ -393,7 +393,8 @@ export const expressionsMethods = {
 			const end = text.lastIndexOf('/');
 			return `${RT.jsRegExpLiteral}(${swiftString(text.slice(1, end))}, ${swiftString(text.slice(end + 1))})`;
 		}
-		throw this.error(e, 'expression', ts.isClassExpression(e) ? 'class-expression' : 'unhandled');
+		if (ts.isClassExpression(e)) return `${this.emitClassExpr(e)}.self`;
+		throw this.error(e, 'expression', 'unhandled');
 	},
 
 	/** ``tag`a${x}b` ``: the tag called with the site's strings (cooked, and raw as `strings.raw`), then the values. */
@@ -403,6 +404,11 @@ export const expressionsMethods = {
 		const site = `__template${this.templateObjects.length}`;
 		this.templateSites.push(site);
 		this.templateObjects.push(`let ${site} = ${RT.jsTemplateObject}([${cooked.map(swiftString).join(', ')}], raw: [${raw.map(swiftString).join(', ')}])`);
+		if (this.isAny(e.tag)) {
+			const call = this.marks.tryCode(`${RT.jsCall}(${[this.expr(e.tag), site, ...values.map((v) => this.coerce(v, 'Any?'))].join(', ')})`);
+			const rt = this.typeOf(e);
+			return isUntyped(spelledType(rt)) || rt === 'Void' ? call : this.fromAnyCode(call, rt, true);
+		}
 		const params = this.checker.getResolvedSignature(e)?.getParameters() ?? [];
 		const restAt = params.findIndex((p) => p.valueDeclaration && ts.isParameter(p.valueDeclaration) && !!p.valueDeclaration.dotDotDotToken);
 		const restType = () => this.typeOf((params[restAt].valueDeclaration as ts.ParameterDeclaration).name);

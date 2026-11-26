@@ -16,11 +16,11 @@ commit where CI's differential and `wtfjs.ts --check` steps pass. To compare it 
 | | Swift | Kotlin |
 |---|---:|---:|
 | Examples covered | 61 of 66 | 61 of 66 |
-| Matches Node | 44 | 45 |
-| Matches Node, the rest refused | 5 | 4 |
-| Partly fails | 2 | 2 |
-| Fails | 5 | 5 |
-| Refused | 5 | 5 |
+| Matches Node | 47 | 49 |
+| Matches Node, the rest refused | 6 | 4 |
+| Partly fails | 1 | 1 |
+| Fails | 1 | 1 |
+| Refused | 6 | 6 |
 | Not applicable to compiled module code | 5 | 5 |
 | Not covered | 0 | 0 |
 
@@ -52,11 +52,11 @@ commit where CI's differential and `wtfjs.ts --check` steps pass. To compare it 
 | 24 | Patching numbers | refused: 1552 R | refused: 1552 R | builtin-prototype |  |
 | 25 | Comparison of three numbers | matches Node: 1540 ✓ | matches Node: 1540 ✓ |  |  |
 | 26 | Funny math | matches Node: 1541 ✓ | matches Node: 1541 ✓ |  |  |
-| 27 | Addition of RegExps | fails: 1573 ✗ | fails: 1573 ✗ |  |  |
+| 27 | Addition of RegExps | refused: 1573 R | refused: 1573 R | builtin-prototype |  |
 | 28 | Strings aren't instances of `String` | matches Node, the rest refused: 1520 ✓, 1521 R, 1546 ✓ | matches Node, the rest refused: 1520 ✓, 1521 R, 1546 ✓ | wrapper-object |  |
-| 29 | Calling functions with backticks | partly fails: 1525 ✗, 1548 ✓ | partly fails: 1525 ✗, 1548 ✓ |  |  |
-| 30 | Call call call | fails: 1567 ✗, 1578 R | fails: 1567 ✗, 1578 ✗ | other-receiver (Swift) |  |
-| 31 | A `constructor` property | fails: 1522 ✗ | fails: 1522 ✗ |  |  |
+| 29 | Calling functions with backticks | matches Node: 1525 ✓, 1548 ✓ | matches Node: 1525 ✓, 1548 ✓ |  |  |
+| 30 | Call call call | matches Node, the rest refused: 1567 ✓, 1578 R | matches Node: 1567 ✓, 1578 ✓ | other-receiver (Swift) |  |
+| 31 | A `constructor` property | matches Node: 1522 ✓ | matches Node: 1522 ✓ |  |  |
 | 32 | Object as a key of object's property | matches Node: 1547 ✓ | matches Node: 1547 ✓ |  |  |
 | 33 | Accessing prototypes with `__proto__` | fails: 1566 ✗ | fails: 1566 ✗ |  |  |
 | 34 | `` `${{Object}}` `` | matches Node: 1541 ✓, 1558 ✓ | matches Node: 1541 ✓, 1558 ✓ |  |  |
@@ -88,7 +88,7 @@ commit where CI's differential and `wtfjs.ts --check` steps pass. To compare it 
 | 60 | A `setTimeout` object |  |  |  | n/a: a string given to setTimeout is evaluated (eval, a declared limit) |
 | 61 | Double dot | matches Node: 1543 ✓ | matches Node: 1543 ✓ |  |  |
 | 62 | Extra Newness | refused: 1555 R | refused: 1555 R | unsupported-base |  |
-| 63 | Why you should use semicolons | fails: 1561 ✗ | fails: 1561 ✗ |  |  |
+| 63 | Why you should use semicolons | matches Node: 1561 ✓ | matches Node: 1561 ✓ |  |  |
 | 64 | Split a string by a space | matches Node: 1545 ✓ | matches Node: 1545 ✓ |  |  |
 | 65 | A stringified string | matches Node: 1547 ✓ | matches Node: 1547 ✓ |  |  |
 | 66 | Non-strict comparison of a number to `true` | matches Node: 1540 ✓, 1557 ✓ | matches Node: 1540 ✓, 1557 ✓ |  |  |

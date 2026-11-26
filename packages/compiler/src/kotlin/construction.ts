@@ -7,6 +7,7 @@ import { intlConstructor } from '../semantics/lang.ts';
 import { isKit, isUntyped, parseNativeType, spelledType } from '../semantics/types.ts';
 import { hasModifier, isLibDeclaration } from '../semantics/ast.ts';
 import { isPromiseType } from '../semantics/spelled.ts';
+import { constClassExpr, constructorOf, spellInstantiatedCollection } from '../semantics/classes.ts';
 
 export const constructionMethods = {
 	/** `new RegExp(…)`: from a pattern, or a copy of an expression with its flags unless others are given. */
@@ -23,23 +24,28 @@ export const constructionMethods = {
 		const name = ts.isIdentifier(callee) ? callee.text : '';
 		const args = e.arguments ?? ts.factory.createNodeArray();
 		if (this.library && ts.isClassExpression(callee) && !args.length) return this.classExpressionObject(callee);
+		const clsExpr = constClassExpr(callee, this.checker);
+		if (clsExpr) return `${this.emitClassExprCode(clsExpr)}(${this.args(e).join(', ')})`;
 		if (name === 'Worker' && this.workerScripts && args.length) {
 			const script = this.workerScript(args[0]);
 			if (script) return `JSWorker(${this.coerce(args[0], 'Any?')}, ${kotlinString(script)})`;
 		}
 		if (BUFFER_TYPES.has(name) && this.resolve(callee)?.declarations?.every((d) => d.getSourceFile().isDeclarationFile)) return this.newBuffer(name, args);
-		if (/^JS(Map|Set)</.test(t)) {
+		const own = ts.isIdentifier(callee) ? this.resolve(callee)?.valueDeclaration : undefined;
+		const collection = own && ts.isClassLike(own) && !own.getSourceFile().isDeclarationFile && !constructorOf(own, this.checker) ? spellInstantiatedCollection(this.checker.getTypeAtLocation(e), this.checker, (a) => this.type(a, e)) : null;
+		const colKind = collection ?? t;
+		if (/^JS(Map|Set)</.test(colKind)) {
 			if (!args.length) return `${t}()`;
 			const src = args[0];
-			if (ts.isArrayLiteralExpression(src) && isKit(spelledType(t), 'JSMap')) {
-				const [k, v] = splitTopLevel(/^JSMap<(.*)>$/.exec(t)![1]);
+			if (ts.isArrayLiteralExpression(src) && isKit(spelledType(colKind), 'JSMap')) {
+				const [k, v] = splitTopLevel(/^JSMap<(.*)>$/.exec(colKind)![1]);
 				return `${t}(listOf(${src.elements.map((x) => (ts.isArrayLiteralExpression(x) ? `Pair<${k}, ${v}>(${this.coerce(x.elements[0], k)}, ${this.coerce(x.elements[1], v)})` : this.expr(x))).join(', ')}))`;
 			}
 			// An untyped source: nothing for null or undefined, each value converted to the collection's types.
 			if (this.isAny(src) && !this.library) {
-				const set = /^JSSet<(.*)>$/.exec(t)?.[1];
+				const set = /^JSSet<(.*)>$/.exec(colKind)?.[1];
 				if (set) return `${t}(${RT.jsCollectionSource}(${this.expr(src)})${isUntyped(spelledType(set)) ? '' : `.map { ${this.fromAnyCode('it', set, true)} }`})`;
-				const [k, v] = splitTopLevel(/^JSMap<(.*)>$/.exec(t)![1]);
+				const [k, v] = splitTopLevel(/^JSMap<(.*)>$/.exec(colKind)![1]);
 				return `${t}(${RT.jsMapEntries}(${this.expr(src)})${isUntyped(spelledType(k)) && isUntyped(spelledType(v)) ? '' : `.map { Pair<${k}, ${v}>(${this.fromAnyCode('it.first', k, true)}, ${this.fromAnyCode('it.second', v, true)}) }`})`;
 			}
 			return `${t}(${this.iterable(src)})`;

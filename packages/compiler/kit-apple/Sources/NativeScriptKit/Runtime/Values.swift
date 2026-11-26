@@ -1043,14 +1043,15 @@ public func jsGet(_ object: Any?, _ key: String) throws -> Any? {
     if let value = object, shape == nil, jsTypeKind(value) == .struct {
         if let string = value as? String {
             if key == "length" { return Double(string.utf16.count) }
+            if key == "constructor" { return jsStringConstructor }
             if let index = jsArrayIndex(key) {
                 let units = JSStringUnits(string)
                 return Int(index) < units.count ? jsString(unit: units[Int(index)]) : nil
             }
             return jsStringMethod(string, key)
         }
-        if let number = value as? Double { return jsNumberMethod(number, key) }
-        if let bool = value as? Bool { return jsBooleanMethod(bool, key) }
+        if let number = value as? Double { return key == "constructor" ? jsNumberConstructor : jsNumberMethod(number, key) }
+        if let bool = value as? Bool { return key == "constructor" ? jsBooleanConstructor : jsBooleanMethod(bool, key) }
         if let big = value as? JSBigInt { return jsBigIntMethod(big, key) }
     }
     if let value = object, shape?.opaque ?? (jsTypeKind(value) == .objCClass && jsClassShape(value as AnyObject).opaque) {
@@ -1080,6 +1081,7 @@ public func jsGet(_ object: Any?, _ key: String) throws -> Any? {
         return jsArrayMethod(array, key) ?? jsArrayGenericMethod(key)
     case let string as String:
         if key == "length" { return Double(string.utf16.count) }
+        if key == "constructor" { return jsStringConstructor }
         if let index = jsArrayIndex(key) {
             let units = JSStringUnits(string)
             return Int(index) < units.count ? jsString(unit: units[Int(index)]) : nil
@@ -1108,9 +1110,11 @@ public func jsGet(_ object: Any?, _ key: String) throws -> Any? {
     case let big as JSBigInt:
         return jsBigIntMethod(big, key)
     case let bool as Bool:
-        return jsBooleanMethod(bool, key)
+        return key == "constructor" ? jsBooleanConstructor : jsBooleanMethod(bool, key)
     case let number as Double:
-        return jsNumberMethod(number, key)
+        return key == "constructor" ? jsNumberConstructor : jsNumberMethod(number, key)
+    case is JSFunction, is JSMethod:
+        return jsFunctionMethod(key)
     // A Swift struct casts to NSObject too (boxed): a geometry struct is read by its fields first. An NSValue,
     // which Swift bridges to the struct it holds, is the native object (`toValue.CGRectValue`).
     case let value? where !(type(of: value) is AnyClass) && jsIsStruct(value):
@@ -1982,6 +1986,10 @@ public func jsCallOptional(_ function: Any?, spread arguments: [Any?]) throws ->
     if jsIsNullish(function) { return nil }
     return try jsCall(function, spread: arguments)
 }
+
+public let jsStringConstructor = jsBuiltinFunction("String", 1, { a in a.isEmpty ? "" : jsToString(a[0]) }, [])
+public let jsNumberConstructor = jsBuiltinFunction("Number", 1, { a in a.isEmpty ? 0.0 : jsToNumber(a[0]) }, [])
+public let jsBooleanConstructor = jsBuiltinFunction("Boolean", 1, { a in jsTruthy(jsArg(a, 0)) }, [])
 
 public let jsDateBuiltin = JSObject([
     ("now", jsFunction("now", 0) { _ in JSDate.now() }),

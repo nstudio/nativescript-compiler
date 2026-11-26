@@ -296,11 +296,13 @@ export const LIBRARY_TYPES: Readonly<Record<string, LibraryType>> = Object.assig
 	IArguments: lib({ array: 'untyped' }),
 	NumberFormat: lib(kit('JSNumberFormat', 'object')),
 	DateTimeFormat: lib(kit('JSDateTimeFormat', 'object')),
+	Collator: lib(kit('JSCollator', 'object')),
 	NumberFormatOptions: lib(UNTYPED),
 	DateTimeFormatOptions: lib(UNTYPED),
 	CollatorOptions: lib(UNTYPED),
 	ResolvedNumberFormatOptions: lib(UNTYPED),
 	ResolvedDateTimeFormatOptions: lib(UNTYPED),
+	ResolvedCollatorOptions: lib(UNTYPED),
 	LocalesArgument: lib(UNTYPED),
 	// `Number`, `String`, `Boolean` held as values (`const toNumber = Number`): the conversion each calls, which never throws.
 	NumberConstructor: lib({ conversion: 'number' }),

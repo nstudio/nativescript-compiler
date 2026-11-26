@@ -127,7 +127,7 @@ export const typesMethods = {
 		const classDecl = sym?.valueDeclaration;
 		if (classDecl && ts.isClassDeclaration(classDecl) && t.getConstructSignatures().length && this.framework.componentClass(classDecl, true)) return this.framework.hooks.componentValueType!;
 		// An app or plugin class as a value (`[Plain]`, a package's `schedulerActionCtor: typeof Action`): its Java class, untyped.
-		if (this.ledger.appClassValuesUntyped && !this.library && classDecl && ts.isClassDeclaration(classDecl) && !classDecl.getSourceFile().isDeclarationFile && t.getConstructSignatures().length && !t.getCallSignatures().length && !this.namesClass(where) && where?.kind !== ts.SyntaxKind.ThisKeyword) return 'Any?';
+		if (this.ledger.appClassValuesUntyped && !this.library && classDecl && ts.isClassLike(classDecl) && !classDecl.getSourceFile().isDeclarationFile && t.getConstructSignatures().length && !t.getCallSignatures().length && !this.namesClass(where) && where?.kind !== ts.SyntaxKind.ThisKeyword) return 'Any?';
 		// Library mode: a class a module declares for what it makes at run time (`declare class NativeScriptLifecycleCallbacks extends …`): the class it extends.
 		if (this.library && sym && sym.flags & ts.SymbolFlags.Class && sym.declarations?.length && sym.declarations.every((d) => ts.isClassDeclaration(d) && !d.getSourceFile().isDeclarationFile && hasModifier(d, ts.SyntaxKind.DeclareKeyword))) {
 			const base = (t as ts.InterfaceType).isClassOrInterface?.() ? c.getBaseTypes(t as ts.InterfaceType)[0] : undefined;
@@ -209,6 +209,11 @@ export const typesMethods = {
 			// App mode: a function type reading the receiver it is called with (`(this: Action, state) => void`) is a script
 			// function (a JSMethod), as `call`/`apply` pass that receiver.
 			if (!this.library && takesOwnThis(s.getDeclaration())) return 'Any?';
+			const sDecl = s.getDeclaration();
+			if (sDecl && ts.isFunctionExpression(sDecl) && this.readsArguments(sDecl)) {
+				const ret = this.widenedResultType(sDecl, this.type(s.getReturnType(), where));
+				return `(JSArray<Any?>) -> ${ret}`;
+			}
 			const self = this.library ? (s as ts.Signature & { thisParameter?: ts.Symbol }).thisParameter : undefined;
 			const selfType = self && this.type(c.getTypeOfSymbolAtLocation(self, where ?? self.valueDeclaration!), where);
 			const params = [...(selfType && selfType !== 'Unit' ? [self!] : []), ...s.getParameters()].map((p) => {
@@ -272,6 +277,7 @@ export const typesMethods = {
 		if (isJsDocConstructorFunction(sym)) return 'Any?';
 		const renamed = sym?.valueDeclaration && this.topNames().get(sym.valueDeclaration);
 		if (renamed) return `${renamed}${this.declaredTypeArguments(t, sym!.valueDeclaration!, where)}`;
+		if (sym?.valueDeclaration && ts.isClassExpression(sym.valueDeclaration) && !sym.valueDeclaration.getSourceFile().isDeclarationFile) return `${this.classExprs.name(sym.valueDeclaration)}${this.declaredTypeArguments(t, sym.valueDeclaration, where)}`;
 		const renamedType = sym && !sym.valueDeclaration && sym.declarations?.[0] ? this.topNames().get(sym.declarations[0]) : undefined;
 		if (renamedType) {
 			this.used.add(renamedType);

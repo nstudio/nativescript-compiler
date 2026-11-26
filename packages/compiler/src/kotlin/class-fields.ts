@@ -7,6 +7,7 @@ import { implementedOptionalMembers } from '../semantics/shapes.ts';
 import { hasModifier, thisNodes } from '../semantics/ast.ts';
 import { isStatic } from '../semantics/throws.ts';
 import { prototypeDecorated } from '../semantics/classes.ts';
+import { literalKey } from '../semantics/lang.ts';
 import { isUntyped, spelledType } from '../semantics/types.ts';
 import { writtenFlag } from '../semantics/states/lenient.ts';
 
@@ -49,7 +50,7 @@ export const classFieldsMethods = {
 		const keyed = this.symbolMember(m.name);
 		if (this.symbolKeyedFieldCode(k, m, keyed)) return;
 		if (keyed) throw this.error(m.name, 'a field named by this symbol');
-		const n = m.name.getText();
+		const n = literalKey(m.name, this.checker) ?? m.name.getText();
 		const t = this.states.lenientNullField(m) ? optionalType(this.typeOf(m.name)) : this.typeOf(m.name);
 		if (isStatic(m)) this.staticFieldCode(k, m, n, t);
 		else this.instanceFieldCode(k, m, n, t);

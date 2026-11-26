@@ -1,5 +1,32 @@
 import Foundation
 
+func jsFunctionMethod(_ key: String) -> Any? {
+    switch key {
+    case "call": return jsFunctionCallMethod
+    case "apply": return jsFunctionApplyMethod
+    case "bind": return jsFunctionBindMethod
+    default: return nil
+    }
+}
+
+public let jsFunctionCallMethod = JSFunctionObject("call", 1) { __this, __a in
+    try jsCallValue(__this, this: jsArg(__a, 0), optional: false, Array(__a.dropFirst()))
+}
+
+public let jsFunctionApplyMethod = JSFunctionObject("apply", 2) { __this, __a in
+    try jsCallValue(__this, this: jsArg(__a, 0), optional: false, try jsArgumentList(__a.count > 1 ? __a[1] : nil))
+}
+
+public let jsFunctionBindMethod = JSFunctionObject("bind", 1) { __this, __a in
+    let boundThis = jsArg(__a, 0)
+    let boundArgs = Array(__a.dropFirst())
+    let name = (jsFlat(__this) as? JSFunctionObject)?.name ?? ""
+    let length = max(0, ((jsFlat(__this) as? JSFunctionObject)?.length ?? 0) - boundArgs.count)
+    return JSFunctionObject("bound \(name)", length) { _, rest in
+        try jsCallValue(__this, this: boundThis, optional: false, boundArgs + rest)
+    }
+}
+
 /// A JavaScript function value that keeps what script reads of a function: its `name` and `length`
 /// (a test runner telling `test(done)` from `test()`), its own properties (`fn.cache = …`) and an
 /// identity, called with a receiver (`fn.apply(thisArg, args)`).
@@ -49,6 +76,9 @@ public final class JSFunctionObject: JSDynamic, CustomStringConvertible {
             switch key {
             case "name": return name
             case "length": return Double(length)
+            case "call": return jsFunctionCallMethod
+            case "apply": return jsFunctionApplyMethod
+            case "bind": return jsFunctionBindMethod
             default: return nil
             }
         }

@@ -7,6 +7,7 @@ import { implementedOptionalMembers } from '../semantics/shapes.ts';
 import { refersToThis } from '../semantics/ast.ts';
 import { isStatic } from '../semantics/throws.ts';
 import { overAbstractOnly, prototypeDecorated, readEarly } from '../semantics/classes.ts';
+import { literalKey } from '../semantics/lang.ts';
 import { isUntyped, spelledType } from '../semantics/types.ts';
 import { writtenFlag } from '../semantics/states/lenient.ts';
 import { prototypeReadSite } from '../semantics/read-sites.ts';
@@ -41,7 +42,7 @@ export const classFieldsMethods = {
 		if (!ts.isPropertyDeclaration(m)) return;
 		const keyed = this.symbolMember(m.name);
 		if (keyed) return this.symbolKeyedField(k, m, keyed);
-		const n = this.staticName(m) ?? m.name.getText();
+		const n = this.staticName(m) ?? literalKey(m.name, this.checker) ?? m.name.getText();
 		const t = this.typeOf(m.name);
 		if (isStatic(m)) this.staticField(k, m, n, t);
 		else this.instanceField(k, m, n, t);

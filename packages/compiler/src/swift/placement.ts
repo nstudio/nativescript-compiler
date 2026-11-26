@@ -10,7 +10,7 @@ import type { Translator } from './translator.ts';
 import { structural } from '../semantics/conversion.ts';
 import { heldOf, isKit, isNamed, isUntyped, parseNativeType, spelledType } from '../semantics/types.ts';
 import type { Value } from '../semantics/conversion.ts';
-import { isWriteTarget, notIterable } from '../semantics/ast.ts';
+import { isLibDeclaration, isWriteTarget, notIterable } from '../semantics/ast.ts';
 import { holdsNil, notedField, resultShapeNamed } from '../semantics/shapes.ts';
 import { implementedInterfaces, literalKey, takesReceiver } from '../semantics/lang.ts';
 import { slotOf } from '../semantics/trust.ts';
@@ -502,12 +502,14 @@ export const placementMethods = {
 				return functionParts(held.replace(/^\((.*)\)\?$/, '$1')) ? this.convert(maybe, held, 'Any?') : this.marks.castCode(maybe, 'Any', 'as');
 			}
 			if (source === 'Double' && numericLiteralOnly(e)) return `Double(${this.expr(e)})`;
-			// A method value is untyped already.
-			if (ts.isFunctionExpression(bare) && (this.carriesMethod(bare) || (this.library && this.readsArguments(bare)))) return this.expr(e);
+			// A method value or `arguments`-reading function expression placed untyped is a JSMethod.
+			if (ts.isFunctionExpression(bare) && this.carriesMethod(bare)) return this.expr(e);
+			if (ts.isFunctionExpression(bare) && this.readsArguments(bare)) return this.library ? this.expr(e) : this.methodValue(bare);
 			if (ts.isFunctionExpression(bare) && takesReceiver(bare)) return this.methodValue(bare);
 			if (ts.isPropertyAccessExpression(bare) && bare.expression.kind === ts.SyntaxKind.SuperKeyword && this.isInstanceMethod(bare.name)) return 'nil';
 			const parse = ts.isIdentifier(bare) ? this.parseFunction(bare) : null;
 			if (parse) return this.boxFunction(parse.code, parse.type);
+			if (ts.isIdentifier(bare) && ['String', 'Number', 'Boolean'].includes(bare.text) && isLibDeclaration(this.resolve(bare)?.declarations?.[0])) return `js${bare.text}Constructor`;
 			// A choice between functions: each boxed as it is.
 			if (ts.isConditionalExpression(bare) && [bare.whenTrue, bare.whenFalse].some((x) => ts.isFunctionExpression(x) || ts.isArrowFunction(x) || (ts.isPropertyAccessExpression(x) && x.expression.kind === ts.SyntaxKind.SuperKeyword))) {
 				return `(${this.cond(bare.condition)} ? ${this.coerce(bare.whenTrue, 'Any?')} : ${this.coerce(bare.whenFalse, 'Any?')})`;

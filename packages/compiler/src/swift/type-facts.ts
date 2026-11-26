@@ -8,7 +8,7 @@ import { isLibDeclaration, isWriteTarget } from '../semantics/ast.ts';
 import { isKit, isNamed, isUntyped, spelledType } from '../semantics/types.ts';
 import { isStatic } from '../semantics/throws.ts';
 import { memberName, programSymbolKey } from '../program/stable-names.ts';
-import { programBase } from '../semantics/classes.ts';
+import { programBase, spellCollectionBase, spellInstantiatedCollection } from '../semantics/classes.ts';
 
 export const typeFactsMethods = {
 	/** `signal<Person>(null)` where null checks are off: the signal holds the null its type does not admit. */
@@ -36,23 +36,17 @@ export const typeFactsMethods = {
 
 	/** The kit collection a program's class extending Array, Set or Map subclasses (`JSArray<Any?>` for `extends Array`), directly or through its program bases. */
 	collectionBase(this: Translator, cls: ts.ClassLikeDeclaration): string | null {
-		const heritage = cls.heritageClauses?.find((h) => h.token === ts.SyntaxKind.ExtendsKeyword)?.types[0];
-		if (!heritage) return null;
-		const sym = this.checker.getSymbolAtLocation(heritage.expression);
-		if (ts.isIdentifier(heritage.expression) && ['Array', 'Set', 'Map'].includes(heritage.expression.text) && isLibDeclaration(sym?.declarations?.[0])) {
-			const args = (heritage.typeArguments ?? []).map((a) => this.type(this.checker.getTypeFromTypeNode(a), a));
-			const arg = (k: number) => args[k] ?? 'Any?';
-			return heritage.expression.text === 'Map' ? `JSMap<${arg(0)}, ${arg(1)}>` : `JS${heritage.expression.text}<${arg(0)}>`;
-		}
-		const decl = this.checker.getTypeAtLocation(heritage.expression).getSymbol()?.valueDeclaration;
-		return decl && ts.isClassLike(decl) && !decl.getSourceFile().isDeclarationFile ? this.collectionBase(decl) : null;
+		return spellCollectionBase(cls, this.checker, (t, n) => this.type(t, n));
+	},
+
+	/** The kit collection an instantiated expression type extends (`JSMap<String, Double>` for `TrackedMap<string, number>`). */
+	instantiatedCollection(this: Translator, e: ts.Expression): string | null {
+		return spellInstantiatedCollection(this.checker.getTypeAtLocation(e), this.checker, (t) => this.type(t, e));
 	},
 
 	/** The collection a receiver's class inherits the member read from it from, where that member is the library's (`touches.splice`, `this[i]`). */
 	inheritedCollection(this: Translator, e: ts.Expression): string | null {
-		const decl = this.checker.getNonNullableType(this.checker.getTypeAtLocation(e)).getSymbol()?.valueDeclaration;
-		if (!decl || !ts.isClassLike(decl) || decl.getSourceFile().isDeclarationFile) return null;
-		const base = this.collectionBase(decl);
+		const base = this.instantiatedCollection(e);
 		if (!base) return null;
 		const parent = e.parent as ts.PropertyAccessExpression | ts.ElementAccessExpression;
 		if (ts.isElementAccessExpression(parent)) return base;

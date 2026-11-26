@@ -316,14 +316,14 @@ open class JSMap<Key, Value>: Sequence, JSMapProtocol, JSReactiveConvertible, Cu
         jsTracker != nil ? jsReactive(value) : value
     }
 
-    @inlinable public final func get(_ key: Key) -> Value? {
+    open func get(_ key: Key) -> Value? {
         jsTracker?.track()
         guard let position = table.find(JSCollectionKey.of(key)) else { return nil }
         return read(table.entry(at: position).value)
     }
 
-    @inlinable @discardableResult
-    public final func set(_ key: Key, _ value: Value) -> JSMap<Key, Value> {
+    @discardableResult
+    open func set(_ key: Key, _ value: Value) -> JSMap<Key, Value> {
         let hashKey = JSCollectionKey.of(key)
         let hash = hashKey.hash
         if let position = table.find(hashKey, hash) {
@@ -335,19 +335,19 @@ open class JSMap<Key, Value>: Sequence, JSMapProtocol, JSReactiveConvertible, Cu
         return self
     }
 
-    @inlinable public final func has(_ key: Key) -> Bool {
+    open func has(_ key: Key) -> Bool {
         jsTracker?.track()
         return table.find(JSCollectionKey.of(key)) != nil
     }
 
-    @inlinable @discardableResult
-    public final func delete(_ key: Key) -> Bool {
+    @discardableResult
+    open func delete(_ key: Key) -> Bool {
         guard table.remove(JSCollectionKey.of(key)) else { return false }
         jsTracker?.trigger()
         return true
     }
 
-    public final func clear() {
+    open func clear() {
         guard table.live > 0 || !table.slots.isEmpty else { return }
         table.removeAll()
         jsTracker?.trigger()
@@ -471,8 +471,8 @@ open class JSSet<Element>: Sequence, JSSetProtocol, JSReactiveConvertible, Custo
         jsTracker != nil ? jsReactive(value) : value
     }
 
-    @inlinable @discardableResult
-    public final func add(_ value: Element) -> JSSet<Element> {
+    @discardableResult
+    open func add(_ value: Element) -> JSSet<Element> {
         let hashKey = JSCollectionKey.of(value)
         let hash = hashKey.hash
         if table.find(hashKey, hash) == nil {
@@ -482,19 +482,19 @@ open class JSSet<Element>: Sequence, JSSetProtocol, JSReactiveConvertible, Custo
         return self
     }
 
-    @inlinable public final func has(_ value: Element) -> Bool {
+    open func has(_ value: Element) -> Bool {
         jsTracker?.track()
         return table.find(JSCollectionKey.of(value)) != nil
     }
 
-    @inlinable @discardableResult
-    public final func delete(_ value: Element) -> Bool {
+    @discardableResult
+    open func delete(_ value: Element) -> Bool {
         guard table.remove(JSCollectionKey.of(value)) else { return false }
         jsTracker?.trigger()
         return true
     }
 
-    public final func clear() {
+    open func clear() {
         guard table.live > 0 || !table.slots.isEmpty else { return }
         table.removeAll()
         jsTracker?.trigger()

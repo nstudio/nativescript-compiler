@@ -22,8 +22,8 @@ export const classConstructorMethods = {
 			if (baseCtor) this.declareInit(this.params(baseCtor, false), baseThrows || this.throwsInfo.initThrows(cls));
 			else this.declareInit('', this.throwsInfo.initThrows(cls));
 			if (baseCtor) lines.push(`    override init(${this.params(baseCtor, false)})${baseThrows || this.throwsInfo.initThrows(cls) ? ' throws' : ''} {`, `        ${baseThrows ? 'try ' : ''}super.init(${this.readsArguments(baseCtor) ? '__arguments' : baseCtor.parameters.map((p) => ident((p.name as ts.Identifier).text)).join(', ')})`, ...this.levelStart(cls), ...fieldInits, '    }');
-			else lines.push(`    ${appBase || kitRoot ? 'override ' : ''}init()${this.throwsInfo.initThrows(cls) ? ' throws' : ''} {`, ...(appBase || kitRoot ? [`        ${baseThrows ? 'try ' : ''}super.init()`] : []), ...this.levelStart(cls), ...fieldInits, '    }');
-		} else if ((this.library || this.extended.has(name) || this.extendedDecls.has(cls)) && !base && !cls.members.some((m) => ts.isConstructorDeclaration(m)) && !this.literalClasses().has(cls)) {
+			else lines.push(`    ${appBase || kitRoot || k.collection ? 'override ' : ''}init()${this.throwsInfo.initThrows(cls) ? ' throws' : ''} {`, ...(appBase || kitRoot || k.collection ? [`        ${baseThrows ? 'try ' : ''}super.init()`] : []), ...this.levelStart(cls), ...fieldInits, '    }');
+		} else if ((this.library || this.extended.has(name) || this.extendedDecls.has(cls)) && !base && !cls.members.some((m) => ts.isConstructorDeclaration(m)) && !(ts.isClassDeclaration(cls) && this.literalClasses().has(cls))) {
 			// Library mode: Swift's implicit initializer is internal; an app makes the class (`new StyleScope()`) from another module.
 			// A class subclassed: Swift would leave its implicit initializer nonisolated, and a subclass's, isolated to the main actor, could not override it.
 			lines.push('    init() {}');
@@ -42,7 +42,7 @@ export const classConstructorMethods = {
 				.replace(/_ [\w`]+: /g, '_: ')
 				.replace(/ = [^,]*(?=,|$)/g, '')
 				.replace(/!(?=,|$)/g, '?');
-		const sameAsBase = baseCtor ? signature(baseCtor) === signature(ctor) : ctor.parameters.length === 0 && (!!appBase || !!kitRoot);
+		const sameAsBase = baseCtor ? signature(baseCtor) === signature(ctor) : ctor.parameters.length === 0 && (!!appBase || !!kitRoot || !!k.collection);
 		const body = this.inFunction('Void', () => {
 			this.indent = '        ';
 			this.lenientParams(ctor);
@@ -67,8 +67,14 @@ export const classConstructorMethods = {
 					// Over a library error given options (`super(message, { cause })`): the cause they give.
 					const errorName = k.isError ? Object.keys(ERRORS).find((n) => ERRORS[n] === k.base) : undefined;
 					const given = !appBase && kitRoot ? this.core.kitInitArgs(kitRoot, call.arguments) : null;
-					const init = errorName && errorArguments(errorName, call.arguments).options ? this.errorCall('super.init', errorName, call.arguments) : `super.init(${(given ?? this.args(call)).join(', ')})`;
-					out.push(`        ${this.tryPrefix(call)}${init}`, ...this.levelStart(cls), ...own(), ...this.statements(stmts.slice(superAt + 1)));
+					const collectionPopulate =
+						!appBase && k.collection && call.arguments.length === 1 && /^JS(Map|Set)</.test(k.collection)
+							? k.collection.startsWith('JSMap<')
+								? [`        for (__k, __v) in ${this.iterable(call.arguments[0])} { self.set(__k, __v) }`]
+								: [`        for __v in ${this.iterable(call.arguments[0])} { self.add(__v) }`]
+							: [];
+					const init = errorName && errorArguments(errorName, call.arguments).options ? this.errorCall('super.init', errorName, call.arguments) : collectionPopulate.length ? 'super.init()' : `super.init(${(given ?? this.args(call)).join(', ')})`;
+					out.push(`        ${this.tryPrefix(call)}${init}`, ...collectionPopulate, ...this.levelStart(cls), ...own(), ...this.statements(stmts.slice(superAt + 1)));
 				}
 			} finally {
 				this.keyNotes = notes;
@@ -83,7 +89,7 @@ export const classConstructorMethods = {
 	literalInit(this: Translator, k: ClassParts): void {
 		const { cls, lines } = k;
 		// A class object literals are typed as (`const info = <Info>{}`): an instance made without its constructor or field initializers, as such a literal has none.
-		if (this.literalMade(cls)) {
+		if (ts.isClassDeclaration(cls) && this.literalMade(cls)) {
 			const resets = cls.members
 				.filter((m): m is ts.PropertyDeclaration => ts.isPropertyDeclaration(m) && !isStatic(m) && !!m.initializer && this.pure(m.initializer) && !refersToThis(m.initializer) && k.fields.some((f) => f.name === m.name.getText()))
 				.flatMap((m) => {

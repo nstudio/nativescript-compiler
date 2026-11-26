@@ -63,6 +63,76 @@ public func jsLocaleCompare(_ a: String, _ b: String, _ locales: Any?, _ options
     }
 }
 
+/// `Intl.Collator`.
+public final class JSCollator: JSDynamic {
+    nonisolated deinit {}
+    let locale: String
+    let usage: String
+    let sensitivity: String
+    let ignorePunctuation: Bool
+    let numeric: Bool
+    let caseFirst: String
+    let compareOptions: String.CompareOptions
+    let nsLocale: Locale
+
+    public init(_ locales: Any? = nil, _ options: Any? = nil) throws {
+        let requested = jsRequestedLocale(locales)
+        self.locale = jsIsEnUS(requested) ? (requested.lowercased() == "en" ? "en" : "en-US") : requested
+        self.usage = try jsStringOption(options, "usage", ["sort", "search"], "sort") ?? "sort"
+        self.sensitivity = try jsStringOption(options, "sensitivity", ["base", "accent", "case", "variant"], "variant") ?? "variant"
+        self.caseFirst = try jsStringOption(options, "caseFirst", ["upper", "lower", "false"], "false") ?? "false"
+        self.ignorePunctuation = jsIsTruthy(jsOption(options, "ignorePunctuation"))
+        self.numeric = jsIsTruthy(jsOption(options, "numeric"))
+        var opts: String.CompareOptions = []
+        if self.numeric { opts.insert(.numeric) }
+        switch self.sensitivity {
+        case "base": opts.formUnion([.caseInsensitive, .diacriticInsensitive])
+        case "accent": opts.insert(.caseInsensitive)
+        case "case": opts.insert(.diacriticInsensitive)
+        default: break
+        }
+        self.compareOptions = opts
+        self.nsLocale = Locale(identifier: self.locale)
+    }
+
+    /// `collator.compare(a, b)`.
+    public func compare(_ a: String, _ b: String) -> Double {
+        let left = ignorePunctuation ? a.unicodeScalars.filter { !CharacterSet.punctuationCharacters.contains($0) }.map(String.init).joined() : a
+        let right = ignorePunctuation ? b.unicodeScalars.filter { !CharacterSet.punctuationCharacters.contains($0) }.map(String.init).joined() : b
+        switch left.compare(right, options: compareOptions, range: nil, locale: nsLocale) {
+        case .orderedAscending: return -1
+        case .orderedDescending: return 1
+        case .orderedSame: return 0
+        }
+    }
+
+    /// `collator.resolvedOptions()`.
+    public func resolvedOptions() -> JSObject {
+        JSObject([
+            ("locale", locale),
+            ("usage", usage),
+            ("sensitivity", sensitivity),
+            ("ignorePunctuation", ignorePunctuation),
+            ("collation", "default"),
+            ("numeric", numeric),
+            ("caseFirst", caseFirst),
+        ])
+    }
+
+    public subscript(jsKey key: String) -> Any? {
+        get {
+            switch key {
+            case "compare": return ({ (args: [Any?]) -> Any? in self.compare(jsToString(jsArg(args, 0)), jsToString(jsArg(args, 1))) } as JSFunction)
+            case "resolvedOptions": return ({ (_: [Any?]) -> Any? in self.resolvedOptions() } as JSFunction)
+            default: return nil
+            }
+        }
+        set {}
+    }
+    public var jsKeys: [String] { [] }
+    public var jsClassName: String? { "Collator" }
+}
+
 // MARK: - Decimal digits
 
 /// A non-negative decimal as digits d₁d₂… with value 0.d₁d₂… × 10^point.
@@ -723,6 +793,7 @@ extension JSDate {
 
 /// `Intl` read as a value (`typeof Intl.DateTimeFormat`, `(Intl as any).NumberFormat`): its constructors by name.
 public let jsIntl = JSObject([
+    ("Collator", { (args: [Any?]) throws -> Any? in try JSCollator(jsArg(args, 0), jsArg(args, 1)) } as JSFunction),
     ("DateTimeFormat", { (args: [Any?]) throws -> Any? in try JSDateTimeFormat(jsArg(args, 0), jsArg(args, 1)) } as JSFunction),
     ("NumberFormat", { (args: [Any?]) throws -> Any? in try JSNumberFormat(jsArg(args, 0), jsArg(args, 1)) } as JSFunction),
 ])

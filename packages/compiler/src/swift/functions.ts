@@ -3,7 +3,7 @@ import { heldLoss } from '../semantics/losses.ts';
 import ts from 'typescript';
 import { ARRAY_CALLBACK_METHODS, kitFunctionThrows } from './library.ts';
 import { ERRORS, TYPED_ARRAYS } from '../semantics/globals.ts';
-import { functionParts, ident, isFunctionType, isMethodValue, isOptional, metatype, optionalType, refersTo, splitTopLevel, swiftString, RT, type FunctionParts } from './syntax.ts';
+import { functionParts, ident, isFunctionType, isMethodValue, isOptional, metatype, optionalType, refersTo, splitTopLevel, RT, type FunctionParts } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { returnCell } from '../semantics/placement.ts';
 import { hasModifier, isLibDeclaration, withoutDefault, implementationOf, declaresThis } from '../semantics/ast.ts';
@@ -237,8 +237,8 @@ export const functionsMethods = {
 		if (!conversion) return null;
 		const context = this.checker.getContextualType(e);
 		const slot = context && this.checker.getNonNullableType(context).getCallSignatures()[0];
-		// Placed untyped (`const f: any = Number`), it sees how many arguments it is given: `Number()` is 0, `String()` "".
-		if (context && !slot && e.text !== 'Boolean') return `${RT.jsFunction}(${swiftString(e.text)}, 1) { a in a.isEmpty ? ${e.text === 'Number' ? '0.0' : '""'} : ${conversion[0]}(a[0]) }`;
+		// Placed untyped (`const f: any = Number`, `s.constructor === String`): singleton builtin constructor.
+		if (!slot) return `js${e.text}Constructor`;
 		const param = slot?.getParameters()[0];
 		const t = param ? this.type(this.checker.getTypeOfSymbolAtLocation(param, e), e) : 'Any?';
 		const call = p && ts.isCallExpression(p) && p.arguments[0] === e && ts.isPropertyAccessExpression(p.expression) ? p.expression.expression : null;
@@ -375,6 +375,17 @@ export const functionsMethods = {
 				return `\n${inner}let ${ident((p.name as ts.Identifier).text)}: ${t} = ${this.fromAnyCode(`${RT.jsArg}(__rest.storage, ${k})`, read, true)}`;
 			});
 			return `{ (__rest: JSArray<Any?>) ${throws}-> ${ret} in${binds.join('')}${this.functionBody(fn, ret, this.indent).slice(1)}`;
+		}
+		if (ts.isFunctionExpression(fn) && this.readsArguments(fn) && !pad.length) {
+			const slot = this.slotOf(fn);
+			if (slot && slot.getDeclaration() !== fn) {
+				const slotParams = slot.getParameters().filter((p) => p.name !== 'this');
+				const pTypes = slotParams.map((p) => this.type(this.checker.getTypeOfSymbolAtLocation(p, fn), fn));
+				const names = pTypes.map((_, k) => `__a${k}`);
+				const inner = `{ (__arguments: JSArray<Any?>) ${throws}-> ${ret} in${this.functionBody(fn, ret, this.indent).slice(1)}`;
+				const call = `${throws ? 'try ' : ''}(${inner})(JSArray<Any?>([${names.map((n, k) => this.convert(n, pTypes[k], 'Any?')).join(', ')}]))`;
+				return `{ (${names.map((n, k) => `${n}: ${pTypes[k]}`).join(', ')}) ${throws}-> ${ret} in ${ret === 'Void' ? call : `return ${call}`} }`;
+			}
 		}
 		const extra = this.unusedParameters(fn).map((t, k) => `_ __unused${k}: ${t}`);
 		const weak = ret === 'Void' && this.weakCapture(fn);

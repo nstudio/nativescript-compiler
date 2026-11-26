@@ -11,7 +11,7 @@ export const keyPlansMethods = {
 	shapeFacts(this: Translator): ShapeFacts {
 		return (this.shapeFactSet ??= {
 			defines: !this.assignFields,
-			byName: (c) => !this.framework.componentClass(c) && !this.components.has(c.name!.text) && !this.patterns.mixinTarget(c) && !(!this.library && !!this.collectionAlias(c)) && this.framework.classRole(c, this.pluginFiles) !== 'service',
+			byName: (c) => !this.framework.componentClass(c) && !this.components.has(c.name?.text ?? '') && !this.patterns.mixinTarget(c) && !(!this.library && !!this.collectionAlias(c)) && this.framework.classRole(c, this.pluginFiles) !== 'service',
 			kitBased: (c) => !ERRORS[c.heritageClauses!.find((x) => x.token === ts.SyntaxKind.ExtendsKeyword)!.types[0].expression.getText()] && !!this.kitRootOf(c),
 			kitHeld: (c, m) => {
 				const kitRoot = this.kitRootOf(c);

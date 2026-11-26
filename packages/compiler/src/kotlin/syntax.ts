@@ -615,7 +615,7 @@ export function refersTo(node: ts.Node, sym: ts.Symbol | undefined, checker: ts.
 }
 
 /** Whether a class reads `this.name?.…`: a field it leaves unset until later is tested for being there. */
-export function chainedThrough(cls: ts.ClassDeclaration, name: string): boolean {
+export function chainedThrough(cls: ts.ClassLikeDeclaration, name: string): boolean {
 	let found = false;
 	const visit = (n: ts.Node): void => {
 		if (found) return;

@@ -1,6 +1,6 @@
 // Reads and writes, compound operators, and the built-in prototypes a program reaches through an alias.
 import ts from 'typescript';
-import { isLibDeclaration } from '../ast.ts';
+import { isLibDeclaration, isWriteTarget } from '../ast.ts';
 import type { StateBackend } from '../states/value-states.ts';
 import { statementLevel } from './fields.ts';
 
@@ -158,6 +158,68 @@ export function isArguments(e: ts.Node, checker: ts.TypeChecker): boolean {
 	if (!ts.isIdentifier(e) || e.text !== 'arguments') return false;
 	const sym = checker.getSymbolAtLocation(e);
 	return !!sym && !sym.declarations?.length;
+}
+
+/**
+ * Whether an `arguments` identifier escapes as an object value (where `Array.isArray(arguments) === false` or
+ * `[Arguments]` formatting would be observable), rather than being read for its length, elements, iteration,
+ * spread, `Array.from`, `slice.call`, or `fn.apply`.
+ */
+export function escapesArguments(e: ts.Identifier): boolean {
+	let node: ts.Node = e;
+	while (node.parent && (ts.isParenthesizedExpression(node.parent) || ts.isAsExpression(node.parent) || ts.isTypeAssertionExpression(node.parent) || ts.isNonNullExpression(node.parent))) node = node.parent;
+	const p = node.parent;
+	if ((ts.isPropertyAccessExpression(p) || ts.isElementAccessExpression(p)) && p.expression === node) return false;
+	if (ts.isSpreadElement(p) && p.expression === node) return false;
+	if (ts.isForOfStatement(p) && p.expression === node) return false;
+	if (ts.isCallExpression(p)) {
+		const callee = p.expression;
+		if (ts.isPropertyAccessExpression(callee)) {
+			if (callee.name.text === 'apply' && p.arguments[1] === node) return false;
+			if (callee.name.text === 'from' && ts.isIdentifier(callee.expression) && callee.expression.text === 'Array' && p.arguments[0] === node) return false;
+			if (callee.name.text === 'call' && p.arguments[0] === node && ts.isPropertyAccessExpression(callee.expression) && callee.expression.name.text === 'slice') return false;
+		}
+	}
+	return true;
+}
+
+/** Whether an `arguments` identifier is in a function that collects `__arguments` and does not escape in a function expression. */
+export function canReadArguments(e: ts.Identifier, readsArguments: (fn: ts.SignatureDeclaration) => boolean, library: boolean): boolean {
+	const fn = ts.findAncestor(e.parent, (n) => ts.isFunctionLike(n) && !ts.isArrowFunction(n)) as ts.SignatureDeclaration | undefined;
+	return !!fn && readsArguments(fn) && (!ts.isFunctionExpression(fn) || library || !escapesArguments(e));
+}
+
+/** Static `fn.length` or `fn.name` read on a function literal, declared function, or `const` holding one. */
+export function functionProperty(e: ts.PropertyAccessExpression, checker: ts.TypeChecker): { kind: 'length'; value: number } | { kind: 'name'; value: string } | null {
+	const prop = e.name.text;
+	if ((prop !== 'length' && prop !== 'name') || isWriteTarget(e)) return null;
+	const target = ts.skipOuterExpressions(e.expression, ts.OuterExpressionKinds.Parentheses);
+	let decl: ts.FunctionDeclaration | ts.FunctionExpression | ts.ArrowFunction | undefined;
+	if (ts.isArrowFunction(target) || ts.isFunctionExpression(target)) {
+		decl = target;
+	} else if (ts.isIdentifier(target)) {
+		let sym = checker.getSymbolAtLocation(target);
+		if (sym && sym.flags & ts.SymbolFlags.Alias) sym = checker.getAliasedSymbol(sym);
+		const vd = sym?.valueDeclaration;
+		if (vd && ts.isFunctionDeclaration(vd) && !vd.getSourceFile().isDeclarationFile) {
+			decl = sym?.declarations?.find((d): d is ts.FunctionDeclaration => ts.isFunctionDeclaration(d) && !!d.body) ?? vd;
+		} else if (vd && ts.isVariableDeclaration(vd) && vd.initializer && ts.getCombinedNodeFlags(vd) & ts.NodeFlags.Const && !vd.getSourceFile().isDeclarationFile) {
+			const init = ts.skipOuterExpressions(vd.initializer, ts.OuterExpressionKinds.Parentheses);
+			if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) decl = init;
+		}
+	}
+	if (!decl) return null;
+	if (prop === 'length') {
+		let count = 0;
+		for (const p of decl.parameters) {
+			if (ts.isIdentifier(p.name) && p.name.text === 'this') continue;
+			if (p.dotDotDotToken || p.initializer) break;
+			count++;
+		}
+		return { kind: 'length', value: count };
+	}
+	const fnName = decl.name?.text ?? (ts.isVariableDeclaration(decl.parent) && ts.isIdentifier(decl.parent.name) ? decl.parent.name.text : '');
+	return { kind: 'name', value: fnName };
 }
 
 /** A literal, `true`, `false`, or a prefix operator on a number literal. */

@@ -8,7 +8,7 @@ import { intlConstructor, isObjectToStringCall, literalKey, mergedInterfaceMembe
 import { callableSignal } from '../semantics/signals.ts';
 import { isLibDeclaration, isSymbolIterator, implementationOf } from '../semantics/ast.ts';
 import { isStatic } from '../semantics/throws.ts';
-import { programBase } from '../semantics/classes.ts';
+import { constClassExpr, programBase } from '../semantics/classes.ts';
 import { isKit, isNamed, isUntyped, spelledType } from '../semantics/types.ts';
 import { globalOp, type NamedGlobal } from '../semantics/apis/globals.ts';
 
@@ -149,6 +149,8 @@ export const callsMethods = {
 		if (ts.isPropertyAccessExpression(callee)) {
 			const method = callee.name.text;
 			const target = callee.expression;
+			const ce = constClassExpr(target, this.checker);
+			if (ce) return `${this.emitClassExprCode(ce)}.${ident(method)}(${this.args(e).join(', ')})`;
 			// `await import('./x')`, which the build reads as `Promise.resolve({ a: __import0_a })`: the module runs first, if it has not.
 			const imported = this.moduleKey && method === 'resolve' && ts.isIdentifier(target) && target.text === 'Promise' && isLibGlobal(this, target) ? this.dynamicImport(e.arguments[0]) : null;
 			if (imported) return `run { AppModules.runImport(${kotlinString(this.moduleKey!(imported))}); ${this.staticCall('Promise', method, e)} }`;

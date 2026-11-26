@@ -419,6 +419,7 @@ export const classesMethods = {
 
 	/** The Swift name of a class the program declares. */
 	className(this: Translator, decl: ts.ClassLikeDeclaration): string {
+		if (ts.isClassExpression(decl)) return this.classExprs.name(decl);
 		return decl.name ? identPath(this.topName(decl, decl.name.text)) : 'AnonymousClass';
 	},
 

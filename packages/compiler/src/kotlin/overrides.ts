@@ -13,7 +13,7 @@ import { isStatic } from '../semantics/throws.ts';
 import { runtimeKitIndex } from './core-index.ts';
 import { usedBefore } from '../semantics/async.ts';
 import { declarationsNamedWith, keptDeclaration, moduleSuffixedName, namedObjectType } from '../semantics/top-names.ts';
-import { programBase, prototypeDecorated, toStringGivesNonString } from '../semantics/classes.ts';
+import { COLLECTION_OVERRIDE_METHODS, programBase, prototypeDecorated, spellCollectionBase, toStringGivesNonString } from '../semantics/classes.ts';
 import { isUntyped, spelledType } from '../semantics/types.ts';
 
 export const overridesMethods = {
@@ -61,6 +61,7 @@ export const overridesMethods = {
 
 	/** The Kotlin name of a class the program declares. */
 	className(this: Translator, decl: ts.ClassLikeDeclaration): string {
+		if (ts.isClassExpression(decl)) return this.classExprs.name(decl);
 		return decl.name ? this.topName(decl, decl.name.text).split('.').map(ident).join('.') : 'AnonymousClass';
 	},
 
@@ -72,12 +73,20 @@ export const overridesMethods = {
 		if (!decl || !ts.isClassDeclaration(decl) || decl.getSourceFile().isDeclarationFile) return null;
 		const heritage = decl.heritageClauses?.find((h) => h.token === ts.SyntaxKind.ExtendsKeyword)?.types[0];
 		if (!heritage || !ts.isIdentifier(heritage.expression) || !['Array', 'Set'].includes(heritage.expression.text) || !isLibGlobal(this, heritage.expression)) return null;
+		const kind = heritage.expression.text as 'Array' | 'Set';
+		// A subclass overriding open collection methods (`add`/`has`/`delete`/`clear`) must be a real Kotlin subclass.
+		if (decl.members.some((m) => !isStatic(m) && ts.isMethodDeclaration(m) && COLLECTION_OVERRIDE_METHODS[kind].includes(m.name.getText()))) return null;
 		// Instance methods are extensions of the collection; a getter it has already (`length`) is its own.
 		const instance = decl.members.filter((m) => !isStatic(m) && !(m.name && ts.isComputedPropertyName(m.name) && /Symbol\.toStringTag/.test(m.name.getText())) && !ts.isMethodDeclaration(m) && !(ts.isGetAccessorDeclaration(m) && ['length', 'size'].includes(m.name.getText())));
 		if (instance.length) return null;
 		const arg = heritage.typeArguments?.[0];
 		const el = arg ? this.type(this.checker.getTypeFromTypeNode(arg), arg) : 'Any?';
-		return heritage.expression.text === 'Array' ? `JSArray<${el}>` : `JSSet<${el}>`;
+		return kind === 'Array' ? `JSArray<${el}>` : `JSSet<${el}>`;
+	},
+
+	/** Kotlin kit collection supertype for a class extending `Map`, `Set`, or `Array` directly or through a program base. */
+	collectionSuperType(this: Translator, cls: ts.ClassLikeDeclaration): string | null {
+		return spellCollectionBase(cls, this.checker, (t, n) => this.type(t, n));
 	},
 
 	/** `global` or `globalThis` as declarations give them: the program's global object. */

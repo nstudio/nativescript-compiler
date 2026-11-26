@@ -213,7 +213,11 @@ export const typesMethods = {
 			// A function type reading the receiver it is called with (`(this: Action, state) => void`): a script function, as
 			// `call`/`apply` pass that receiver and a Swift closure has none.
 			const sd = s.getDeclaration() as ts.SignatureDeclaration | undefined;
-			if (sd && (ts.isFunctionTypeNode(sd) || ts.isFunctionExpression(sd)) && declaresThis(sd)) return 'Any?';
+			if (sd && (ts.isFunctionTypeNode(sd) || ts.isFunctionExpression(sd) || ts.isFunctionDeclaration(sd)) && declaresThis(sd)) return 'Any?';
+			if (sd && ts.isFunctionExpression(sd) && this.readsArguments(sd)) {
+				const ret = this.widenedResultType(sd, this.type(s.getReturnType(), where));
+				return `(JSArray<Any?>) throws -> ${ret}`;
+			}
 			// A generic function as a value (`obj.notify`) is no Swift closure's type: its own type parameters are their constraints.
 			const own = (x: ts.Type) => (x.flags & F.TypeParameter && s.typeParameters?.includes(x as ts.TypeParameter) ? (c.getBaseConstraintOfType(x) ?? c.getAnyType()) : x);
 			const params = s
@@ -264,7 +268,8 @@ export const typesMethods = {
 		const compiled = this.compiledCounterpart(sym);
 		if (compiled) return this.type(this.checker.getDeclaredTypeOfSymbol(compiled), where);
 		// `typeof Cls`: the class itself.
-		if (!this.ledger.appClassValuesUntyped && sym && sym.flags & ts.SymbolFlags.Class && t.getConstructSignatures().length && classDecl && !classDecl.getSourceFile().isDeclarationFile) return `${this.topNames().get(classDecl) ?? (classDecl as ts.ClassDeclaration).name?.text ?? name}.Type`;
+		if (!this.ledger.appClassValuesUntyped && sym && sym.flags & ts.SymbolFlags.Class && t.getConstructSignatures().length && classDecl && !classDecl.getSourceFile().isDeclarationFile) return `${ts.isClassExpression(classDecl) ? this.classExprs.name(classDecl) : (this.topNames().get(classDecl) ?? (classDecl as ts.ClassDeclaration).name?.text ?? name)}.Type`;
+		if (classDecl && ts.isClassExpression(classDecl) && !classDecl.getSourceFile().isDeclarationFile) return `${this.classExprs.name(classDecl)}${this.classTypeArguments(t, classDecl, where)}`;
 		const tokenBase = tokenClassBase(t, c, this.pluginFiles);
 		if (tokenBase) return this.type(c.getTypeAtLocation(tokenBase), where);
 		if (isJsDocConstructorFunction(sym)) return 'Any?';

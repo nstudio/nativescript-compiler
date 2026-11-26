@@ -3,7 +3,7 @@ import ts from 'typescript';
 import { LIB_FUNCTION_VALUES } from './library.ts';
 import { ident, identPath, scriptLength, swiftString, RT, SWIFT_NATIVE_TYPES } from './syntax.ts';
 import type { Translator } from './translator.ts';
-import { runtimeTypeName, isArguments, objectMethod } from '../semantics/lang.ts';
+import { runtimeTypeName, isArguments, canReadArguments, objectMethod } from '../semantics/lang.ts';
 import { boundNames, hasModifier, isAppDeclarationFile, isLibDeclaration, isWriteTarget, declaresThis } from '../semantics/ast.ts';
 import { isCoreDeclaration } from '../program/core-facts.ts';
 import { declarationsNamedWith, keptDeclaration, moduleSuffixedName, namedObjectType } from '../semantics/top-names.ts';
@@ -30,8 +30,7 @@ export const namesMethods = {
 			return this.library ? `(${method} as JSMethod)` : `${RT.jsMethodFunction}(${swiftString(thisFn.name!.text)}, ${scriptLength(thisFn)}, ${method})`;
 		}
 		if (isArguments(e, this.checker)) {
-			const fn = ts.findAncestor(e.parent, (n) => ts.isFunctionLike(n) && !ts.isArrowFunction(n)) as ts.SignatureDeclaration | undefined;
-			if (!fn || !this.readsArguments(fn) || (ts.isFunctionExpression(fn) && !this.library)) throw this.error(e, '`arguments` of a function expression', 'function-arguments');
+			if (!canReadArguments(e, (fn) => this.readsArguments(fn), !!this.library)) throw this.error(e, '`arguments` of a function expression', 'function-arguments');
 			return '__arguments';
 		}
 		const moot = this.mootImport(e);

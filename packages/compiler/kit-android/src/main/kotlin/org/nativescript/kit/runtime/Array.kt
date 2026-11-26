@@ -4,7 +4,7 @@ package org.nativescript.kit
  * A JavaScript array: reference semantics, JavaScript method names, `Double` indexes and lengths.
  * Reading past the end is undefined through `element`, which translated code uses for `a[i]`.
  */
-class JSArray<T>(storage: ArrayList<T>) : Iterable<T>, JSReactiveConvertible {
+open class JSArray<T>(storage: ArrayList<T>) : Iterable<T>, JSReactiveConvertible {
     var storage: ArrayList<T> = storage
         internal set
     var jsTracker: JSTracker? = null

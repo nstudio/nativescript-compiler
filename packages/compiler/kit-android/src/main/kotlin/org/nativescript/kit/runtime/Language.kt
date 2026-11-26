@@ -506,6 +506,12 @@ inline fun jsUnsetIsUndefined(read: () -> Any?): Any? = try { read() } catch (_:
 @Target(AnnotationTarget.CLASS)
 annotation class JSClassName(val name: String)
 
+fun jsConstructorName(v: Any?): String = when (v) {
+    is Class<*> -> jsConstructorName(v)
+    is JSFunction -> (jsFunctionGet(v, "name") as? String) ?: ""
+    else -> ""
+}
+
 /** A class's name as JavaScript gives a constructor's: the library's error classes by their JavaScript names. */
 fun jsConstructorName(c: Class<*>): String = when (c) {
     JSError::class.java -> "Error"

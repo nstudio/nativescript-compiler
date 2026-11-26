@@ -10,11 +10,11 @@ import { ERRORS, isLibGlobal } from '../semantics/globals.ts';
 import { spell, ident, isCompared, isNullable, isThisParameter, kotlinString, numberLiteral, optionalType, testsMissing, scriptPrimitive, RT, assertedReader } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { observerSlot, place, receiverCell, receiverSlot, isEnumObject, nullishField, type ReceiverCell } from '../semantics/placement.ts';
-import { accessedDeclaration, augmentedPropertyRead, wellKnownMember, isSelf, literalMethod, uncheckedMatch } from '../semantics/lang.ts';
+import { accessedDeclaration, augmentedPropertyRead, functionProperty, wellKnownMember, isSelf, literalMethod, uncheckedMatch } from '../semantics/lang.ts';
 import { convertedRead, onlyNull } from '../semantics/states/predicates.ts';
 import { isLibDeclaration, isWriteTarget, notIterable } from '../semantics/ast.ts';
 import { isStatic } from '../semantics/throws.ts';
-import { declaredClassName } from '../semantics/classes.ts';
+import { constClassExpr, declaredClassName } from '../semantics/classes.ts';
 import { isKit, isNamed, isUntyped, iterableAssertion, spelledType, type NativeType } from '../semantics/types.ts';
 import { definedField } from '../semantics/shapes.ts';
 import { programSymbolKey } from '../program/stable-names.ts';
@@ -104,8 +104,12 @@ export const accessMethods = {
 		if (constant !== undefined && enumMember!.getSourceFile().isDeclarationFile && !this.native?.isNativeDeclaration(enumMember!)) {
 			return typeof constant === 'string' ? kotlinString(constant) : numberLiteral(String(constant));
 		}
+		const fnMeta = functionProperty(e, this.checker);
+		if (fnMeta) return fnMeta.kind === 'length' ? `${fnMeta.value}.0` : kotlinString(fnMeta.value);
 		// `object.constructor`, the class of the instance.
 		if (name === 'constructor' && !this.isAny(target) && this.checker.getSymbolAtLocation(e.name)?.declarations?.every((d) => d.getSourceFile().isDeclarationFile)) {
+			const primCtor = ({ String: 'jsStringConstructor', Double: 'jsNumberConstructor', Boolean: 'jsBooleanConstructor' } as Record<string, string>)[this.typeOf(target)];
+			if (primCtor) return primCtor;
 			const code = this.expr(target);
 			return `${this.typeOf(target).endsWith('?') || this.isAsserted(code) ? this.present(code, name, target) : code}.javaClass`;
 		}
@@ -138,6 +142,8 @@ export const accessMethods = {
 		}
 		const core = this.core?.property(e);
 		if (core) return core;
+		const ce = constClassExpr(target, this.checker);
+		if (ce) return `${this.emitClassExprCode(ce)}.${ident(name)}`;
 		if (this.isExpando(e)) {
 			const t = this.typeOf(e);
 			const code = `${RT.jsGet}(${this.expr(target)}, ${kotlinString(name)})`;

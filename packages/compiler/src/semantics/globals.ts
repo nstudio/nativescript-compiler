@@ -53,7 +53,7 @@ export const SHARED_LIB_CONSTANTS: Readonly<Record<string, string>> = {
 	'Object.prototype': 'JSPrototypes.objectPrototype',
 };
 
-const LIB_GLOBALS = new Set(['Math', 'JSON', 'Object', 'Array', 'Number', 'Promise', 'console', 'String', 'Boolean', 'Map', 'Set', 'Date', 'WeakRef', 'Symbol', 'WeakMap', 'WeakSet', 'BigInt']);
+const LIB_GLOBALS = new Set(['Math', 'JSON', 'Object', 'Array', 'Number', 'Promise', 'console', 'String', 'Boolean', 'Map', 'Set', 'Date', 'RegExp', 'WeakRef', 'Symbol', 'WeakMap', 'WeakSet', 'BigInt']);
 
 /** `id` names one of the library's globals itself, not a program's declaration of that name. */
 export function isLibGlobal(b: Pick<StateBackend, 'resolve'>, id: ts.Identifier): boolean {

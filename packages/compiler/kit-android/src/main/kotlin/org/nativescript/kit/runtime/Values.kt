@@ -501,7 +501,7 @@ fun jsGet(target: Any?, key: String): Any? = if (key == "constructor" && target 
     is Triple<*, *, *> -> when (key) { "0" -> target.first; "1" -> target.second; "2" -> target.third; "length" -> 3.0; else -> null }
     is JSMap<*, *> -> if (key == "size") target.size else jsMapMethod(target, key)
     is JSSet<*> -> if (key == "size") target.size else jsSetMethod(target, key)
-    is JSFunction, is Function<*> -> jsFunctionGet(target, key)
+    is JSFunction, is JSMethod, is Function<*> -> jsFunctionGet(target, key)
     is Double -> jsNumberMethod(target, key)
     is Boolean -> jsBooleanMethod(target, key)
     is JSBigInt -> jsBigIntMethod(target, key)
@@ -1137,9 +1137,32 @@ object JSPromiseConstructor
 
 val jsDateBuiltin: JSObject = JSObject().also { it["now"] = jsFunction(0) { JSDate.now() } }
 
+val jsStringConstructor: JSFunction by lazy {
+    jsFunction(1) { a -> if (a.isEmpty()) "" else jsToString(a[0]) }.also {
+        jsFunctionProperties(it, true)!!.put("name", "String")
+    }
+}
+val jsNumberConstructor: JSFunction by lazy {
+    jsFunction(1) { a -> if (a.isEmpty()) 0.0 else jsToNumber(a[0]) }.also {
+        jsFunctionProperties(it, true)!!.put("name", "Number")
+    }
+}
+val jsBooleanConstructor: JSFunction by lazy {
+    jsFunction(1) { a -> jsTruthy(a.getOrNull(0)) }.also {
+        jsFunctionProperties(it, true)!!.put("name", "Boolean")
+    }
+}
+
+val jsFunctionCallMethod: JSMethod by lazy { JSMethod(1) { self, a -> jsCallMethod(self, "call", *a) } }
+val jsFunctionApplyMethod: JSMethod by lazy { JSMethod(2) { self, a -> jsCallMethod(self, "apply", *a) } }
+val jsFunctionBindMethod: JSMethod by lazy { JSMethod(1) { self, a -> jsCallMethod(self, "bind", *a) } }
+
 /** `value.constructor` of a typed object: its own member of that name, else its class. */
 private fun jsConstructorOf(target: Any): Any? = (if (target is JSDynamic) target.jsGet("constructor") else null) ?: when (target) {
-    is String, is Double, is Boolean, is JSArray<*>, is Function<*> -> null
+    is String -> jsStringConstructor
+    is Double -> jsNumberConstructor
+    is Boolean -> jsBooleanConstructor
+    is JSArray<*>, is Function<*> -> null
     else -> target.javaClass
 }
 
@@ -1217,6 +1240,9 @@ internal fun jsFunctionGet(f: Any, key: String): Any? {
     jsFunctionProperties(f, false)?.let { if (it.has(key)) return it.get(key, f) }
     // A declared function's reference (`::f`) carries its name; a lambda carries none.
     if (key == "name") return ((f as? JSFunction)?.original ?: f).let { (it as? kotlin.reflect.KCallable<*>)?.name }
+    if (key == "call") return jsFunctionCallMethod
+    if (key == "apply") return jsFunctionApplyMethod
+    if (key == "bind") return jsFunctionBindMethod
     if (key != "length") return null
     return when (f) {
         is JSFunction -> f.length.toDouble()

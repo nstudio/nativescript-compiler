@@ -50,6 +50,56 @@ fun jsLocaleCompare(a: String, b: String, locales: Any?, options: Any? = null): 
 }
 
 private fun withoutAccents(s: String): String = Normalizer.normalize(s, Normalizer.Form.NFD).replace(Regex("\\p{Mn}+"), "")
+private val punctuationRegex = Regex("\\p{P}+")
+
+/** `Intl.Collator`. */
+class JSCollator(locales: Any? = null, options: Any? = null) : JSDynamic {
+    private val requested: String = jsRequestedLocale(locales)
+    private val locale: String = if (jsIsEnUS(requested)) (if (requested.lowercase() == "en") "en" else "en-US") else requested
+    private val usage: String = stringOption(options, "usage", listOf("sort", "search"), "sort")!!
+    private val sensitivity: String = stringOption(options, "sensitivity", listOf("base", "accent", "case", "variant"), "variant")!!
+    private val caseFirst: String = stringOption(options, "caseFirst", listOf("upper", "lower", "false"), "false")!!
+    private val ignorePunctuation: Boolean = jsTruthy(option(options, "ignorePunctuation"))
+    private val numeric: Boolean = jsTruthy(option(options, "numeric"))
+    private val jLocale: Locale = if (jsBox(locales) == null) Locale.ENGLISH else Locale.forLanguageTag(requested)
+
+    /** `collator.compare(a, b)`. */
+    fun compare(a: String, b: String): Double {
+        val left = if (ignorePunctuation) a.replace(punctuationRegex, "") else a
+        val right = if (ignorePunctuation) b.replace(punctuationRegex, "") else b
+        val collator = Collator.getInstance(jLocale).apply {
+            decomposition = Collator.CANONICAL_DECOMPOSITION
+            strength = when (sensitivity) { "base", "case" -> Collator.PRIMARY; "accent" -> Collator.SECONDARY; else -> Collator.TERTIARY }
+        }
+        val withCase = Collator.getInstance(jLocale)
+        fun cmp(x: String, y: String): Int {
+            val r = collator.compare(x, y)
+            return if (r == 0 && sensitivity == "case") withCase.compare(withoutAccents(x), withoutAccents(y)) else r
+        }
+        val r = if (numeric) numericCompare(left, right, ::cmp) else cmp(left, right)
+        return if (r < 0) -1.0 else if (r > 0) 1.0 else 0.0
+    }
+
+    /** `collator.resolvedOptions()`. */
+    fun resolvedOptions(): JSObject = JSObject(
+        "locale" to locale,
+        "usage" to usage,
+        "sensitivity" to sensitivity,
+        "ignorePunctuation" to ignorePunctuation,
+        "collation" to "default",
+        "numeric" to numeric,
+        "caseFirst" to caseFirst,
+    )
+
+    override fun jsGet(key: String): Any? = when (key) {
+        "compare" -> jsFunction { args -> compare(jsToString(args.getOrNull(0)), jsToString(args.getOrNull(1))) }
+        "resolvedOptions" -> jsFunction { resolvedOptions() }
+        else -> null
+    }
+    override fun jsSet(key: String, value: Any?) {}
+    override val jsKeys: List<String> get() = emptyList()
+    override val jsClassName: String? get() = "Collator"
+}
 
 private val digitRuns = Regex("[0-9]+|[^0-9]+")
 
@@ -645,6 +695,7 @@ fun JSDate.toLocaleTimeString(locales: Any? = null, options: Any? = null): Strin
 /** The `Intl` object read as a value (`typeof Intl`, `Intl.DateTimeFormat` tested before use). */
 val jsIntl: JSObject by lazy {
     JSObject(
+        "Collator" to jsFunction { args -> JSCollator(args.getOrNull(0), args.getOrNull(1)) },
         "DateTimeFormat" to jsFunction { args -> JSDateTimeFormat(args.getOrNull(0), args.getOrNull(1)) },
         "NumberFormat" to jsFunction { args -> JSNumberFormat(args.getOrNull(0), args.getOrNull(1)) },
     )

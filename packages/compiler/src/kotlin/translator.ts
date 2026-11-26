@@ -23,7 +23,7 @@ import { callbackArity, hasModifier } from '../semantics/ast.ts';
 import { Throws, isStatic } from '../semantics/throws.ts';
 import { observers } from '../semantics/observers.ts';
 import { isLibGlobal } from '../semantics/globals.ts';
-import { programBase } from '../semantics/classes.ts';
+import { ClassExprRegistry, constClassExpr, programBase } from '../semantics/classes.ts';
 import { mixins, type Mixins } from './install.ts';
 import type { KotlinConfig, ShapeField, KotlinCore, KotlinNative, ComponentInfo, KotlinLibrary } from './translator-types.ts';
 export type { ComponentInfo, KotlinNative, KotlinLibrary, KotlinCore, KotlinConfig, CallParams, DynamicMembers, ShapeField } from './translator-types.ts';
@@ -107,6 +107,7 @@ export class Translator implements AsyncTranslator {
 	readonly patterns: Patterns;
 	/** Classes some class extends, by declaration (an import may rename them). */
 	extendedDecls = new Set<ts.Node>();
+	classExprs = new ClassExprRegistry();
 	/**
 	 * Parameters and fields Kotlin declares nullable where TypeScript's type is
 	 * not: plugin code checked without strictNullChecks passes null and
@@ -182,6 +183,8 @@ export class Translator implements AsyncTranslator {
 						this.extended.add(base.expression.text);
 						const d = this.resolve(base.expression)?.valueDeclaration;
 						if (d) this.extendedDecls.add(d);
+						const baseExpr = constClassExpr(base.expression, this.checker);
+						if (baseExpr) this.extendedDecls.add(baseExpr);
 					}
 					// `class Cache extends common.Cache`: a module's class read through its namespace import.
 					if (base && ts.isPropertyAccessExpression(base.expression)) {

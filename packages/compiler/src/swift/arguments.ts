@@ -114,7 +114,8 @@ export const argumentsMethods = {
 			const a = list[k];
 			if (restAt >= 0 && k >= restAt && appDeclared) {
 				// An app function's rest parameter is one array: the arguments packed, spreads included.
-				const rest = this.restType(params[restAt]);
+				const calleeParam = ts.isCallExpression(e) ? functionParts(this.typeOf(e.expression).replace(/^\((.*)\)[?!]$/, '$1'))?.params[restAt]?.replace(/^JSRest<(.*)>$/, 'JSArray<$1>') : undefined;
+				const rest = calleeParam && /^JSArray<.*>$/.test(calleeParam) ? calleeParam : this.restType(params[restAt]);
 				out.push(this.packed(list.slice(k), rest, this.restSlot(e, rest.replace(/^JSArray<(.*)>$/, '$1'), params[restAt].valueDeclaration)));
 				break;
 			}

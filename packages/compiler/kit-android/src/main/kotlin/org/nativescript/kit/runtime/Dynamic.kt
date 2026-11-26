@@ -255,17 +255,20 @@ private fun jsPacked(f: Any?, spread: Boolean, arity: Int): Any? =
     if (f is JSFunction && (f.packs || !spread)) f.original?.takeIf { it !is Function<*> || jsFunctionArity(it) == arity } ?: f else f
 @Suppress("UNCHECKED_CAST")
 fun <A, R> jsRestFunction1(f: Any?, spread: Boolean = true): (A) -> R = when (val g = jsPacked(f, spread, 1)) {
-    is JSFunction -> if (spread) { xs: Any? -> g(*(xs as JSArray<*>).storage.toTypedArray()) } else jsFunction1<A, R>(g)
+    is JSFunction -> if (spread) { xs: Any? -> g(*(if (xs is JSArray<*>) xs.storage.toTypedArray() else arrayOf(xs))) } else jsFunction1<A, R>(g)
+    is JSMethod -> if (spread) JSMethodRest1(g) else jsFunction1<A, R>(g)
     else -> jsFunction1<A, R>(g)
 } as (A) -> R
 @Suppress("UNCHECKED_CAST")
 fun <A, B, R> jsRestFunction2(f: Any?, spread: Boolean = true): (A, B) -> R = when (val g = jsPacked(f, spread, 2)) {
-    is JSFunction -> if (spread) { a: Any?, xs: Any? -> g(a, *(xs as JSArray<*>).storage.toTypedArray()) } else jsFunction2<A, B, R>(g)
+    is JSFunction -> if (spread) { a: Any?, xs: Any? -> g(a, *(if (xs is JSArray<*>) xs.storage.toTypedArray() else arrayOf(xs))) } else jsFunction2<A, B, R>(g)
+    is JSMethod -> if (spread) JSMethodRest2(g) else jsFunction2<A, B, R>(g)
     else -> jsFunction2<A, B, R>(g)
 } as (A, B) -> R
 @Suppress("UNCHECKED_CAST")
 fun <A, B, C, R> jsRestFunction3(f: Any?, spread: Boolean = true): (A, B, C) -> R = when (val g = jsPacked(f, spread, 3)) {
-    is JSFunction -> if (spread) { a: Any?, b: Any?, xs: Any? -> g(a, b, *(xs as JSArray<*>).storage.toTypedArray()) } else jsFunction3<A, B, C, R>(g)
+    is JSFunction -> if (spread) { a: Any?, b: Any?, xs: Any? -> g(a, b, *(if (xs is JSArray<*>) xs.storage.toTypedArray() else arrayOf(xs))) } else jsFunction3<A, B, C, R>(g)
+    is JSMethod -> if (spread) JSMethodRest3(g) else jsFunction3<A, B, C, R>(g)
     else -> jsFunction3<A, B, C, R>(g)
 } as (A, B, C) -> R
 
@@ -287,6 +290,18 @@ private class JSMethodAs1(override val method: JSMethod) : JSMethodHolder, (Any?
 
 private class JSMethodAs2(override val method: JSMethod) : JSMethodHolder, (Any?, Any?) -> Any? {
     override fun invoke(a: Any?, b: Any?): Any? = method.call(null, arrayOf(a, b))
+}
+
+private class JSMethodRest1(override val method: JSMethod) : JSMethodHolder, (Any?) -> Any? {
+    override fun invoke(xs: Any?): Any? = method.call(null, if (xs is JSArray<*>) xs.storage.toTypedArray() else arrayOf(xs))
+}
+
+private class JSMethodRest2(override val method: JSMethod) : JSMethodHolder, (Any?, Any?) -> Any? {
+    override fun invoke(a: Any?, xs: Any?): Any? = method.call(null, arrayOf(a, *(if (xs is JSArray<*>) xs.storage.toTypedArray() else arrayOf(xs))))
+}
+
+private class JSMethodRest3(override val method: JSMethod) : JSMethodHolder, (Any?, Any?, Any?) -> Any? {
+    override fun invoke(a: Any?, b: Any?, xs: Any?): Any? = method.call(null, arrayOf(a, b, *(if (xs is JSArray<*>) xs.storage.toTypedArray() else arrayOf(xs))))
 }
 
 /** `value` read by `read`, or null when it is undefined or null. */

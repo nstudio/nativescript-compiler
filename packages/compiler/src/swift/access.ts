@@ -9,7 +9,7 @@ import { ERRORS, TYPED_ARRAYS, isLibGlobal } from '../semantics/globals.ts';
 import { spell, escapingFunction, functionParts, hasTopLevelArrow, ident, identPath, isFunctionType, isOptional, openSwiftChain, optionalType, splitTopLevel, swiftString, RT, lenientReader } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { elementReceiverCell, keyName, observerSlot, place, receiverCell, receiverSlot, isEnumObject, nullishField, type ReceiverCell } from '../semantics/placement.ts';
-import { ambientAddedMemberOf, augmentedPropertyRead, uncheckedMatch, wellKnownMember, isSelf } from '../semantics/lang.ts';
+import { ambientAddedMemberOf, augmentedPropertyRead, functionProperty, uncheckedMatch, wellKnownMember, isSelf } from '../semantics/lang.ts';
 import { convertedRead, onlyNull } from '../semantics/states/predicates.ts';
 import { isLibDeclaration, isWriteTarget, notIterable } from '../semantics/ast.ts';
 import { isStatic } from '../semantics/throws.ts';
@@ -110,6 +110,8 @@ export const accessMethods = {
 		if (name === 'description' && this.typeOf(target) === 'JSSymbol') return `${this.expr(target)}.jsDescription`;
 		const declaredName = declaredClassName(e, this.checker);
 		if (declaredName !== null) return swiftString(declaredName);
+		const fnProp = functionProperty(e, this.checker);
+		if (fnProp) return fnProp.kind === 'length' ? `Double(${fnProp.value})` : swiftString(fnProp.value);
 		if (!this.library && !e.questionDotToken && heldClassName(e, this.checker)) return this.readConverts(e, (c) => this.fromAnyCode(c, this.typeOf(e), true), `${RT.jsField}(${this.expr(target)}, "name")`);
 		// `this.name` in a static member and `this.constructor.name` (library mode): the class's name, of the class the code runs for.
 		if (name === 'name' && this.library) {

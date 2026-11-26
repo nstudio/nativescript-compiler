@@ -603,6 +603,7 @@ export class Throws {
 
 	/** A tag is called as a function: through a function value it throws, else as its declaration does. */
 	private tagThrows(e: ts.TaggedTemplateExpression): boolean {
+		if (this.checker.getTypeAtLocation(e.tag).flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) return true;
 		const decl = this.checker.getResolvedSignature(e)?.getDeclaration();
 		if (!decl || ts.isJSDocSignature(decl) || decl.getSourceFile().isDeclarationFile) return !!decl && !decl.getSourceFile().isDeclarationFile;
 		if ((decl as Fn).body && !ts.isArrowFunction(decl) && !ts.isFunctionExpression(decl)) return this.fn(decl);

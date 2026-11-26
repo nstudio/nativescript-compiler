@@ -4,6 +4,7 @@ import { ident, isOptional, optionalType, splitTopLevel, swiftString, RT } from 
 import type { ClosingLoop, PendingReturn, Translator } from './translator.ts';
 import { iteratesCheckedResult, redeclaredBeside } from '../semantics/lang.ts';
 import { capturedIn, continuesTo, containsJump, notIterable } from '../semantics/ast.ts';
+import { isBuiltinIterable } from '../semantics/classes.ts';
 import { isKit, isUntyped, spelledType } from '../semantics/types.ts';
 
 export const loopsMethods = {
@@ -163,7 +164,7 @@ export const loopsMethods = {
 		if (t === 'JSMatch') return this.elementTypeOf(e) === 'String' && !this.unsetMatch(e) ? `${RT.jsIterator}(${code}.values.map { (s: String?) in s ?? "" })` : `${RT.jsIterator}(${code}.values)`;
 		if (isKit(spelledType(t), 'JSIterable')) return `${code}.jsIterator()`;
 		if (isUntyped(spelledType(t)) || t === 'Any') return `${called ? RT.jsCallSymbolIterator : RT.jsIteratorOf}(${code}${message ? `, ${swiftString(message)}` : ''})`;
-		if (/^JS(Array|Set|Map)</.test(t) || t === 'String') return `${RT.jsIterator}(${code})`;
+		if (isBuiltinIterable(t, e, this.checker)) return `${RT.jsIterator}(${code})`;
 		// A `[Symbol.iterator]()` giving other than an iterator class: its result checked as the class's `jsAnyIterator` checks it.
 		if (iteratesCheckedResult(e, this.checker, (m) => this.returnTypeOf(m))) return `JSIteratorAdapter<${this.elementTypeOf(e)}>(try ${code}.jsAnyIterator())`;
 		return `JSIteratorAdapter<${this.elementTypeOf(e)}>(${code}.jsSymbolIterator())`;

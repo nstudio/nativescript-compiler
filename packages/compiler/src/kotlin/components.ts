@@ -9,6 +9,7 @@ import { implementedInterfaces } from '../semantics/lang.ts';
 import { isCoreDeclaration } from '../program/core-facts.ts';
 import { isStatic } from '../semantics/throws.ts';
 import { isUntyped, spelledType } from '../semantics/types.ts';
+import { COLLECTION_OVERRIDE_METHODS, collectionBaseInfo } from '../semantics/classes.ts';
 
 export const componentMethods = {
 	/** A static field the module's statements initialize (`classDeclCode`'s statics): nullable until they run. */
@@ -258,6 +259,8 @@ export const componentMethods = {
 			for (const p of t.getProperties()) out.add(p.name);
 		};
 		for (const n of this.classPlan(cls).inherited) out.add(n);
+		const col = collectionBaseInfo(cls, c);
+		if (col) for (const n of COLLECTION_OVERRIDE_METHODS[col.kind]) out.add(n);
 		for (let b: ts.ClassLikeDeclaration | undefined = cls; b;) {
 			for (const i of b.heritageClauses?.find((h) => h.token === ts.SyntaxKind.ImplementsKeyword)?.types ?? []) addInterface(i);
 			for (const d of this.structural.get(b) ?? []) if (b !== cls || !implemented || implemented.includes(this.topName(d, d.name.text))) for (const m of d.members) if (m.name) out.add(m.name.getText());

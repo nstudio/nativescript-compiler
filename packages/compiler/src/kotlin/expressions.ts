@@ -333,7 +333,8 @@ export const expressionsMethods = {
 			const end = text.lastIndexOf('/');
 			return `${RT.jsRegExpLiteral}(${kotlinString(text.slice(1, end))}, ${kotlinString(text.slice(end + 1))})`;
 		}
-		throw this.error(e, 'expression', ts.isClassExpression(e) ? 'class-expression' : 'unhandled');
+		if (ts.isClassExpression(e)) return `${this.emitClassExprCode(e)}::class.java`;
+		throw this.error(e, 'expression', 'unhandled');
 	},
 
 	/** ``tag`a${x}b` ``: the tag called with the site's strings (cooked, and raw as `strings.raw`), then the values. */
@@ -342,6 +343,11 @@ export const expressionsMethods = {
 		if (isStringRaw(e.tag, this.checker)) return `(${raw.map((r, k) => kotlinString(r) + (k < values.length ? ` + ${this.str(values[k])}` : '')).join(' + ')})`;
 		const site = `__template${this.templateObjects.length}`;
 		this.templateObjects.push(`val ${site} = ${RT.jsTemplateObject}(listOf(${cooked.map(kotlinString).join(', ')}), listOf(${raw.map(kotlinString).join(', ')}))`);
+		if (this.isAny(e.tag)) {
+			const call = `${RT.jsCall}(${[this.expr(e.tag), site, ...values.map((v) => this.coerce(v, 'Any?'))].join(', ')})`;
+			const rt = this.typeOf(e);
+			return isUntyped(spelledType(rt)) || rt === 'Unit' ? call : this.fromAnyCode(call, rt, true);
+		}
 		const params = this.checker.getResolvedSignature(e)?.getParameters() ?? [];
 		const restAt = params.findIndex((p) => p.valueDeclaration && ts.isParameter(p.valueDeclaration) && !!p.valueDeclaration.dotDotDotToken);
 		const restType = () => this.typeOf((params[restAt].valueDeclaration as ts.ParameterDeclaration).name);

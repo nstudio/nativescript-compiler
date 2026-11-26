@@ -1,11 +1,11 @@
 // A class declaration's methods as Swift: computed and symbol-named methods, native setters, methods and their entries by name.
 import ts from 'typescript';
-import { ident, isFunctionType, metatype, optionalType, scriptLength, swiftString, RT } from './syntax.ts';
+import { ident, isFunctionType, metatype, optionalType, scriptLength, splitTopLevel, swiftString, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import type { ClassParts } from './class-declaration.ts';
 import { hasModifier, nonVirtualName } from '../semantics/ast.ts';
 import { isStatic } from '../semantics/throws.ts';
-import { programBase, uncheckedIteratorResult } from '../semantics/classes.ts';
+import { COLLECTION_OVERRIDE_METHODS, collectionBaseInfo, programBase, uncheckedIteratorResult } from '../semantics/classes.ts';
 import { namesMembersBySymbol } from '../semantics/read-sites.ts';
 import { fixedKey } from '../semantics/translator-methods.ts';
 import { isDisposerMember } from '../semantics/lang.ts';
@@ -174,6 +174,25 @@ export const classMethodsMethods = {
 			lines.push(this.kitOverride(m, kit, inherited.has(n)));
 			return;
 		}
+		// Over a runtime collection (`JSMap`/`JSSet`) open method: emit `override`, bridging through `kitOverride` if throwing or signature differs.
+		const colInfo = k.collection && !isStatic(m) ? collectionBaseInfo(cls, this.checker) : null;
+		const overridesCollection = !!colInfo && COLLECTION_OVERRIDE_METHODS[colInfo.kind].includes(n);
+		if (overridesCollection && (this.throwsInfo.fn(m) || (n === 'get' && !this.returnTypeOf(m).endsWith('?') && this.returnTypeOf(m) !== 'Any?'))) {
+			const inner = k.collection!.replace(/^JS(?:Map|Set)<(.*)>$/, '$1');
+			const [kType, vType] = colInfo.kind === 'Map' ? splitTopLevel(inner) : [inner, ''];
+			const colMember =
+				n === 'get'
+					? { kind: 'func' as const, static: false, params: `_ key: ${kType}`, type: optionalType(vType), throws: false }
+					: n === 'set'
+						? { kind: 'func' as const, static: false, params: `_ key: ${kType}, _ value: ${vType}`, type: k.collection!, throws: false }
+						: n === 'add'
+							? { kind: 'func' as const, static: false, params: `_ value: ${kType}`, type: k.collection!, throws: false }
+							: n === 'clear'
+								? { kind: 'func' as const, static: false, params: '', type: 'Void', throws: false }
+								: { kind: 'func' as const, static: false, params: `_ key: ${kType}`, type: 'Bool', throws: false };
+			lines.push(this.kitOverride(m, colMember, inherited.has(n)));
+			return;
+		}
 		// An override declaring fewer parameters than the method it overrides takes the rest unused, as Swift matches signatures.
 		const overridden = inherited.has(n) && !isStatic(m) ? this.inheritedMethod(cls, n) : undefined;
 		if (overridden)
@@ -190,9 +209,9 @@ export const classMethodsMethods = {
 				y = this.signatureOf(b).params;
 			return x.length === y.length && x.every((p, k) => p.type === y[k].type);
 		};
-		const modifiers = isStatic(m) ? (overriddenStatic && sameParams(m, overriddenStatic) ? 'override class ' : 'class ') : inherited.has(n) ? 'override ' : '';
+		const modifiers = isStatic(m) ? (overriddenStatic && sameParams(m, overriddenStatic) ? 'override class ' : 'class ') : inherited.has(n) || overridesCollection ? 'override ' : '';
 		lines.push('    ' + this.memberFunc(m, ident(n), modifiers, extra));
-		if (!isStatic(m) && !generic && this.nonVirtualEntry(m)) lines.push('    ' + this.memberFunc(m, ident(nonVirtualName(n, cls.name!.text)), 'final '));
+		if (!isStatic(m) && !generic && this.nonVirtualEntry(m)) lines.push('    ' + this.memberFunc(m, ident(nonVirtualName(n, cls.name?.text ?? k.name)), 'final '));
 		// A plugin's objects are read untyped too (`handler.attachToView(view)` on an `any`): their methods by name.
 		const restAt = m.parameters.findIndex((p) => p.dotDotDotToken);
 		if ((((this.pluginFiles.has(cls.getSourceFile().fileName) || this.appMembersByName || this.states.downcastClass(cls) || this.states.byNameClass(cls)) && this.states.byNameMember(cls, n)) || this.states.viewedMember(cls, n)) && !isStatic(m) && !ts.isPrivateIdentifier(m.name) && (restAt < 0 || restAt === m.parameters.length - 1) && !extra.length && !generic) {

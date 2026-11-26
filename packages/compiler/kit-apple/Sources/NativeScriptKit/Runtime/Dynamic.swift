@@ -143,7 +143,7 @@ private func callMethod(_ object: Any?, _ key: String, _ arguments: [Any?]) thro
         if let moot = f as? JSMootValue { throw moot.unavailable() }
         throw JSException(JSTypeError("\(jsInspect(raw)) is not a function"))
     }
-    if let f = flat as? JSFunctionObject, jsFlat(f[jsKey: key]) == nil {
+    if let f = flat as? JSFunctionObject, !f.hasOwn(key) {
         let this = arguments.first ?? nil
         switch key {
         case "call": return try f.call(this, Array(arguments.dropFirst()))

@@ -81,10 +81,9 @@ export const functionsMethods = {
 			.join(', ');
 	},
 
-	/** `this: void`, a `this` of no type, and any outside library mode: no parameter. */
+	/** `this: void` or an untyped `this` parameter: no parameter. */
 	voidThis(this: Translator, p: ts.ParameterDeclaration): boolean {
-		// A package's function declaring its `this` (a package's `function (this: SchedulerAction<T>)`) takes it, as core's do.
-		return (!this.library && !this.pluginFiles.has(p.getSourceFile().fileName)) || !p.type || p.type.kind === ts.SyntaxKind.VoidKeyword;
+		return !p.type || p.type.kind === ts.SyntaxKind.VoidKeyword;
 	},
 
 	/**
@@ -329,6 +328,12 @@ export const functionsMethods = {
 			const names = fn.parameters.map((p) => ident((p.name as ts.Identifier).text));
 			const extra = (slotParts?.params ?? []).slice(fn.parameters.length).map((t, k) => `__u${fn.parameters.length + k}: ${t}`);
 			return `fun(${[this.params(fn, true), ...extra].filter(Boolean).join(', ')}) { (${this.closure(fn)})(${names.join(', ')}) }`;
+		}
+		if (ts.isFunctionExpression(fn) && this.readsArguments(fn) && slotParts && contextual && contextual.getDeclaration() !== fn) {
+			const names = slotParts.params.map((_, k) => `__a${k}`);
+			const inner = this.closure(fn);
+			const call = `__f(${RT.jsArrayOf}<Any?>(${names.join(', ')}))`;
+			return `run { val __f = ${inner}; fun(${names.map((n, k) => `${n}: ${slotParts.params[k]}`).join(', ')})${slotParts.ret === 'Unit' ? ` { ${call} }` : `: ${slotParts.ret} = ${call}`} }`;
 		}
 		// A slot taking the arguments as a rest (`callback: (...args: any[]) => void`) given a function of separate parameters: each read from the rest.
 		const restAt = contextual?.getParameters().findIndex((p) => !!p.valueDeclaration && ts.isParameter(p.valueDeclaration) && !!p.valueDeclaration.dotDotDotToken) ?? -1;

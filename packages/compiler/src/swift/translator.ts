@@ -21,7 +21,7 @@ import { unsetGroupTyping, type UnsetGroupTyping } from '../semantics/regexp.ts'
 import { strictFile, type TrustScope } from '../semantics/trust.ts';
 import { ValueStates } from '../semantics/states/value-states.ts';
 import { hasModifier, thisNodes, isWriteTarget } from '../semantics/ast.ts';
-import { programBase } from '../semantics/classes.ts';
+import { ClassExprRegistry, constClassExpr, programBase } from '../semantics/classes.ts';
 import { SwiftMarks } from './marks.ts';
 import { LIB_CONSTANT_PATHS } from './library.ts';
 import { observers } from '../semantics/observers.ts';
@@ -84,6 +84,7 @@ export class Translator implements AsyncTranslator {
 	extended = new Set<string>();
 	/** Classes some class extends, by declaration (an import may rename them). */
 	extendedDecls = new Set<ts.Node>();
+	classExprs = new ClassExprRegistry();
 	/** Interfaces an app class implements: Swift protocols, with a class for their object literals. */
 	protocols = new Set<string>();
 	/** Interfaces an app class meets without naming them, where its objects are given for one (`assertMeasure(button)`): conformed to as if implemented. */
@@ -232,6 +233,8 @@ export class Translator implements AsyncTranslator {
 						this.extended.add(base.expression.text);
 						const d = this.resolve(base.expression)?.valueDeclaration;
 						if (d) this.extendedDecls.add(d);
+						const ce = constClassExpr(base.expression, this.checker);
+						if (ce) this.extendedDecls.add(ce);
 					}
 					for (const i of implementedInterfaces(this.checker, n)) this.protocols.add(this.heritageName(i));
 				}

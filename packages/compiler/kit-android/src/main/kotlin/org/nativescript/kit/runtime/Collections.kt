@@ -204,7 +204,7 @@ private fun <K> jsNormalizedKey(key: K): K {
 
 /** A JavaScript `Map`: insertion-ordered, reference semantics, SameValueZero keys. */
 @Suppress("UNCHECKED_CAST")
-class JSMap<K, V>() : Iterable<Pair<K, V>>, JSReactiveConvertible {
+open class JSMap<K, V>() : Iterable<Pair<K, V>>, JSReactiveConvertible {
     private val table = JSOrderedTable(withValues = true)
     var jsTracker: JSTracker? = null
 
@@ -212,7 +212,7 @@ class JSMap<K, V>() : Iterable<Pair<K, V>>, JSReactiveConvertible {
         for ((k, v) in entries) set(k, v)
     }
 
-    fun get(key: K): V? {
+    open fun get(key: K): V? {
         val tracker = jsTracker
         val e = table.find(key)
         if (tracker == null) return if (e < 0) null else table.value(e) as V
@@ -222,7 +222,7 @@ class JSMap<K, V>() : Iterable<Pair<K, V>>, JSReactiveConvertible {
         return v
     }
 
-    fun set(key: K, value: V): JSMap<K, V> {
+    open fun set(key: K, value: V): JSMap<K, V> {
         val e = table.find(key)
         if (e >= 0) {
             if (jsSameValue(table.value(e), value)) return this
@@ -232,18 +232,18 @@ class JSMap<K, V>() : Iterable<Pair<K, V>>, JSReactiveConvertible {
         return this
     }
 
-    fun has(key: K): Boolean {
+    open fun has(key: K): Boolean {
         jsTracker?.track()
         return table.find(key) >= 0
     }
 
-    fun delete(key: K): Boolean {
+    open fun delete(key: K): Boolean {
         val removed = table.remove(key)
         if (removed) jsTracker?.trigger()
         return removed
     }
 
-    fun clear() {
+    open fun clear() {
         if (table.live == 0) return
         table.removeAll()
         jsTracker?.trigger()
@@ -297,7 +297,7 @@ class JSMap<K, V>() : Iterable<Pair<K, V>>, JSReactiveConvertible {
 
 /** A JavaScript `Set`: insertion-ordered, reference semantics, SameValueZero values. */
 @Suppress("UNCHECKED_CAST")
-class JSSet<T>() : Iterable<T>, JSReactiveConvertible {
+open class JSSet<T>() : Iterable<T>, JSReactiveConvertible {
     private val table = JSOrderedTable(withValues = false)
     var jsTracker: JSTracker? = null
 
@@ -305,25 +305,25 @@ class JSSet<T>() : Iterable<T>, JSReactiveConvertible {
         for (v in values) add(v)
     }
 
-    fun add(value: T): JSSet<T> {
+    open fun add(value: T): JSSet<T> {
         if (table.find(value) >= 0) return this
         table.append(jsNormalizedKey(value), null)
         jsTracker?.trigger()
         return this
     }
 
-    fun has(value: T): Boolean {
+    open fun has(value: T): Boolean {
         jsTracker?.track()
         return table.find(value) >= 0
     }
 
-    fun delete(value: T): Boolean {
+    open fun delete(value: T): Boolean {
         val removed = table.remove(value)
         if (removed) jsTracker?.trigger()
         return removed
     }
 
-    fun clear() {
+    open fun clear() {
         if (table.live == 0) return
         table.removeAll()
         jsTracker?.trigger()

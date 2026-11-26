@@ -10,18 +10,19 @@ import { implementedInterfaces, initializedNull } from '../semantics/lang.ts';
 import { hasModifier } from '../semantics/ast.ts';
 import { isStatic } from '../semantics/throws.ts';
 import { isCoreDeclaration, isShimDeclaration } from '../program/core-facts.ts';
-import { programBase } from '../semantics/classes.ts';
+import { classExprCaptures, classExprScriptName, programBase } from '../semantics/classes.ts';
 import type { ClassPlan } from '../semantics/class-plan.ts';
 
 /** What a class declaration's steps share: its facts, computed once, and the parts each step adds to. */
 export interface ClassParts {
-	readonly cls: ts.ClassDeclaration;
+	readonly cls: ts.ClassLikeDeclaration;
 	readonly name: string;
 	readonly layout: ClassPlan;
 	readonly plugin: boolean;
 	readonly appBase: ts.ClassLikeDeclaration | undefined;
 	readonly base: string | null;
 	readonly kitRoot: string | null;
+	readonly collection: string | null;
 	readonly isError: boolean;
 	readonly isView: boolean;
 	readonly abstract: boolean;
@@ -51,14 +52,38 @@ export interface ClassParts {
 }
 
 export const classDeclMethods = {
-	classDeclCode(this: Translator, cls: ts.ClassDeclaration): string {
+	emitClassExprCode(this: Translator, cls: ts.ClassExpression): string {
+		if (classExprCaptures(cls, this.checker)) throw this.error(cls, 'class expression capturing outer locals', 'class-expression');
+		const name = this.classExprs.name(cls);
+		if (!this.classExprs.emitted.has(cls)) {
+			this.classExprs.emitted.add(cls);
+			const prevIndent = this.indent;
+			const prevInits = this.staticInits;
+			this.indent = '';
+			this.staticInits = [];
+			let addedInits: string[];
+			try {
+				this.hoisted.push(this.classDeclCode(cls, name));
+			} finally {
+				addedInits = this.staticInits;
+				this.staticInits = prevInits;
+				this.indent = prevIndent;
+			}
+			if (prevInits && addedInits.length) prevInits.push(...addedInits);
+		}
+		return name;
+	},
+
+	classDeclCode(this: Translator, cls: ts.ClassLikeDeclaration, explicitName?: string): string {
 		// '' where the class is declared in a file of its own package.
-		const nativeSubclass = this.native?.classDecl(cls);
-		if (nativeSubclass != null) return nativeSubclass;
+		if (ts.isClassDeclaration(cls)) {
+			const nativeSubclass = this.native?.classDecl(cls);
+			if (nativeSubclass != null) return nativeSubclass;
+		}
 		// A namespace's class is declared in its object, by its own name.
-		const name = ts.isModuleBlock(cls.parent) ? ident(cls.name!.text) : this.className(cls);
-		if (this.framework.hooks.serviceClass && this.framework.classRole(cls, this.pluginFiles) === 'service') return this.framework.hooks.serviceClass(this, cls, name);
-		if (!this.library && this.collectionAlias(cls)) {
+		const name = explicitName ?? (ts.isModuleBlock(cls.parent) ? ident(cls.name!.text) : this.className(cls));
+		if (ts.isClassDeclaration(cls) && this.framework.hooks.serviceClass && this.framework.classRole(cls, this.pluginFiles) === 'service') return this.framework.hooks.serviceClass(this, cls, name);
+		if (ts.isClassDeclaration(cls) && !this.library && this.collectionAlias(cls)) {
 			this.indent = '    ';
 			const statics = cls.members.filter((m): m is ts.MethodDeclaration => ts.isMethodDeclaration(m) && isStatic(m) && !!m.body).map((m) => '    ' + this.func(m, ident(m.name.getText())));
 			this.indent = '';
@@ -92,7 +117,7 @@ export const classDeclMethods = {
 		return this.closeClassCode(k);
 	},
 
-	classPartsCode(this: Translator, cls: ts.ClassDeclaration, name: string): ClassParts {
+	classPartsCode(this: Translator, cls: ts.ClassLikeDeclaration, name: string): ClassParts {
 		const c = this.checker;
 		const plugin = this.pluginFiles.has(cls.getSourceFile().fileName);
 		const layout = this.classPlan(cls);
@@ -101,6 +126,7 @@ export const classDeclMethods = {
 		const appBase = layout.base;
 		// A core class the class extends (directly or through the app's and plugins' classes): kit-android's class of that name.
 		const kitRoot = this.kitRootOf(cls);
+		const collection = this.collectionSuperType(cls);
 		let base: string | null = null;
 		if (heritage) {
 			const baseName = heritage.expression.getText();
@@ -114,14 +140,15 @@ export const classDeclMethods = {
 				}
 			} else if (kitRoot && (isCoreDeclaration(baseDecl as ts.Declaration) || isShimDeclaration(baseDecl as ts.Declaration))) base = kitRoot;
 			else if (ERRORS[baseName]) base = ERRORS[baseName];
+			else if (collection) base = collection;
 			else throw this.error(heritage, `extending ${baseName}`, 'unsupported-base');
 		}
-		const isError = !!base && !appBase && !kitRoot;
+		const isError = Boolean(base && !appBase && !kitRoot && !collection);
 		const isView = !!kitRoot && !!this.core?.isKitView(kitRoot);
 		const abstract = hasModifier(cls, ts.SyntaxKind.AbstractKeyword) || (!!this.library && this.leavesAbstract(cls));
 		// Library mode: a class core exports is one an app may extend (`class Card extends StackLayout`).
 		const exported = !!this.library && hasModifier(cls, ts.SyntaxKind.ExportKeyword);
-		const open = this.extended.has(cls.name!.text) || this.extendedDecls.has(cls) || abstract || this.literalClasses().has(cls) || exported;
+		const open = (cls.name ? this.extended.has(cls.name.text) : false) || this.extendedDecls.has(cls) || abstract || (ts.isClassDeclaration(cls) && this.literalClasses().has(cls)) || exported;
 		// The library's interfaces (`Iterable<T>`, `Iterator<T>`) are interfaces of the kit's, implemented below.
 		const witnesses: string[] = [];
 		const notOverrides = new Set<string>();
@@ -135,7 +162,7 @@ export const classDeclMethods = {
 		// An app's class does where script gives its instances members it doesn't declare.
 		const expando = (!!this.library || this.keepsAdded(cls)) && !base;
 		if (expando) supertypes.push('JSExpando');
-		else if (!base && !implemented.length) supertypes.push('JSDynamic');
+		else if ((!base || (collection && !appBase)) && !implemented.length) supertypes.push('JSDynamic');
 		const overridden = this.overridden(cls, implemented);
 		// Library mode: a field script leaves untyped (`object` of an event's class) where an interface it implements types it: the interface's type.
 		const interfaceFields = new Map<string, string>();
@@ -154,8 +181,8 @@ export const classDeclMethods = {
 		const memberOpen = open ? 'open ' : '';
 		// An app class extending the generated kit's (a page's view model, a custom view): read by name as core reads it (bindings, the Builder).
 		const byName = !this.library && ((this.generatedKit && !!kitRoot) || this.appMembersByName);
-		const literalMade = this.literalMade(cls);
-		return { cls, name, layout, plugin, appBase, base, kitRoot, isError, isView, abstract, open, memberOpen, expando, witnesses, overridden, interfaceFields, byName, literalMade, supertypes, lines: [], statics: [], fields: [], narrowedParams: new Map(), initsAfterParamProps: [], symbolFields: [], symbolKeyInits: [], symKeyCount: 0, fieldStarts: [], dynAccessors: [], dynMethods: [] };
+		const literalMade = ts.isClassDeclaration(cls) && this.literalMade(cls);
+		return { cls, name, layout, plugin, appBase, base, kitRoot, collection, isError, isView, abstract, open, memberOpen, expando, witnesses, overridden, interfaceFields, byName, literalMade, supertypes, lines: [], statics: [], fields: [], narrowedParams: new Map(), initsAfterParamProps: [], symbolFields: [], symbolKeyInits: [], symKeyCount: 0, fieldStarts: [], dynAccessors: [], dynMethods: [] };
 	},
 
 	/** Evaluates a non-fixed computed symbol key once at class definition time into a companion property. */
@@ -186,7 +213,7 @@ export const classDeclMethods = {
 		const cssType = (ts.getDecorators(cls) ?? []).map((d) => d.expression).find((e): e is ts.CallExpression => ts.isCallExpression(e) && e.expression.getText() === 'CSSType');
 		if (isView && this.generatedKit && !cssType) lines.push('    override var cssType: String', '        get() = (JSPrototypes.value(javaClass, "cssType", this) as? String)?.lowercase() ?: super.cssType', '        set(value) { super.cssType = value }');
 		if (isView && (!this.generatedKit || cssType)) {
-			const typeName = cssType && ts.isStringLiteralLike(cssType.arguments[0]) ? cssType.arguments[0].text : cls.name!.text;
+			const typeName = cssType && ts.isStringLiteralLike(cssType.arguments[0]) ? cssType.arguments[0].text : (cls.name?.text ?? k.name);
 			// The generated kit's `cssType` is core's settable accessor.
 			lines.push(this.generatedKit ? `    override var cssType: String\n        get() = ${kotlinString(typeName)}\n        set(@Suppress("UNUSED_PARAMETER") value) {}` : `    override val cssType: String get() = ${kotlinString(typeName)}`);
 		}
@@ -285,7 +312,7 @@ export const classDeclMethods = {
 		if (!isError && this.states.declaresUnset(cls)) lines.push('    var jsUnset: MutableSet<String>? = null');
 		const definable = isError ? [] : definedNamesOf(cls, this.states, this.shapeFacts()).filter((n) => fields.some((f) => f.name === n));
 		if (!isError) {
-			lines.push(...this.dynamicMembers(memberPlanOf(cls, this.states, this.shapeFacts()), { fields, className: this.scriptClassName(cls) ?? name, inherits: !!appBase || !!kitRoot, symbols: symbolFields, methods: dynMethods, accessors: dynAccessors, superclass: base?.replace(/<.*$/, ''), receiver: this.states.byNameClass(cls) ? name.replace(/<.*$/, '') : undefined, keyIndex: ts.isSourceFile(cls.parent) || ts.isModuleBlock(cls.parent) }));
+			lines.push(...this.dynamicMembers(memberPlanOf(cls, this.states, this.shapeFacts()), { fields, className: ts.isClassExpression(cls) ? classExprScriptName(cls) : (this.scriptClassName(cls) ?? name), inherits: !!appBase || !!kitRoot, symbols: symbolFields, methods: dynMethods, accessors: dynAccessors, superclass: base?.replace(/<.*$/, ''), receiver: this.states.byNameClass(cls) ? name.replace(/<.*$/, '') : undefined, keyIndex: ts.isSourceFile(cls.parent) || ts.isModuleBlock(cls.parent) }));
 		}
 		// An error's own fields by name, after JSError's `name`/`message`/`stack`; what script adds to it comes after the fields, and it prints as an error, not as `Name { … }`.
 		else
@@ -329,7 +356,7 @@ export const classDeclMethods = {
 
 	closeClassCode(this: Translator, k: ClassParts): string {
 		const { cls, name, base, abstract, open, supertypes, lines, statics } = k;
-		const extras = this.framework.hooks.classExtras?.(this, cls, name, lines.join('\n'));
+		const extras = ts.isClassDeclaration(cls) ? this.framework.hooks.classExtras?.(this, cls, name, lines.join('\n')) : undefined;
 		statics.push(...(extras?.members ?? []));
 		if (statics.length) lines.push(`    companion object${extras?.companionSupertype ? ` : ${extras.companionSupertype}` : ''} {`, ...statics, '    }');
 		this.indent = '';

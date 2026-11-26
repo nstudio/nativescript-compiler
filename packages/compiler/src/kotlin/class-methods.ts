@@ -86,7 +86,7 @@ export const classMethodsMethods = {
 			lines.push(this.kitOverride(m, kit));
 			return;
 		}
-		if (this.nonVirtualEntry(m)) lines.push('    ' + this.func(m, ident(nonVirtualName(n, cls.name!.text))));
+		if (this.nonVirtualEntry(m)) lines.push('    ' + this.func(m, ident(nonVirtualName(n, cls.name?.text ?? k.name))));
 		// An override whose parameters TypeScript types more narrowly than the method it overrides: the base's Kotlin signature.
 		// The signature Kotlin has is the topmost declaration's: each override in between takes it too.
 		let base = inherited.has(n) ? this.inheritedMethod(cls, n) : undefined;

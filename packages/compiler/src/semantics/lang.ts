@@ -6,7 +6,7 @@ export { unsafeReceiver, uncheckedMatch, leadingNeverRead, redeclaredBeside, thi
 export type { ThisArgUse } from './lang/this-args.ts';
 export { isAmbientClass, ambientBase, ambientAddedMemberOf, implementedInterfaces, runtimeTypeName, mergedInterfaceMemberOf, augmentedPropertyRead, optionalBodilessMethod, undeclaredMemberOf, classesHeldUntyped, hasStatic, admitsUndefined, assertedOperand, undefinedLiteral, onlyUndefined, resultsAreUndefinedElements, implementedInterfaceDeclarations, accessedDeclaration, memberOwner, namesOwnTypeParameter } from './lang/members.ts';
 export { slotType, nullSetFields, initializedNull, assignedValues, definitelyAssignedFields, containsThis, alwaysThrows, alwaysEnds, statementLevel } from './lang/fields.ts';
-export { readWrite, compoundOperator, asOperation, assignmentOf, globalProxyUse, builtinPrototypeAlias, aliasedPrototypeMember, tokenClassBase, isArguments, isConstant, isSelf, objectMethod, literalMethod, prototypeAlias, methodValues } from './lang/prototypes.ts';
+export { readWrite, compoundOperator, asOperation, assignmentOf, globalProxyUse, builtinPrototypeAlias, aliasedPrototypeMember, tokenClassBase, isArguments, escapesArguments, canReadArguments, functionProperty, isConstant, isSelf, objectMethod, literalMethod, prototypeAlias, methodValues } from './lang/prototypes.ts';
 export type { ReadWrite } from './lang/prototypes.ts';
 
 // JavaScript semantics both translators share, decided from the syntax tree and the checker.
@@ -17,7 +17,7 @@ export function nullableTypeNode(t: ts.TypeNode | undefined): boolean {
 }
 
 /** The `Intl` constructors both runtimes have, each with the members its instances have. */
-export const INTL_MODELLED = { NumberFormat: ['format', 'resolvedOptions'], DateTimeFormat: ['format', 'resolvedOptions'] } as const satisfies Record<string, readonly string[]>;
+export const INTL_MODELLED = { NumberFormat: ['format', 'resolvedOptions'], DateTimeFormat: ['format', 'resolvedOptions'], Collator: ['compare', 'resolvedOptions'] } as const satisfies Record<string, readonly string[]>;
 
 /** `Intl.NumberFormat` or `Intl.DateTimeFormat`, as the library declares `Intl`: which one. */
 export function intlConstructor(e: ts.Expression, checker: ts.TypeChecker): keyof typeof INTL_MODELLED | null {

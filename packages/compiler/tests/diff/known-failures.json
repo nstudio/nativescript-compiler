@@ -6,26 +6,6 @@
 			"cause": "Core's own code reads an untyped value where it declares a number with the lenient cell (`jsLenientNumber`), which gives NaN for a Symbol, unless the function around it already throws by the throws analysis's count; the analysis does not count library conversions (no kit signature changes), so a `try` around such a call is dropped. Swift failed-read decision O3 (VM3).",
 			"signature": "line 3: node \"size threw true Cannot convert a Symbol value to a number\" native \"size: NaN\""
 		},
-		"1522-wtf-constructor-property": {
-			"owner": "Swift runtime",
-			"cause": "A string's `constructor` is not String.",
-			"signature": "line 1: node \"c[c] true true\" native \"c[c] false false\""
-		},
-		"1525-wtf-untyped-tag": {
-			"owner": "Swift translator",
-			"cause": "A tagged template whose tag is held untyped is emitted as a call of an `Any?`.",
-			"signature": "cannot call value of non-function type 'Any?'"
-		},
-		"1526-function-length-name": {
-			"owner": "Swift translator",
-			"cause": "A function's `length` and `name` are not translated.",
-			"signature": "value of type '(Any?, Any?, JSArray<Any?>) -> Double' has no member 'length'"
-		},
-		"1527-this-parameter-call": {
-			"owner": "Swift translator",
-			"cause": "apply on a function declaring a `this` parameter passes its argument array unconverted.",
-			"signature": "cannot convert value of type 'JSArray<Any?>' to expected argument type 'JSArray<Double>'"
-		},
 		"1528-class-prototype-object": {
 			"owner": "Swift translator",
 			"cause": "A class's `prototype` read does not compile.",
@@ -36,25 +16,10 @@
 			"cause": "`new` on a function expression held untyped throws TypeError instead of constructing an object.",
 			"signature": "line 1: node \"new function ctor { a: 1 }\" native \"new function TypeError\""
 		},
-		"1561-wtf-class-field-semicolons": {
-			"owner": "Swift translator",
-			"cause": "A class field with a computed literal key (`['array'] = …`) is named by its source text.",
-			"signature": "line 1: node \"new SomeClass().array str [ 'array' ] str\" native \"new SomeClass().array undefined [ \\\"['array']\\\" ] str\""
-		},
 		"1566-wtf-proto-chain": {
 			"owner": "Swift translator",
 			"cause": "`__proto__` read through an untyped value is neither refused (proto) nor followed: it reads undefined.",
 			"signature": "line 1: node \"(1).__proto__.__proto__.__proto__ null\" native \"\""
-		},
-		"1567-wtf-call-call": {
-			"owner": "Swift runtime",
-			"cause": "`call` read from a function held untyped is undefined.",
-			"signature": "line 1: node \"log.call.call.call.call.call.apply 2\" native \"\""
-		},
-		"1573-wtf-regexp-addition": {
-			"owner": "Swift translator",
-			"cause": "`RegExp` read as a value (RegExp.prototype) is neither refused (builtin-prototype) nor emitted.",
-			"signature": "cannot find 'RegExp' in scope"
 		},
 		"1836-detached-method-receiver": {
 			"owner": "Swift translator",
@@ -85,34 +50,9 @@
 			"owner": "Swift runtime",
 			"cause": "Limit: a match that starts or ends inside a surrogate pair, or an input holding a lone surrogate, gives a lone surrogate, which a Swift string cannot hold: it becomes U+FFFD.",
 			"signature": "line 1: node \"/[😀]/g => 0:\\\"\\\\ud83d\\\" 1:\\\"\\\\ude00\\\"\" native \"/[😀]/g => 0:\\\"�\\\" 1:\\\"�\\\"\""
-		},
-		"1881-null-prototype-inspect": {
-			"owner": "Swift runtime",
-			"cause": "jsInspect prints an object made by `Object.create(null)` as a plain object, without Node's `[Object: null prototype]` tag.",
-			"signature": "line 1: node \"[Object: null prototype] {}\" native \"{}\""
 		}
 	},
 	"kotlin": {
-		"1522-wtf-constructor-property": {
-			"owner": "Kotlin runtime",
-			"cause": "A string's `constructor` is not String.",
-			"signature": "line 1: node \"c[c] true true\" native \"c[c] false false\""
-		},
-		"1525-wtf-untyped-tag": {
-			"owner": "Kotlin translator",
-			"cause": "A tagged template whose tag is held untyped is emitted as a call of a name it does not declare.",
-			"signature": "unresolved reference 'tag'"
-		},
-		"1526-function-length-name": {
-			"owner": "Kotlin translator",
-			"cause": "A function's `length` and `name` are not translated.",
-			"signature": "unresolved reference 'length'"
-		},
-		"1527-this-parameter-call": {
-			"owner": "Kotlin translator",
-			"cause": "A function declaring a `this` parameter reads `this` where its Kotlin function has none.",
-			"signature": "'this' is not defined in this context"
-		},
 		"1528-class-prototype-object": {
 			"owner": "Kotlin runtime",
 			"cause": "Object.getPrototypeOf of a derived class is not its base, and a method read from a class's prototype is undefined.",
@@ -123,30 +63,10 @@
 			"cause": "`new` on a function expression held untyped throws TypeError instead of constructing an object.",
 			"signature": "line 1: node \"new function ctor { a: 1 }\" native \"new function TypeError\""
 		},
-		"1561-wtf-class-field-semicolons": {
-			"owner": "Kotlin translator",
-			"cause": "A class field with a computed literal key (`['array'] = …`) is named by its source text.",
-			"signature": "line 1: node \"new SomeClass().array str [ 'array' ] str\" native \"new SomeClass().array undefined [ \\\"['array']\\\" ] str\""
-		},
 		"1566-wtf-proto-chain": {
 			"owner": "Kotlin translator",
 			"cause": "`__proto__` read through an untyped value is neither refused (proto) nor followed: it reads undefined.",
 			"signature": "line 1: node \"(1).__proto__.__proto__.__proto__ null\" native \"\""
-		},
-		"1567-wtf-call-call": {
-			"owner": "Kotlin runtime",
-			"cause": "`call` read from a function held untyped is undefined.",
-			"signature": "line 1: node \"log.call.call.call.call.call.apply 2\" native \"\""
-		},
-		"1573-wtf-regexp-addition": {
-			"owner": "Kotlin translator",
-			"cause": "`RegExp` read as a value (RegExp.prototype) is neither refused (builtin-prototype) nor emitted.",
-			"signature": "unresolved reference 'RegExp'"
-		},
-		"1578-wtf-call-call-typed": {
-			"owner": "Kotlin runtime",
-			"cause": "Function.prototype.call called through call: undefined is not a function.",
-			"signature": "line 1: node \"Function.prototype.call.call 7\" native \"\""
 		},
 		"1836-detached-method-receiver": {
 			"owner": "Kotlin translator",

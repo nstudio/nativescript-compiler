@@ -301,7 +301,11 @@ export const placementMethods = {
 				return bare.operatorToken.kind === ts.SyntaxKind.BarBarToken ? `run { val ${v}: Any? = ${l}; if (${RT.jsTruthy}(${v})) ${v} else ${r} }` : `run { val ${v}: Any? = ${l}; if (${RT.jsTruthy}(${v})) ${r} else ${v} }`;
 			}
 			// A function reading `arguments`, held untyped: called as script calls it, with however many arguments.
-			if (this.library && (ts.isArrowFunction(bare) || ts.isFunctionExpression(bare)) && this.readsArguments(bare)) return `run { val __f = ${this.expr(bare)}; JSMethod { _, __a -> __f(${RT.jsArrayOf}<Any?>(*__a)) } }`;
+			if ((ts.isArrowFunction(bare) || ts.isFunctionExpression(bare)) && this.readsArguments(bare)) {
+				const ret = this.returnTypeOf(bare);
+				const call = `__f(${RT.jsArrayOf}<Any?>(*__a))`;
+				return `run { val __f = ${this.expr(bare)}; JSMethod { _, __a -> ${ret === 'Unit' ? `${call}; null` : call} } }`;
+			}
 			// A function of a rest parameter held untyped (`(...args) => {}`): called with however many arguments, the rest packed.
 			if (this.library && (ts.isArrowFunction(bare) || ts.isFunctionExpression(bare)) && bare.parameters.at(-1)?.dotDotDotToken && !bare.parameters.some((q) => isThisParameter(q) || !ts.isIdentifier(q.name))) {
 				const types = bare.parameters.map((q) => this.paramType(q));

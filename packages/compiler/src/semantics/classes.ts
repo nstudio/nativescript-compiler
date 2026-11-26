@@ -2,7 +2,7 @@
 import ts from 'typescript';
 import { ERRORS } from './globals.ts';
 import { isStatic } from './throws.ts';
-import { hasModifier, isWriteTarget } from './ast.ts';
+import { hasModifier, isLibDeclaration, isWriteTarget } from './ast.ts';
 import { literalKey, optionalBodilessMethod } from './lang.ts';
 import type { StateBackend } from './states/value-states.ts';
 
@@ -415,4 +415,139 @@ export function heldClassName(e: ts.PropertyAccessExpression, checker: ts.TypeCh
 
 function staticName(cls: ts.ClassLikeDeclaration, checker: ts.TypeChecker): boolean {
 	return cls.members.some((m) => isStatic(m) && !!m.name && !ts.isComputedPropertyName(m.name) && literalKey(m.name, checker) === 'name');
+}
+
+/** Collection base methods that runtime `JSMap`/`JSSet` declare `open` so subclasses may override them. */
+export const COLLECTION_OVERRIDE_METHODS: Readonly<Record<'Map' | 'Set' | 'Array', readonly string[]>> = {
+	Map: ['get', 'set', 'has', 'delete', 'clear'],
+	Set: ['add', 'has', 'delete', 'clear'],
+	Array: [],
+};
+
+/** Built-in collection (`Map`, `Set`, `Array`) a class extends directly or through another program class; null otherwise. */
+export function collectionBaseInfo(cls: ts.ClassLikeDeclaration, checker: ts.TypeChecker): { kind: 'Map' | 'Set' | 'Array'; typeArgs: readonly ts.TypeNode[] } | null {
+	const heritage = cls.heritageClauses?.find((h) => h.token === ts.SyntaxKind.ExtendsKeyword)?.types[0];
+	if (!heritage) return null;
+	const sym = checker.getSymbolAtLocation(heritage.expression);
+	if (ts.isIdentifier(heritage.expression) && (heritage.expression.text === 'Map' || heritage.expression.text === 'Set' || heritage.expression.text === 'Array') && isLibDeclaration(sym?.declarations?.[0])) {
+		return { kind: heritage.expression.text, typeArgs: heritage.typeArguments ?? [] };
+	}
+	const decl = checker.getTypeAtLocation(heritage.expression).getSymbol()?.valueDeclaration;
+	return decl && ts.isClassLike(decl) && !decl.getSourceFile().isDeclarationFile ? collectionBaseInfo(decl, checker) : null;
+}
+
+/** Instantiated collection base (`Map<K, V>`, `Set<T>`, `Array<T>`) of a type whose class extends a built-in collection. */
+export function instantiatedCollectionBase(type: ts.Type, checker: ts.TypeChecker): { kind: 'Map' | 'Set' | 'Array'; typeArgs: ts.Type[] } | null {
+	const t = checker.getNonNullableType(type);
+	const decl = t.getSymbol()?.valueDeclaration;
+	if (!decl || !ts.isClassLike(decl) || decl.getSourceFile().isDeclarationFile) return null;
+	const info = collectionBaseInfo(decl, checker);
+	if (!info) return null;
+	const iterElem = (prop: string): ts.Type | undefined => {
+		const sym = checker.getPropertyOfType(t, prop);
+		const ret = sym && checker.getTypeOfSymbol(sym).getCallSignatures()[0]?.getReturnType();
+		return ret ? checker.getTypeArguments(ret as ts.TypeReference)[0] : undefined;
+	};
+	if (info.kind === 'Map') {
+		const k = iterElem('keys'),
+			v = iterElem('values');
+		return { kind: 'Map', typeArgs: [k, v].filter((x): x is ts.Type => !!x) };
+	}
+	if (info.kind === 'Set') {
+		const v = iterElem('values');
+		return { kind: 'Set', typeArgs: v ? [v] : [] };
+	}
+	const el = checker.getIndexTypeOfType(t, ts.IndexKind.Number);
+	return { kind: 'Array', typeArgs: el ? [el] : [] };
+}
+
+/** Whether `type` is a program class extending `Map`/`Set`/`Array` that inherits the collection's `[Symbol.iterator]` without overriding it. */
+export function inheritsCollectionIterator(type: ts.Type, checker: ts.TypeChecker): boolean {
+	const t = checker.getNonNullableType(type);
+	const decl = t.getSymbol()?.valueDeclaration;
+	if (!decl || !ts.isClassLike(decl) || decl.getSourceFile().isDeclarationFile || !collectionBaseInfo(decl, checker)) return false;
+	for (let b: ts.ClassLikeDeclaration | undefined = decl; b; b = programBase(b, checker)) {
+		if (b.members.some((m) => ts.isMethodDeclaration(m) && !isStatic(m) && ts.isComputedPropertyName(m.name) && m.name.expression.getText() === 'Symbol.iterator')) return false;
+	}
+	return true;
+}
+
+/** Whether a class expression inside a function references locals of that enclosing function (cannot be hoisted to module scope). */
+export function classExprCaptures(cls: ts.ClassExpression, checker: ts.TypeChecker): boolean {
+	const fn = ts.findAncestor(cls.parent, ts.isFunctionLike);
+	if (!fn) return false;
+	let captures = false;
+	const visit = (n: ts.Node): void => {
+		if (captures) return;
+		if (ts.isIdentifier(n)) {
+			const sym = checker.getSymbolAtLocation(n);
+			const d = sym?.declarations?.[0];
+			const local = !!d && (ts.isParameter(d) || ts.isFunctionDeclaration(d) || ts.isBindingElement(d) || ts.isVariableDeclaration(d) || ts.isClassDeclaration(d));
+			if (local && d.getSourceFile() === cls.getSourceFile() && d.pos >= fn.pos && d.end <= fn.end && !(d.pos >= cls.pos && d.end <= cls.end)) {
+				captures = true;
+				return;
+			}
+		}
+		ts.forEachChild(n, visit);
+	};
+	ts.forEachChild(cls, visit);
+	return captures;
+}
+
+/** The `ClassExpression` an expression is directly or via a `const` binding (`const C = class { … }`); null otherwise. */
+export function constClassExpr(e: ts.Expression, checker: ts.TypeChecker): ts.ClassExpression | null {
+	const inner = ts.skipOuterExpressions(e, ts.OuterExpressionKinds.Parentheses);
+	if (ts.isClassExpression(inner)) return inner;
+	if (!ts.isIdentifier(inner)) return null;
+	let sym = checker.getSymbolAtLocation(inner);
+	if (sym && sym.flags & ts.SymbolFlags.Alias) sym = checker.getAliasedSymbol(sym);
+	const d = sym?.valueDeclaration;
+	if (d && ts.isVariableDeclaration(d) && d.initializer && ts.getCombinedNodeFlags(d) & ts.NodeFlags.Const && !d.getSourceFile().isDeclarationFile) {
+		const init = ts.skipOuterExpressions(d.initializer, ts.OuterExpressionKinds.Parentheses);
+		if (ts.isClassExpression(init)) return init;
+	}
+	return null;
+}
+
+/** Script-visible class name of a class expression: its own name, else its `const` binding's name, else `""`. */
+export function classExprScriptName(cls: ts.ClassExpression): string {
+	if (cls.name) return cls.name.text;
+	if (ts.isVariableDeclaration(cls.parent) && ts.isIdentifier(cls.parent.name)) return cls.parent.name.text;
+	return '';
+}
+
+/** Registry of generated names and emission state for class expressions in a translation pass. */
+export class ClassExprRegistry {
+	private readonly names = new Map<ts.ClassExpression, string>();
+	readonly emitted = new Set<ts.ClassExpression>();
+
+	name(cls: ts.ClassExpression): string {
+		let n = this.names.get(cls);
+		if (!n) {
+			n = `${cls.name ? cls.name.text : '__ClassExpr'}_${this.names.size}`;
+			this.names.set(cls, n);
+		}
+		return n;
+	}
+}
+
+/** Whether `t`/`e` is a built-in iterable (`JSArray`/`JSSet`/`JSMap`/`String` or a collection subclass inheriting its iterator). */
+export function isBuiltinIterable(t: string, e: ts.Expression, checker: ts.TypeChecker): boolean {
+	return /^JS(Array|Set|Map)</.test(t) || t === 'String' || inheritsCollectionIterator(checker.getTypeAtLocation(e), checker);
+}
+
+/** Kit collection supertype (`JSMap<K, V>`, `JSSet<T>`, `JSArray<T>`) for a class extending a built-in collection. */
+export function spellCollectionBase(cls: ts.ClassLikeDeclaration, checker: ts.TypeChecker, render: (t: ts.Type, n: ts.TypeNode) => string): string | null {
+	const info = collectionBaseInfo(cls, checker);
+	if (!info) return null;
+	const args = info.typeArgs.map((a) => render(checker.getTypeFromTypeNode(a), a));
+	return info.kind === 'Map' ? `JSMap<${args[0] ?? 'Any?'}, ${args[1] ?? 'Any?'}>` : `JS${info.kind}<${args[0] ?? 'Any?'}>`;
+}
+
+/** Instantiated kit collection type (`JSMap<K, V>`, `JSSet<T>`, `JSArray<T>`) for an expression of a collection subclass. */
+export function spellInstantiatedCollection(type: ts.Type, checker: ts.TypeChecker, render: (t: ts.Type) => string): string | null {
+	const info = instantiatedCollectionBase(type, checker);
+	if (!info) return null;
+	const args = info.typeArgs.map(render);
+	return info.kind === 'Map' ? `JSMap<${args[0] ?? 'Any?'}, ${args[1] ?? 'Any?'}>` : `JS${info.kind}<${args[0] ?? 'Any?'}>`;
 }

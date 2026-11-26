@@ -584,5 +584,10 @@ public protocol JSStaticKeyed: AnyObject {
 /// `value.constructor`: the class of the object.
 public func jsConstructor(_ value: Any?) -> Any? {
     guard let object = jsFlat(value) else { return nil }
-    return type(of: object) as Any
+    switch object {
+    case is String: return jsStringConstructor
+    case is Double: return jsNumberConstructor
+    case is Bool: return jsBooleanConstructor
+    default: return type(of: object) as Any
+    }
 }

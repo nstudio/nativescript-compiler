@@ -8,6 +8,7 @@ import { intlConstructor } from '../semantics/lang.ts';
 import { isArrayLengthLiteral, isAsync } from '../semantics/throws.ts';
 import { isLibDeclaration } from '../semantics/ast.ts';
 import { isKit, isUntyped, spelledType } from '../semantics/types.ts';
+import { constClassExpr, constructorOf } from '../semantics/classes.ts';
 
 export const constructionMethods = {
 	/** The library error a class is under whose constructors, its own and its program bases', are none; null for another class. */
@@ -89,11 +90,13 @@ export const constructionMethods = {
 		}
 		const t = this.constructedTypes.get(e) ?? this.typeOf(e);
 		const callee = e.expression;
+		const ce = constClassExpr(callee, this.checker);
+		if (ce) return `${this.emitClassExpr(ce)}(${this.args(e).join(', ')})`;
 		const name = ts.isIdentifier(callee) ? callee.text : '';
 		const args = e.arguments ?? ts.factory.createNodeArray();
-		// A program's class extending Set or Map: made from an iterable as the collection is.
+		// A program's class extending Set or Map without its own constructor: made from an iterable as the collection is.
 		const own = ts.isIdentifier(callee) ? this.resolve(callee)?.valueDeclaration : undefined;
-		const collection = own && ts.isClassLike(own) && !own.getSourceFile().isDeclarationFile ? this.collectionBase(own) : null;
+		const collection = own && ts.isClassLike(own) && !own.getSourceFile().isDeclarationFile && !constructorOf(own, this.checker) ? this.instantiatedCollection(e) : null;
 		if (/^JS(Map|Set)</.test(t) || (collection && /^JS(Map|Set)</.test(collection))) {
 			if (!args.length) return `${t}()`;
 			const src = args[0];
