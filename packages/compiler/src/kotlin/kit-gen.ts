@@ -20,7 +20,7 @@ import { resultShapesOf } from '../semantics/shapes.ts';
 import { evaluationOrder } from '../program/module-order.ts';
 import { SourceLines } from '../program/source-lines.ts';
 import { overlayInterfaces, pruneXmlFree, XML_FREE_FILES, XML_NOT_LINKED, XML_RUN_TIME_FILES, xmlFreeCounterparts } from '../kit/overlay.ts';
-import { dropAt, located, withCoreDefines } from '../kit/core-source.ts';
+import { dropAt, kitPackageDir, located, withCoreDefines } from '../kit/core-source.ts';
 
 export interface KotlinKitOptions {
 	/** `packages/core` of the NativeScript repository. */
@@ -124,21 +124,16 @@ export function generateKotlinKit(o: KotlinKitOptions): KotlinKitResult {
 	const compiled = new Set(rels.map((r) => join(core, r)));
 	const read = o.read ?? ((f: string) => readFileSync(f, 'utf8'));
 	const modules = resolve(o.declarations, '../..');
-	const packageDir = (pkg: string) => {
-		for (let dir = resolve(o.declarations); ; dir = dirname(dir)) {
-			if (existsSync(join(dir, 'node_modules', pkg))) return join(dir, 'node_modules', pkg);
-			if (dirname(dir) === dir) return join(modules, pkg);
-		}
-	};
-	const typesAndroid = resolve(o.typesAndroid ?? packageDir('@nativescript/types-android'));
+	const typesAndroid = resolve(o.typesAndroid ?? kitPackageDir('@nativescript/types-android', core, o.declarations, 'index.d.ts'));
 	if (!existsSync(join(typesAndroid, 'index.d.ts'))) throw new Error(`no @nativescript/types-android at ${typesAndroid}: install it beside the declarations, or pass typesAndroid`);
 	const widgets = o.widgets ?? join(o.declarations, 'platforms/android/widgets-release.aar');
 	if (!existsSync(widgets)) throw new Error(`no widgets AAR at ${widgets}: build core, or pass widgets`);
 	const packageFiles = new Map<string, string>();
 	const packageEntries = new Map<string, string>();
 	for (const [pkg, list] of Object.entries(o.packages ?? {})) {
+		const dir = kitPackageDir(pkg, core, o.declarations, list[0]);
 		list.forEach((f, k) => {
-			const abs = join(packageDir(pkg), f);
+			const abs = join(dir, f);
 			if (!existsSync(abs)) throw new Error(`${abs} is missing: install ${pkg} as core's package.json has it`);
 			packageFiles.set(abs, `npm/${pkg}/${f}`);
 			compiled.add(abs);

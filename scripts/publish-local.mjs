@@ -30,6 +30,7 @@ Options:
   --tag <dist-tag>    npm dist-tag (default: alpha)
   --core-repo <path>  Path to NativeScript/NativeScript checkout for kit generation
   --otp <code>        Optional npm 2FA one-time password
+  --rebuild-kits      Force regenerating Swift & Kotlin kits even if already present
   --skip-kits         Reuse already-generated Swift & Kotlin kits in packages/compiler
   --dry-run           Generate kits, build, and pack without running npm publish
 `);
@@ -46,6 +47,7 @@ const versionArg = opt('--version', undefined);
 const coreRepoArg = opt('--core-repo', undefined);
 const otp = opt('--otp', undefined);
 const skipKits = args.includes('--skip-kits');
+const rebuildKits = args.includes('--rebuild-kits');
 const dryRun = args.includes('--dry-run');
 
 const ADAPTERS = ['angular', 'vue', 'svelte', 'react', 'solid', 'octane'];
@@ -78,7 +80,12 @@ if (coreRepo) {
   console.log(`NativeScript core repo: ${coreRepo} (@nativescript/core ${coreVersion})`);
 }
 
-if (!skipKits) {
+const iosManifest = join(root, 'packages/compiler/kit-apple/Sources/NativeScriptKit/Core/manifest.json');
+const androidManifest = join(root, 'packages/compiler/kit-android/generated/manifest.json');
+const kitsPresent = existsSync(iosManifest) && existsSync(androidManifest);
+const shouldGenerateKits = !skipKits && (rebuildKits || !!coreRepoArg || !kitsPresent);
+
+if (shouldGenerateKits) {
   if (!coreRepo) {
     console.error('Cannot locate NativeScript/NativeScript checkout for kit generation. Pass --core-repo <path> or set NS_CORE_REPO (or pass --skip-kits if kits are already generated).');
     process.exit(1);
@@ -91,14 +98,12 @@ if (!skipKits) {
   run('npm', ['run', 'kit'], { env: kitEnv });
   run('npm', ['run', 'kit:android'], { env: kitEnv });
 } else {
-  const iosManifest = join(root, 'packages/compiler/kit-apple/Sources/NativeScriptKit/Core/manifest.json');
-  const androidManifest = join(root, 'packages/compiler/kit-android/generated/manifest.json');
-  if (!existsSync(iosManifest) || !existsSync(androidManifest)) {
+  if (!kitsPresent) {
     console.error('--skip-kits was passed, but generated Swift or Kotlin kits are missing. Run without --skip-kits.');
     process.exit(1);
   }
   coreVersion = JSON.parse(readFileSync(iosManifest, 'utf8')).core;
-  console.log(`Reusing existing kits (generated from @nativescript/core ${coreVersion})`);
+  console.log(`Reusing existing kits (generated from @nativescript/core ${coreVersion}); pass --rebuild-kits to regenerate.`);
 }
 
 // 3. Sync version across compiler + all adapters if --version was given

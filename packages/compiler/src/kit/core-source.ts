@@ -1,5 +1,7 @@
 // Core's source as both kit generators read it: with the bundler's defines a release build gives it, and with what a
 // translation fails at dropped so the next run reports what follows.
+import { existsSync, readdirSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import ts from 'typescript';
 import { Refusal } from '../semantics/refusals.ts';
 
@@ -53,4 +55,47 @@ export function located(e: unknown, sf: ts.SourceFile, core: string): string {
 export function withCoreDefines(text: string): string {
 	for (const [key, value] of Object.entries(CORE_DEFINES)) text = text.replace(new RegExp(`(?<![\\w$.])${key}(?![\\w$])`, 'g'), (m) => `(${value})`.padEnd(m.length, ' '));
 	return text;
+}
+
+/**
+ * Resolves an npm dependency of `@nativescript/core` during kit generation, checking `core` and `declarations`
+ * ancestors' `node_modules`. When `requiredFile` is given (e.g. `src/index.ts` for `css-what@7`), prefers a copy
+ * containing it — including nested `node_modules/<dep>/node_modules/<pkg>` when a monorepo hoisted an older major.
+ */
+export function kitPackageDir(pkg: string, core: string, declarations: string, requiredFile?: string): string {
+	const roots: string[] = [];
+	const seen = new Set<string>();
+	for (const start of [resolve(core), resolve(declarations)]) {
+		for (let dir = start; ; dir = dirname(dir)) {
+			const nm = join(dir, 'node_modules');
+			if (!seen.has(nm)) {
+				seen.add(nm);
+				if (existsSync(nm)) roots.push(nm);
+			}
+			if (dirname(dir) === dir) break;
+		}
+	}
+	let firstFound: string | null = null;
+	for (const nm of roots) {
+		const candidate = join(nm, pkg);
+		if (!existsSync(candidate)) continue;
+		if (!requiredFile || existsSync(join(candidate, requiredFile))) return candidate;
+		if (!firstFound) firstFound = candidate;
+	}
+	if (requiredFile) {
+		for (const nm of roots) {
+			let entries: string[];
+			try {
+				entries = readdirSync(nm).sort();
+			} catch {
+				continue;
+			}
+			for (const entry of entries) {
+				if (entry.startsWith('.')) continue;
+				const nested = join(nm, entry, 'node_modules', pkg);
+				if (existsSync(join(nested, requiredFile))) return nested;
+			}
+		}
+	}
+	return firstFound ?? join(resolve(declarations, '../..'), pkg);
 }

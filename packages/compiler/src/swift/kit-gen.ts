@@ -19,7 +19,7 @@ import { nativeTable } from './native/sdk.ts';
 import { KIT_APPLE_SOURCES } from '../driver/paths.ts';
 import { overlayInterfaces, pruneXmlFree, XML_FREE_DROPPED_IMPORTS, XML_FREE_FILES, XML_NOT_LINKED, xmlFreeCounterparts } from '../kit/overlay.ts';
 import { compareText } from '../program/order.ts';
-import { dropAt, located, withCoreDefines } from '../kit/core-source.ts';
+import { dropAt, kitPackageDir, located, withCoreDefines } from '../kit/core-source.ts';
 
 export interface KitOptions {
 	/** `packages/core` of the NativeScript repository. */
@@ -161,22 +161,16 @@ export function generateKit(o: KitOptions): KitResult {
 	const barrels = barrelNames(core);
 	const read = o.read ?? ((f: string) => readFileSync(f, 'utf8'));
 	const modules = resolve(o.declarations, '../..');
-	// A package as Node finds it from the declarations: the nearest node_modules holding it.
-	const packageDir = (pkg: string) => {
-		for (let dir = resolve(o.declarations); ; dir = dirname(dir)) {
-			if (existsSync(join(dir, 'node_modules', pkg))) return join(dir, 'node_modules', pkg);
-			if (dirname(dir) === dir) return join(modules, pkg);
-		}
-	};
 	// Without the iOS typings every native call would be untyped: no kit at all rather than that one.
-	const typesIos = o.typesIos ?? packageDir('@nativescript/types-ios');
+	const typesIos = o.typesIos ?? kitPackageDir('@nativescript/types-ios', core, o.declarations, 'index.d.ts');
 	if (!existsSync(join(typesIos, 'index.d.ts'))) throw new Error(`no @nativescript/types-ios at ${typesIos}: install it beside the declarations, or pass typesIos`);
 	// A package's files by path, as `npm/<package>/<file>`; the file importing the package gives.
 	const packageFiles = new Map<string, string>();
 	const packageEntries = new Map<string, string>();
 	for (const [pkg, list] of Object.entries(o.packages ?? {})) {
+		const dir = kitPackageDir(pkg, core, o.declarations, list[0]);
 		list.forEach((f, k) => {
-			const abs = join(packageDir(pkg), f);
+			const abs = join(dir, f);
 			if (!existsSync(abs)) throw new Error(`${abs} is missing: install ${pkg} as core's package.json has it`);
 			packageFiles.set(abs, `npm/${pkg}/${f}`);
 			compiled.add(abs);
