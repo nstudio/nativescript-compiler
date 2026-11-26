@@ -2,7 +2,7 @@
 
 Official nStudio NativeScript CLI plugin (`ns compile`) and framework adapters that compile NativeScript apps (TypeScript, `@nativescript/core`, framework templates, and plugins) directly to native **Swift** (iOS) and **Kotlin** (Android) — with **no JavaScript runtime** in the release binary.
 
-[Packages](#packages) · [Quick Start](#quick-start-end-users) · [Examples](#examples) · [Source Maps & Crash Retracing](#typescript-source-maps--crash-retracing) · [Speed & Footprint](#speed-and-footprint-compiled-vs-js-v8-release) · [Local Development](#local-development) · [Generating Kits](#generating-swift--kotlin-kits-from-nativescriptcore)
+[Packages](#packages) · [Quick Start](#quick-start-end-users) · [Examples](#examples) · [Crash Traces](#crash-traces) · [Speed & Footprint](#speed-and-footprint-compiled-vs-js-v8-release) · [Local Development](#local-development) · [Generating Kits](#generating-swift--kotlin-kits-from-nativescriptcore)
 
 ---
 
@@ -53,9 +53,9 @@ Apps built with NativeScript and compiled directly to native Swift and Kotlin (w
 | **OpenJS Foundation** | [App Store](https://apps.apple.com/us/app/openjs-foundation/id6792399541) | [Google Play](https://play.google.com/store/apps/details?id=org.openjsf.app) |
 | **Guitar Pocketbook** | [App Store](https://apps.apple.com/us/app/guitar-pocketbook/id6814297918) | [Google Play](https://play.google.com/store/apps/details?id=io.nstudio.guitarpocketbook) |
 
-## TypeScript Source Maps & Crash Retracing
+## Crash Traces
 
-Even though compiled releases ship **no JavaScript runtime**, every translated statement still maps back to the exact `.ts`, `.vue`, `.tsx`, `.svelte`, or HTML template file and line it came from (`--no-source-lines` disables emission). Stack traces, Xcode/Instruments, TestFlight `.ips` crash logs, Google Play Console, Firebase Crashlytics, and Sentry all resolve back to your original TypeScript source lines.
+Even though compiled releases ship **no JavaScript runtime**, every translated statement still maps back to the exact `.ts`, `.vue`, `.tsx`, `.svelte`, or HTML template file and line it came from (`--no-source-lines` disables emission). Release crash traces — in Xcode/Instruments, TestFlight `.ips` reports, Google Play Console, Firebase Crashlytics, and Sentry — resolve directly back to your original TypeScript source lines.
 
 ### iOS (Swift `#sourceLocation` & `.dSYM`)
 
