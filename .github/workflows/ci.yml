@@ -50,6 +50,13 @@ jobs:
           NS_CORE_REPO: ${{ github.workspace }}/core
         run: npm run test:compiler
 
+      - name: Backend parity, twins, runtime ops & adapter API checks
+        run: |
+          node packages/compiler/tests/checks/twins.ts
+          node packages/compiler/tests/checks/runtime-ops.ts
+          node packages/compiler/tests/checks/both-backends.ts
+          node packages/compiler/tests/adapters/run.ts
+
       - name: Build compiler dist & adapters
         run: |
           npm run build:compiler
@@ -59,3 +66,57 @@ jobs:
 
       - name: Canvas binding release checks
         run: SUITE=nativescript-canvas npm run test:release-checks
+
+  windows-smoke:
+    name: Windows typecheck, CLI extension & path/Gradle smoke (Windows)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: Install workspace dependencies
+        run: |
+          npm install --no-audit --no-fund
+          npm ci --prefix packages/compiler/tests --no-audit --no-fund
+
+      - name: Typecheck compiler & adapters
+        run: npm run typecheck
+
+      - name: Layers & CLI extension checks (Windows)
+        run: |
+          node packages/compiler/tests/checks/layers.ts
+          node packages/compiler/tests/cli/extension.ts
+
+      - name: Windows virtual path & Gradle wrapper smoke check
+        shell: pwsh
+        run: |
+          node --input-type=module -e "
+            import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+            import { tmpdir } from 'node:os';
+            import { join } from 'node:path';
+            import ts from 'typescript';
+            import { createProgram } from './packages/compiler/src/program/program.ts';
+            import { gradleWrapper, KIT_ANDROID } from './packages/compiler/src/driver/paths.ts';
+            if (!existsSync(join(KIT_ANDROID, 'gradlew.bat'))) throw new Error('missing gradlew.bat');
+            const cmd = gradleWrapper(['--version'], KIT_ANDROID);
+            if (!/cmd\.exe$/i.test(cmd.command) || !cmd.args.some((a) => a.endsWith('gradlew.bat'))) {
+              throw new Error('unexpected gradleWrapper on win32: ' + JSON.stringify(cmd));
+            }
+            const dir = mkdtempSync(join(tmpdir(), 'ns-win-smoke-'));
+            try {
+              const root = join(dir, 'win.release.ts');
+              const virtual = new Map([[root, 'export const ok: number = 42;\n']]);
+              const prog = createProgram([root], virtual, 'android', join(process.cwd(), 'packages/compiler/tests/node_modules'));
+              const sf = prog.program.getSourceFile(root);
+              const diags = ts.getPreEmitDiagnostics(prog.program, sf);
+              if (!sf || diags.length) throw new Error('Windows virtual .release.ts failed: ' + diags.map((d) => d.messageText).join('; '));
+              console.log('Windows smoke passed:', cmd.command, cmd.args.join(' '));
+            } finally {
+              rmSync(dir, { recursive: true, force: true });
+            }
+          "

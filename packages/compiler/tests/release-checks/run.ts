@@ -1884,7 +1884,7 @@ await (async () => {
       }
     }
 
-    // #10: parseIncludeGradle accepts android { compileOptions { ... } } (e.g. @nstudio/ncharts).
+    // #10 + ecosystem audit: parseIncludeGradle accepts compileOptions, kotlinOptions, buildFeatures, flavorDimensions, aaptOptions, AGP 8 packaging resources, and vectorDrawables.
     const parsedGradle = parseIncludeGradle(`
 repositories {
   maven { url 'https://jitpack.io' }
@@ -1893,13 +1893,41 @@ dependencies {
   implementation 'com.github.PhilJay:MPAndroidChart:v3.1.0'
 }
 android {
+  compileSdk 35
+  flavorDimensions "default"
   compileOptions {
     sourceCompatibility JavaVersion.VERSION_1_8
     targetCompatibility JavaVersion.VERSION_1_8
   }
+  kotlinOptions {
+    jvmTarget = "17"
+  }
+  buildFeatures {
+    viewBinding true
+    buildConfig = false
+  }
+  aaptOptions {
+    noCompress "tflite", "lite"
+  }
+  defaultConfig {
+    targetSdkVersion 35
+    vectorDrawables.useSupportLibrary = true
+  }
+  packaging {
+    resources {
+      excludes += "META-INF/AL2.0"
+      pickFirsts.add("lib/**/libc++_shared.so")
+    }
+  }
 }
 `);
-    check(parsedGradle.repositories.includes('https://jitpack.io') && parsedGradle.dependencies.some((d) => d.coords === 'com.github.PhilJay:MPAndroidChart:v3.1.0'), '#10: parseIncludeGradle accepts android { compileOptions { ... } }');
+    check(
+      parsedGradle.repositories.includes('https://jitpack.io') &&
+        parsedGradle.dependencies.some((d) => d.coords === 'com.github.PhilJay:MPAndroidChart:v3.1.0') &&
+        parsedGradle.packaging.excludes.includes('META-INF/AL2.0') &&
+        parsedGradle.packaging.pickFirsts.includes('lib/**/libc++_shared.so'),
+      '#10: parseIncludeGradle accepts compileOptions, kotlinOptions, buildFeatures, flavorDimensions, aaptOptions, vectorDrawables & AGP 8 packaging',
+    );
 
     // #6: new Worker('~/...') resolves registered worker script in Kotlin codegen.
     const workerSrc = join(dir, 'app', 'workers', 'echo-worker.ts');

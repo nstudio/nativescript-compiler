@@ -5,7 +5,6 @@ import { ERRORS } from '../semantics/globals.ts';
 import { branch, ident, isFunctionType, isNullable, optionalType, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { asOperation, assignedValues } from '../semantics/lang.ts';
-import { located, type Refusal, type RefusalId } from '../semantics/refusals.ts';
 import { notedField } from '../semantics/shapes.ts';
 import { isKit, isUntyped, spelledType } from '../semantics/types.ts';
 import { assertedFrom, emptyComparison, scriptComparison } from '../semantics/placement.ts';
@@ -398,17 +397,5 @@ export const operatorsMethods = {
 	/** A field initialized with another read-only signal (`dayColor = ink`, a module's memo): a property reading through it. */
 	signalAlias(this: Translator, m: ts.PropertyDeclaration): boolean {
 		return !this.library && !!m.initializer && (ts.isIdentifier(m.initializer) || ts.isPropertyAccessExpression(m.initializer)) && this.framework.signalKind(this.symbolName(m.initializer)) === 'computed';
-	},
-
-	/** An error the translation of `n` failed with, at `n` unless it says where already (semantics/refusals.ts). */
-	located(this: Translator, e: unknown, n: ts.Node): unknown {
-		return located(e, n, (at, what, id) => this.error(at, what, id));
-	},
-
-	error(this: Translator, n: ts.Node | undefined, what: string, id: RefusalId = 'unhandled'): Refusal {
-		if (!n) return this.config.refusals.refusal(`${what} is not supported in a release build yet`, id);
-		const sf = n.getSourceFile();
-		const { line, character } = sf.getLineAndCharacterOfPosition(n.getStart());
-		return this.config.refusals.refusedAt(sf.fileName, line + 1, character + 1, what, n.getText().slice(0, 80), id);
 	},
 };

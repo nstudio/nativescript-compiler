@@ -3,7 +3,7 @@ import ts from 'typescript';
 import { atLossSite, HELD_LOSS } from '../semantics/losses.ts';
 import { assignsTo, balanced, heldType, ident, isOptional, swiftString, withoutAvailableBlocks, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
-import { place, resultSlot, returnCell, storeSlot, type ResultSlot, type ReturnCell, type Store, type StoreSlot } from '../semantics/placement.ts';
+import { place, returnCell, type ResultSlot, type ReturnCell } from '../semantics/placement.ts';
 import { deadZoneBinding, leadingNeverRead } from '../semantics/lang.ts';
 import { isAsync, isStatic } from '../semantics/throws.ts';
 import { readEarly } from '../semantics/classes.ts';
@@ -409,25 +409,6 @@ export const statementsMethods = {
 	/** `try ` when evaluating `e` can throw. */
 	tryPrefix(this: Translator, e: ts.Node): string {
 		return this.throwsInfo.expr(e) ? 'try ' : '';
-	},
-
-	/** An expression where Swift needs a value of `target`. */
-	coerce(this: Translator, e: ts.Expression, target: string | ResultSlot): string {
-		return place(this.placement, e, target);
-	},
-
-	/** `e` stored by `at` (a declaration, an object literal's field, an assignment's target) where Swift holds `target`; `checks` as `storeSlot` has it. */
-	stored(this: Translator, e: ts.Expression, at: Store, target: string, checks = true): string {
-		return place(this.placement, e, this.storeSlot(e, target, at, checks));
-	},
-
-	storeSlot(this: Translator, e: ts.Expression, target: string, at: Store, checks = true): StoreSlot {
-		return storeSlot(this.placement, target, at, e, checks);
-	},
-
-	/** The result slot of the function being translated, where `at` (a `return`, an expression body) gives its value. */
-	resultSlot(this: Translator, at: ts.Node): ResultSlot {
-		return resultSlot(this.asyncCtx ? this.asyncCtx.result : this.returnType, ts.findAncestor(at.parent, ts.isFunctionLike), !!this.asyncCtx);
 	},
 
 	/** A `return` statement's cell, as Swift writes it. */

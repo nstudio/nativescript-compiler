@@ -13,7 +13,6 @@ import { CodeMarks } from '../semantics/marks.ts';
 import { isKit, isNamed, isUntyped, parseNativeType, spelledType, type TypeView } from '../semantics/types.ts';
 import type { ModuleThread } from '../semantics/threading.ts';
 import { recognizePatterns, type Patterns } from '../program/patterns.ts';
-import type { Refusal, RefusalId } from '../semantics/refusals.ts';
 import { ShapeMap, type ShapeFacts } from '../semantics/shapes.ts';
 import { assertedOperand, implementedInterfaces, substitutedExpr, uncheckedMatch } from '../semantics/lang.ts';
 import { unsetGroupTyping, type UnsetGroupTyping } from '../semantics/regexp.ts';
@@ -875,13 +874,6 @@ export class Translator implements AsyncTranslator {
 	untypedJavaFieldSet: Set<ts.Node> | null = null;
 
 	thisValueSets: { symbols: Set<ts.Node | undefined>; functions: Set<ts.Node>; returning: Set<ts.Node> } | null = null;
-
-	/** A declared limit of release builds: refused with why and how to write it instead. */
-	limit(n: ts.Node, id: RefusalId, what: string): Refusal {
-		const sf = n.getSourceFile();
-		const { line, character } = sf.getLineAndCharacterOfPosition(n.getStart());
-		return this.config.refusals.limitAt(sf.fileName, line + 1, character + 1, what, n.getText().slice(0, 80), id);
-	}
 }
 export interface Translator extends ConfigFields<KotlinLibrary> {}
 export interface Translator extends Mixins {}

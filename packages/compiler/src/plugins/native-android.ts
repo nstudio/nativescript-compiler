@@ -466,10 +466,36 @@ export function parseIncludeGradle(text: string): IncludeGradle {
 				}
 				if (blockOf('packagingOptions') || blockOf('packaging')) {
 					i++;
+					const addPackagingItem = (p: Token) => {
+						if (is(p, 'id', 'exclude') || is(p, 'id', 'pickFirst')) {
+							const list = p.text === 'exclude' ? out.packaging.excludes : out.packaging.pickFirsts;
+							i++;
+							list.push(stringArgument());
+							return;
+						}
+						if (is(p, 'id', 'excludes') || is(p, 'id', 'pickFirsts')) {
+							const list = p.text === 'excludes' ? out.packaging.excludes : out.packaging.pickFirsts;
+							i++;
+							if (is(peek(), 'punct', '+') && is(peek(1), 'punct', '=')) {
+								i += 2;
+								list.push(stringArgument());
+								return;
+							}
+							if (is(peek(), 'punct', '.') && is(peek(1), 'id', 'add')) {
+								i += 2;
+								list.push(stringArgument());
+								return;
+							}
+						}
+						unsupported(p);
+					};
 					statements((p) => {
-						const list = is(p, 'id', 'exclude') ? out.packaging.excludes : is(p, 'id', 'pickFirst') ? out.packaging.pickFirsts : unsupported(p);
-						i++;
-						list.push(stringArgument());
+						if (blockOf('resources') || blockOf('jniLibs')) {
+							i++;
+							statements(addPackagingItem);
+							return;
+						}
+						addPackagingItem(p);
 					});
 					return;
 				}
@@ -497,6 +523,77 @@ export function parseIncludeGradle(text: string): IncludeGradle {
 					});
 					return;
 				}
+				if (blockOf('kotlinOptions')) {
+					i++;
+					statements((k) => {
+						if (!is(k, 'id', 'jvmTarget') && !is(k, 'id', 'freeCompilerArgs')) unsupported(k);
+						i++;
+						if (is(peek(), 'punct', '=') || (is(peek(), 'punct', '+') && is(peek(1), 'punct', '='))) {
+							i += is(peek(), 'punct', '+') ? 2 : 1;
+						}
+						if (is(peek(), 'punct', '[')) {
+							i++;
+							while (!is(peek(), 'punct', ']') && !is(peek(), 'end')) i++;
+							expect('punct', ']');
+							return;
+						}
+						if (is(peek(), 'str') || is(peek(), 'num')) {
+							i++;
+							return;
+						}
+						unsupported(peek());
+					});
+					return;
+				}
+				if (blockOf('buildFeatures')) {
+					i++;
+					statements((b) => {
+						if (!is(b, 'id') || !['viewBinding', 'buildConfig', 'dataBinding', 'compose', 'aidl', 'resValues'].includes(b.text)) unsupported(b);
+						i++;
+						if (is(peek(), 'punct', '=')) i++;
+						if (!is(peek(), 'id', 'true') && !is(peek(), 'id', 'false')) unsupported(peek());
+						i++;
+					});
+					return;
+				}
+				if (blockOf('aaptOptions') || blockOf('androidResources')) {
+					i++;
+					statements((a) => {
+						if (!is(a, 'id', 'noCompress')) unsupported(a);
+						i++;
+						if (is(peek(), 'punct', '=')) i++;
+						if (is(peek(), 'punct', '[')) {
+							i++;
+							while (!is(peek(), 'punct', ']') && !is(peek(), 'end')) i++;
+							expect('punct', ']');
+							return;
+						}
+						stringArgument();
+						while (is(peek(), 'punct', ',')) {
+							i++;
+							stringArgument();
+						}
+					});
+					return;
+				}
+				if (is(s, 'id', 'flavorDimensions')) {
+					i++;
+					stringArgument();
+					while (is(peek(), 'punct', ',')) {
+						i++;
+						stringArgument();
+					}
+					return;
+				}
+				if (is(s, 'id', 'compileSdk') || is(s, 'id', 'compileSdkVersion')) {
+					i++;
+					if (is(peek(), 'punct', '=')) i++;
+					if (is(peek(), 'num') || is(peek(), 'str')) {
+						i++;
+						return;
+					}
+					unsupported(peek());
+				}
 				if (!is(s, 'id', 'defaultConfig')) unsupported(s);
 				i++;
 				statements((d) => {
@@ -505,6 +602,33 @@ export function parseIncludeGradle(text: string): IncludeGradle {
 						i++;
 						if (is(peek(), 'punct', '=')) i++;
 						expect('id', 'true');
+						return;
+					}
+					if (is(d, 'id', 'targetSdkVersion') || is(d, 'id', 'targetSdk') || is(d, 'id', 'compileSdkVersion') || is(d, 'id', 'compileSdk')) {
+						i++;
+						if (is(peek(), 'punct', '=')) i++;
+						const paren = is(peek(), 'punct', '(');
+						if (paren) i++;
+						expect('num');
+						if (paren) expect('punct', ')');
+						return;
+					}
+					if (blockOf('vectorDrawables')) {
+						i++;
+						statements((v) => {
+							if (!is(v, 'id', 'useSupportLibrary')) unsupported(v);
+							i++;
+							if (is(peek(), 'punct', '=')) i++;
+							if (!is(peek(), 'id', 'true') && !is(peek(), 'id', 'false')) unsupported(peek());
+							i++;
+						});
+						return;
+					}
+					if (is(d, 'id', 'vectorDrawables') && is(peek(1), 'punct', '.') && is(peek(2), 'id', 'useSupportLibrary')) {
+						i += 3;
+						if (is(peek(), 'punct', '=')) i++;
+						if (!is(peek(), 'id', 'true') && !is(peek(), 'id', 'false')) unsupported(peek());
+						i++;
 						return;
 					}
 					if (!is(d, 'id', 'minSdkVersion') && !is(d, 'id', 'minSdk')) unsupported(d);

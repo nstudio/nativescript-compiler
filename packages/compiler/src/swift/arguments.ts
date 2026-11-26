@@ -2,7 +2,7 @@
 import ts from 'typescript';
 import { functionParts, heldType, isOptional, nullishType, optionalType, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
-import { argumentSlot, place, storeSlot, type ElementStore, type ParamSlot, type StoreSlot } from '../semantics/placement.ts';
+import { argumentSlot, place, type ParamSlot, type StoreSlot } from '../semantics/placement.ts';
 import { implementationOf } from '../semantics/ast.ts';
 import { isStatic } from '../semantics/throws.ts';
 import { isUntyped, spelledType } from '../semantics/types.ts';
@@ -198,29 +198,6 @@ export const argumentsMethods = {
 		const slot = this.restSlot(e, 'Any?');
 		if (args.some(ts.isSpreadElement)) return `, spread: ${this.packed(args, 'JSArray<Any?>', slot)}.storage`;
 		return args.map((a) => `, ${place(this.placement, a, slot(a))}`).join('');
-	},
-
-	/** An argument of `call` with no declared parameter's cell, as `element`: a built-in's (`Math.max`) or one an untyped callee takes. */
-	restArgument(this: Translator, call: ts.CallExpression | ts.NewExpression, a: ts.Expression, element: string): string {
-		return place(this.placement, a, this.restSlot(call, element)(a));
-	},
-
-	/** The slot of each value `at` stores as a container's element (`elementStoreOf`), held as `element`. */
-	elementSlot(this: Translator, at: ElementStore, element: string): (a: ts.Expression) => StoreSlot {
-		return (a) => storeSlot(this.placement, element, at, a);
-	},
-
-	/** A value `call` stores as an element of its receiver (`push`'s, `add`'s), held as `element`. */
-	elementArgument(this: Translator, call: ts.CallExpression, a: ts.Expression, element: string): string {
-		return place(this.placement, a, this.elementSlot(call, element)(a));
-	},
-
-	/** The slot of each argument `call` gives a rest parameter (`decl`), or an untyped callee: one `element` each, placed with no declared parameter's cell. */
-	restSlot(this: Translator, call: ts.CallExpression | ts.NewExpression, element: string, decl?: ts.Declaration): (a: ts.Expression) => ParamSlot {
-		return (a) => {
-			const k = call.arguments?.indexOf(a) ?? -1;
-			return argumentSlot(this.placement, element, decl, { call, k, a: k < 0 ? undefined : a }, { rest: true });
-		};
 	},
 
 	/** Arguments (spreads included) as one `JSArray` of `arrayType`; `slot` places each element where they are a call's. */

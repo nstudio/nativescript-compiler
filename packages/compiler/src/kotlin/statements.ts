@@ -1,7 +1,7 @@
 // Statements as Kotlin: declarations, bindings, patterns, loops and returns.
 import ts from 'typescript';
 import { atLossSite, HELD_LOSS } from '../semantics/losses.ts';
-import { place, resultSlot, returnCell, storeSlot, type ResultSlot, type ReturnCell, type Store, type StoreSlot } from '../semantics/placement.ts';
+import { place, returnCell, type ResultSlot, type ReturnCell } from '../semantics/placement.ts';
 import { TYPED_ARRAYS } from '../semantics/globals.ts';
 import { assignsTo, breaksOut, ident, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
@@ -328,25 +328,6 @@ export const statementsMethods = {
 
 	tryPrefix(this: Translator, _e: ts.Node): string {
 		return '';
-	},
-
-	/** An expression where Kotlin needs a value of `target`. */
-	coerce(this: Translator, e: ts.Expression, target: string | ResultSlot): string {
-		return place(this.placement, e, target);
-	},
-
-	/** `e` stored by `at` (a declaration, an object literal's field, an assignment's target) where Kotlin holds `target`; `checks` as `storeSlot` has it. */
-	stored(this: Translator, e: ts.Expression, at: Store, target: string, checks = true): string {
-		return place(this.placement, e, this.storeSlot(e, target, at, checks));
-	},
-
-	storeSlot(this: Translator, e: ts.Expression, target: string, at: Store, checks = true): StoreSlot {
-		return storeSlot(this.placement, target, at, e, checks);
-	},
-
-	/** The result slot of the function being translated, where `at` (a `return`, an expression body) gives its value. */
-	resultSlot(this: Translator, at: ts.Node): ResultSlot {
-		return resultSlot(this.asyncCtx ? this.asyncCtx.result : this.returnType, ts.findAncestor(at.parent, ts.isFunctionLike), !!this.asyncCtx);
 	},
 
 	/** A `return` statement's cell, as Kotlin writes it. */

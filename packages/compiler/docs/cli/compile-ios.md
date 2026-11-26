@@ -28,3 +28,7 @@ General | `$ ns compile ios [--for-device] [--team-id <Team>] [--provision <Prof
 * `--allow-untested-frameworks` - Warns instead of stopping when framework versions are outside the adapter range.
 * `--skip-toolchain-check` - Skips Xcode version validation.
 * `--whole-kit` - Compiles every file of NativeScriptKit instead of closed-world tree-shaking.
+
+### Platform Notes
+
+* `new Worker(...)` background threads are currently supported in compiled Android builds (`ns compile android`) and refused at compile time on iOS (`worker` refusal); guard worker usage behind `if (__ANDROID__)` or use async/Promise concurrency for cross-platform builds.

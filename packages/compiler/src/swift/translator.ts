@@ -12,7 +12,7 @@ import { Framework } from '../adapters/hooks.ts';
 import type { KitDeclarations, RecordedMember } from '../kit/manifest.ts';
 import { NativeAPI } from './native/api.ts';
 import { recognizePatterns, type Patterns } from '../program/patterns.ts';
-import { located, type Refusal, type RefusalId, rethrowUnlessRefused } from '../semantics/refusals.ts';
+import { rethrowUnlessRefused } from '../semantics/refusals.ts';
 import { ShapeMap, type ShapeFacts } from '../semantics/shapes.ts';
 import type { SwiftTranslatorView } from '../api/adapter-api.ts';
 import { Throws, isStatic } from '../semantics/throws.ts';
@@ -945,26 +945,6 @@ export class Translator implements AsyncTranslator {
 	wellFormed(n: ts.Node, text: string): string {
 		if (refusedString(text, this.ledger)) throw this.limit(n, 'lone-surrogate', 'a string with a lone surrogate');
 		return text;
-	}
-
-	/** `return value` in an async generator: the value awaited first. */
-	/** An error the translation of `n` failed with, at `n` unless it says where already (semantics/refusals.ts). */
-	located(e: unknown, n: ts.Node): unknown {
-		return located(e, n, (at, what, id) => this.error(at, what, id));
-	}
-
-	error(n: ts.Node | undefined, what: string, id: RefusalId = 'unhandled'): Refusal {
-		if (!n) return this.config.refusals.refusal(`${what} is not supported in a release build yet`, id);
-		const sf = n.getSourceFile();
-		const { line, character } = sf.getLineAndCharacterOfPosition(n.getStart());
-		return this.config.refusals.refusedAt(sf.fileName, line + 1, character + 1, what, n.getText().slice(0, 80), id);
-	}
-
-	/** A declared limit of release builds: refused with why and how to write it instead. */
-	limit(n: ts.Node, id: RefusalId, what: string): Refusal {
-		const sf = n.getSourceFile();
-		const { line, character } = sf.getLineAndCharacterOfPosition(n.getStart());
-		return this.config.refusals.limitAt(sf.fileName, line + 1, character + 1, what, n.getText().slice(0, 80), id);
 	}
 }
 export interface Translator extends ConfigFields<SwiftLibrary> {}
