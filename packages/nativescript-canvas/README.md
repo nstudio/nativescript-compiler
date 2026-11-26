@@ -1,19 +1,30 @@
 # @triniwiz/compiled-nativescript-canvas
 
-The [`@nativescript/canvas`](https://www.npmjs.com/package/@nativescript/canvas) binding of
-[`@nstudio/nativescript-compiler`](https://www.npmjs.com/package/@nstudio/nativescript-compiler), which turns a NativeScript app into
-Swift and Kotlin with no JavaScript engine. The plugin's native code installs its objects (`CanvasModule`: 2D, WebGL,
-WebGPU) into the JavaScript engine; a compiled app has none, so this package gives the same objects over the plugin's
-native library: Swift on iOS, Kotlin through a JNI layer on Android, where its script also replaces the plugin's.
-An app using `@nativescript/canvas` needs it to build with `--compiled`.
+Native binding for [`@nativescript/canvas`](https://www.npmjs.com/package/@nativescript/canvas) with [`@nstudio/nativescript-compiler`](https://www.npmjs.com/package/@nstudio/nativescript-compiler).
+
+Provides 2D, WebGL, and WebGPU canvas APIs directly over the native library in compiled apps (Swift on iOS, Kotlin/JNI on Android) without a JavaScript engine.
+
+## Installation
 
 ```bash
-npm install --save-dev @triniwiz/compiled-nativescript-canvas@9.2.0-alpha.9
-ns run ios --compiled
-ns run android --compiled
+npm install --save-dev @triniwiz/compiled-nativescript-canvas
 ```
 
-It binds `@nativescript/canvas ^3.0.0-alpha.10`, and declares so under `nativescript.compilerBinding` in its
-package.json (the compiler's `src/api/binding-api.ts`). Android builds compile its JNI layer with the Android NDK.
+## Usage
 
-Source and issues: https://github.com/nstudio/compiled-frameworks (`packages/nativescript-canvas`).
+Once installed alongside `@nativescript/canvas`, build normally with the compiler:
+
+```bash
+ns compile ios
+ns compile android
+```
+
+Android builds compile the JNI layer with the Android NDK.
+
+## Supported Versions
+
+- `@nativescript/canvas`: `^3.0.0-alpha.10`
+
+## License
+
+MIT

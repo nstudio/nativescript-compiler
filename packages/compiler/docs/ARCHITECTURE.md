@@ -12,7 +12,7 @@ without `--compiled` is unaffected.
   layout, CSS and navigation are core's code and follow each core release without a port ([KIT.md](KIT.md)).
 
 This document covers how the compiler is built, how its correctness is checked, and what is not done yet. Start here;
-the other documents are listed in the [README](../README.md#documentation).
+the other documents are listed in [DEVELOPMENT.md](../DEVELOPMENT.md#internal-documentation).
 
 ## The rule
 
