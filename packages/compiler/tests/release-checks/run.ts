@@ -1629,4 +1629,21 @@ console.log(testAll());
   }
 })();
 
+// ---- Vite ?raw asset imports and __WINDOWS__/__LINUX__ platform folding ----
+(() => {
+  const dir = mkdtempSync(join(tmpdir(), 'ns-release-checks-raw-'));
+  try {
+    writeFileSync(join(dir, 'sample.css'), '.btn { color: red; }\n');
+    const app = join(dir, 'app.ts');
+    writeFileSync(app, "import css from './sample.css?raw';\nexport const text: string = css;\nexport const desk: boolean = __WINDOWS__ || __LINUX__;\n");
+    const built = createProgram([app], new Map(), 'ios', modulesDir);
+    const rawFile = built.resolved(app, './sample.css?raw') ?? '';
+    check(rawFile.startsWith('/__raw__/') && built.pluginFiles.includes(rawFile) && (built.program.getSourceFile(rawFile)?.text ?? '').includes('.btn { color: red; }'), 'Vite ?raw asset import resolves to a synthesized default-export module');
+    const folded = built.program.getSourceFile(app)?.text ?? '';
+    check(!folded.includes('__WINDOWS__') && !folded.includes('__LINUX__'), '__WINDOWS__ and __LINUX__ fold away on iOS/Android');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+})();
+
 finish();

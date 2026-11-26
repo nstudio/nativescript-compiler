@@ -1,4 +1,5 @@
 import ts from 'typescript';
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, resolve, sep } from 'node:path';
 import { foldPlatform, type Platform } from './platform.ts';
@@ -278,6 +279,18 @@ export function createProgram(roots: string[], virtual: Map<string, string>, pla
 	const localPackages = appRoot ? localFilePackages(appRoot) : new Map<string, string>();
 	const resolveLiteral = (lit: ts.StringLiteralLike, containing: string): ts.ResolvedModuleWithFailedLookupLocations => {
 		{
+			// Vite `?raw` asset import (`import css from 'pkg/file.css?raw'` or `'./example.ts?raw'`): inline file contents as default export.
+			if (lit.text.endsWith('?raw')) {
+				const rawSpec = lit.text.slice(0, -4);
+				const aliasedRaw = isApp(containing) ? aliased(rawSpec) : undefined;
+				const candidate = aliasedRaw ?? (rawSpec.startsWith('.') || isAbsolute(rawSpec) ? resolve(dirname(containing), rawSpec) : resolve(modules, rawSpec));
+				if (existsSync(candidate)) {
+					const rawPath = `/__raw__/${createHash('sha256').update(candidate).digest('hex').slice(0, 16)}.ts`;
+					if (!files.has(rawPath)) files.set(rawPath, `export default ${JSON.stringify(readFileSync(candidate, 'utf8'))};\n`);
+					pluginFiles.add(rawPath);
+					return { resolvedModule: { resolvedFileName: rawPath, extension: ts.Extension.Ts } };
+				}
+			}
 			// The app's own tsconfig `paths` (`~/app/x`), as its bundler resolves them: plugins' sources have their own.
 			const aliasTarget = isApp(containing) ? aliased(lit.text) : undefined;
 			const m = aliasTarget ?? lit.text;

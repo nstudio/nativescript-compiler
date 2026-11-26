@@ -613,5 +613,7 @@ private fun routeOf(value: Any?): ActivatedRoute? = value as? ActivatedRoute ?: 
 /** A key of an options object script passes, null when absent. */
 private fun field(target: Any?, key: String): Any? = if (jsIsNullish(target)) null else jsBox(jsGet(target, key)).let { if (it === JSNull) null else it }
 
-/** `registerElement(tag, () => Class)`: compiled templates name each view's class already. */
-fun registerElement(@Suppress("UNUSED_PARAMETER") tag: String, @Suppress("UNUSED_PARAMETER") type: Any?) {}
+/** `registerElement(tag, () => Class, meta?)`: compiled templates name each view's class; a meta registers its child hooks. */
+fun registerElement(tag: String, type: Any?, meta: Any? = null) {
+    if (meta != null) kitRegisterViewMeta(tag, type, meta)
+}

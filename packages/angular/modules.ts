@@ -369,6 +369,8 @@ const SHIMS: Record<string, string> = {
     export declare function input<T>(value: T, options?: any): InputSignal<T>;
     export declare function input<T>(): InputSignal<T | undefined>;
     export declare namespace input { function required<T>(options?: any): InputSignal<T>; }
+    export declare function booleanAttribute(value: unknown): boolean;
+    export declare function numberAttribute(value: unknown, fallbackValue?: number): number;
     export declare function model<T>(value: T, options?: any): ModelSignal<T>;
     export declare function model<T>(): ModelSignal<T | undefined>;
     export declare namespace model { function required<T>(options?: any): ModelSignal<T>; }

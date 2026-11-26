@@ -67,6 +67,21 @@ public protocol JSInjectableType: AnyObject {
 
 public func forwardRef(_ fn: @escaping () throws -> Any?) -> Any? { fn }
 
+/// Angular's `booleanAttribute` input transform: `false` / `"false"` / `null` / `undefined` → `false`, else `true`.
+public func booleanAttribute(_ value: Any?) -> Bool {
+    guard let v = jsFlat(value), !jsIsNullish(v) else { return false }
+    if let b = v as? Bool { return b }
+    return jsToString(v) != "false"
+}
+
+/// Angular's `numberAttribute` input transform: parses a finite number or returns `fallbackValue` (`NaN`).
+public func numberAttribute(_ value: Any?, _ fallbackValue: Double = .nan) -> Double {
+    guard let v = jsFlat(value), !jsIsNullish(v) else { return fallbackValue }
+    if let s = v as? String, s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return fallbackValue }
+    let n = jsToNumber(v)
+    return n.isNaN ? fallbackValue : n
+}
+
 public func resolveForwardRef(_ value: Any?) -> Any? {
     guard let flat = jsFlat(value) else { return nil }
     if let fn = flat as? () throws -> Any? { return jsReported { try fn() } ?? nil }

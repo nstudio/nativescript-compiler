@@ -20,18 +20,24 @@ const memberName = (m: ts.ClassElement) => (m.name && (ts.isIdentifier(m.name) |
 const lineOf = (n: ts.Node) => n.getSourceFile().getLineAndCharacterOfPosition(n.getStart()).line + 1;
 const withoutExt = (f: string) => f.replace(/\.tsx?$/, '').replace(/\/index$/, '');
 
-/** An import's file: relative, or under the app's `~/` or `@/` alias (its `src` or `app` folder). */
-export function resolveClassImport(fromFile: string, spec: string): string | undefined {
+type Aliased = (specifier: string) => string | undefined;
+
+/** An import's file: relative, under the app's `~/` or `@/` alias, or resolved by tsconfig `paths` (`aliased`). */
+export function resolveClassImport(fromFile: string, spec: string, aliased?: Aliased): string | undefined {
   const candidates: string[] = [];
   if (spec.startsWith('.')) {
     const base = join(dirname(fromFile), spec);
     candidates.push(base + '.ts', join(base, 'index.ts'));
-  } else if (spec.startsWith('~/') || spec.startsWith('@/')) {
-    const sub = spec.slice(2);
-    for (let dir = dirname(fromFile); dirname(dir) !== dir; dir = dirname(dir)) {
-      if (!existsSync(join(dir, 'package.json'))) continue;
-      for (const appDir of ['src', 'app']) candidates.push(join(dir, appDir, sub + '.ts'), join(dir, appDir, sub, 'index.ts'));
-      break;
+  } else {
+    const mapped = aliased?.(spec);
+    if (mapped) candidates.push(mapped, mapped + '.ts', join(mapped, 'index.ts'));
+    if (spec.startsWith('~/') || spec.startsWith('@/')) {
+      const sub = spec.slice(2);
+      for (let dir = dirname(fromFile); dirname(dir) !== dir; dir = dirname(dir)) {
+        if (!existsSync(join(dir, 'package.json'))) continue;
+        for (const appDir of ['src', 'app']) candidates.push(join(dir, appDir, sub + '.ts'), join(dir, appDir, sub, 'index.ts'));
+        break;
+      }
     }
   }
   return candidates.find((c) => existsSync(c));
@@ -41,42 +47,42 @@ type Read = (file: string) => string;
 const readFile: Read = (f) => readFileSync(f, 'utf8');
 
 /** The class a module exports as `name`, followed through re-exports (`export * from`, `export { X as name } from`). */
-function exportedClass(file: string, name: string, read: Read, seen = new Set<string>()): { file: string; name: string } | undefined {
+function exportedClass(file: string, name: string, read: Read, seen = new Set<string>(), aliased?: Aliased): { file: string; name: string } | undefined {
   if (seen.has(`${file}#${name}`)) return undefined;
   seen.add(`${file}#${name}`);
   const sf = parse(file, read(file));
   if (classIn(sf, name)) return { file, name };
   for (const st of sf.statements) {
     if (ts.isExportDeclaration(st) && st.moduleSpecifier && ts.isStringLiteral(st.moduleSpecifier)) {
-      const target = resolveClassImport(file, st.moduleSpecifier.text);
+      const target = resolveClassImport(file, st.moduleSpecifier.text, aliased);
       if (!target) continue;
       if (!st.exportClause) {
-        const found = exportedClass(target, name, read, seen);
+        const found = exportedClass(target, name, read, seen, aliased);
         if (found) return found;
       } else if (ts.isNamedExports(st.exportClause)) {
         const el = st.exportClause.elements.find((e) => e.name.text === name);
-        if (el) return exportedClass(target, (el.propertyName ?? el.name).text, read, seen);
+        if (el) return exportedClass(target, (el.propertyName ?? el.name).text, read, seen, aliased);
       }
     } else if (ts.isExportDeclaration(st) && st.exportClause && ts.isNamedExports(st.exportClause)) {
       // `import { X } from './x'; export { X as name };`
       const el = st.exportClause.elements.find((e) => e.name.text === name);
       const local = el ? (el.propertyName ?? el.name).text : undefined;
-      if (local) return classOfName(file, sf, local, read, seen);
+      if (local) return classOfName(file, sf, local, read, seen, aliased);
     }
   }
   return undefined;
 }
 
 /** The class a file's own name refers to: declared there, or imported. */
-function classOfName(file: string, sf: ts.SourceFile, name: string, read: Read, seen = new Set<string>()): { file: string; name: string } | undefined {
+function classOfName(file: string, sf: ts.SourceFile, name: string, read: Read, seen = new Set<string>(), aliased?: Aliased): { file: string; name: string } | undefined {
   if (classIn(sf, name)) return { file, name };
   for (const st of sf.statements) {
     if (!ts.isImportDeclaration(st) || !st.importClause || !ts.isStringLiteral(st.moduleSpecifier)) continue;
     const bindings = st.importClause.namedBindings;
     const el = bindings && ts.isNamedImports(bindings) ? bindings.elements.find((e) => e.name.text === name) : undefined;
     if (!el) continue;
-    const target = resolveClassImport(file, st.moduleSpecifier.text);
-    return target ? exportedClass(target, (el.propertyName ?? el.name).text, read, seen) : undefined;
+    const target = resolveClassImport(file, st.moduleSpecifier.text, aliased);
+    return target ? exportedClass(target, (el.propertyName ?? el.name).text, read, seen, aliased) : undefined;
   }
   return undefined;
 }
@@ -85,11 +91,11 @@ function extendsOf(cls: ts.ClassDeclaration): ts.ExpressionWithTypeArguments | u
   return cls.heritageClauses?.find((h) => h.token === ts.SyntaxKind.ExtendsKeyword)?.types[0];
 }
 
-function baseOf(file: string, sf: ts.SourceFile, cls: ts.ClassDeclaration, read: Read): { file: string; name: string } {
+function baseOf(file: string, sf: ts.SourceFile, cls: ts.ClassDeclaration, read: Read, aliased?: Aliased): { file: string; name: string } {
   const ext = extendsOf(cls)!;
   const where = `${file}:${lineOf(ext)}`;
   if (!ts.isIdentifier(ext.expression)) throw unsupported(where, `the component ${cls.name!.text} extending ${ext.expression.getText()}`);
-  const found = classOfName(file, sf, ext.expression.text, read);
+  const found = classOfName(file, sf, ext.expression.text, read, new Set(), aliased);
   if (!found) throw unsupported(where, `the component ${cls.name!.text} extending ${ext.expression.text}, a class the build finds no source of in the app`);
   return found;
 }
@@ -97,7 +103,7 @@ function baseOf(file: string, sf: ts.SourceFile, cls: ts.ClassDeclaration, read:
 /** Where a top-level name of a file comes from: a module's export, or the file's own declaration. */
 interface Binding { module: string; spec: string; name: string; typeOnly: boolean; exported: boolean }
 
-function bindingsOf(file: string, sf: ts.SourceFile): Map<string, Binding> {
+function bindingsOf(file: string, sf: ts.SourceFile, aliased?: Aliased): Map<string, Binding> {
   const out = new Map<string, Binding>();
   const exportsAs = new Map<string, string>();
   for (const st of sf.statements) {
@@ -113,7 +119,7 @@ function bindingsOf(file: string, sf: ts.SourceFile): Map<string, Binding> {
   for (const st of sf.statements) {
     if (ts.isImportDeclaration(st) && st.importClause && ts.isStringLiteral(st.moduleSpecifier)) {
       const spec = st.moduleSpecifier.text;
-      const target = resolveClassImport(file, spec);
+      const target = resolveClassImport(file, spec, aliased);
       const module = target ? withoutExt(target) : spec;
       const clause = st.importClause;
       if (clause.name) out.set(clause.name.text, { module, spec, name: 'default', typeOnly: clause.isTypeOnly, exported: true });
@@ -203,22 +209,22 @@ const BASE_META = new Set(['providers', 'viewProviders', 'host', 'inputs', 'outp
  * The file's text with the class `name` flattened: no `extends`, its bases' members its own. `null` when the class
  * extends nothing.
  */
-export function flattenComponent(path: string, text: string, name: string, read: Read = readFile, seen = new Set<string>()): string | null {
+export function flattenComponent(path: string, text: string, name: string, read: Read = readFile, seen = new Set<string>(), aliased?: Aliased): string | null {
   let sf = parse(path, text);
   let cls = classIn(sf, name)!;
   if (!extendsOf(cls)) return null;
   if (seen.has(`${path}#${name}`)) throw unsupported(path, `the class ${name} extending itself through its bases`);
   seen.add(`${path}#${name}`);
-  const base = baseOf(path, sf, cls, read);
+  const base = baseOf(path, sf, cls, read, aliased);
   let baseSf: ts.SourceFile;
   if (base.file === path) {
     // A base in the same file is flattened there first, and the component read again from that text.
-    const flat = flattenComponent(path, text, base.name, read, seen);
+    const flat = flattenComponent(path, text, base.name, read, seen, aliased);
     if (flat !== null) { text = flat; sf = parse(path, text); cls = classIn(sf, name)!; }
     baseSf = sf;
   } else {
     const original = read(base.file);
-    baseSf = parse(base.file, flattenComponent(base.file, original, base.name, read, seen) ?? original);
+    baseSf = parse(base.file, flattenComponent(base.file, original, base.name, read, seen, aliased) ?? original);
   }
   const B = classIn(baseSf, base.name)!;
   const C = name;
@@ -245,8 +251,8 @@ export function flattenComponent(path: string, text: string, name: string, read:
 
   // ---- Names: the base's text reads its own file's imports and declarations; the component's file binds them too.
   const sameFile = base.file === path;
-  const mine = bindingsOf(path, sf);
-  const theirs = bindingsOf(base.file, baseSf);
+  const mine = bindingsOf(path, sf, aliased);
+  const theirs = bindingsOf(base.file, baseSf, aliased);
   const imports: string[] = [];
   const mapped = new Map<string, string>();
   const nameFor = (n: string, at: ts.Node): string => {
@@ -541,7 +547,7 @@ function needsBase(id: ts.Identifier, name: string): string | undefined {
  * A class that a component extends is copied into it (`flattenComponent`), so the component is no instance of it: an
  * app file reading one as such (`instanceof`, injection or a query by it, a provider of it, a type) stops the build.
  */
-export function refuseBaseUses(files: string[], read: Read = readFile): void {
+export function refuseBaseUses(files: string[], read: Read = readFile, aliased?: Aliased): void {
   const bases = new Map<string, { name: string; by: string }>();
   const derived = new Map<string, { name: string; statics: Map<string, InheritedStatic> }>();
   for (const f of files) {
@@ -555,7 +561,7 @@ export function refuseBaseUses(files: string[], read: Read = readFile): void {
       const statics = new Map<string, InheritedStatic>();
       const declared = new Set(st.members.filter(isStatic).map(memberName));
       while (cls && extendsOf(cls) && ts.isIdentifier(extendsOf(cls)!.expression)) {
-        const b = classOfName(file, at, (extendsOf(cls)!.expression as ts.Identifier).text, read);
+        const b = classOfName(file, at, (extendsOf(cls)!.expression as ts.Identifier).text, read, new Set(), aliased);
         if (!b || seen.has(`${b.file}#${b.name}`)) break;
         seen.add(`${b.file}#${b.name}`);
         if (!bases.has(`${b.file}#${b.name}`)) bases.set(`${b.file}#${b.name}`, { name: b.name, by: st.name.text });
@@ -577,7 +583,7 @@ export function refuseBaseUses(files: string[], read: Read = readFile): void {
   const resolve = <T>(f: string, sf: ts.SourceFile, among: Map<string, T>) => {
     const local = new Map<string, T>();
     for (const n of names) {
-      const found = sf.text.includes(n) ? classOfName(f, sf, n, read) : undefined;
+      const found = sf.text.includes(n) ? classOfName(f, sf, n, read, new Set(), aliased) : undefined;
       const b = found && among.get(`${found.file}#${found.name}`);
       if (b) local.set(n, b);
     }
@@ -585,7 +591,7 @@ export function refuseBaseUses(files: string[], read: Read = readFile): void {
       if (!ts.isImportDeclaration(st) || !st.importClause?.namedBindings || !ts.isNamedImports(st.importClause.namedBindings)) continue;
       for (const e of st.importClause.namedBindings.elements) {
         if (local.has(e.name.text) || !e.propertyName) continue;
-        const found = classOfName(f, sf, e.name.text, read);
+        const found = classOfName(f, sf, e.name.text, read, new Set(), aliased);
         const b = found && among.get(`${found.file}#${found.name}`);
         if (b) local.set(e.name.text, b);
       }

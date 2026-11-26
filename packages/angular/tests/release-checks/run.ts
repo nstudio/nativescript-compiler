@@ -1650,8 +1650,16 @@ export function openSheet(dialogs: NativeDialogService, cmp: any, config?: Nativ
     };
     const empty = use('<Panel></Panel>');
     check(typeof empty === 'object' && empty.tag === 'Panel' && typeof use('<Badge><Label text="1"></Label></Badge>') === 'object', 'a tag registered with a meta is an element; one whose meta has no renderer hooks takes children');
-    check(String(use('<Panel><Label id="main" text="x"></Label></Panel>')).includes('the children of <Panel> join it through its registerElement meta (insertChild, removeChild)'), "children of a tag whose meta inserts them itself are refused, not added as the layout's");
+    const withChild = use('<Panel><Label id="main" text="x"></Label></Panel>');
+    check(typeof withChild === 'object' && withChild.tag === 'Panel' && !!found.get('Panel')?.metaCode?.includes('insertChild'), 'children of a tag whose meta has insertChild/removeChild compile and emit runtime ViewMeta registration');
     check(String(use('<StackLayout><Glass></Glass></StackLayout>')).includes('<Glass> is registered with skipAddToDom'), 'a tag registered with skipAddToDom is refused');
+    const invisible = new Map([['Ghost', ['insertInvisibleNode']]]);
+    const ghostErr = (() => { try { angularComponent('/app/home.component.ts', `import { Component } from '@angular/core';\n@Component({ selector: 'Home', template: '<Ghost><Label text="x"></Label></Ghost>' })\nexport class Home {}\n`, new Map(), { elements: new Map([['Ghost', 'Ghost']]), elementMeta: invisible }); return ''; } catch (e) { return String(e); } })();
+    check(ghostErr.includes('registerElement meta (insertInvisibleNode)'), 'children of a tag whose meta has insertInvisibleNode are still refused');
+    const masonEntry = join(dir, 'src/mason.ts');
+    writeFileSync(masonEntry, "import { registerElement } from '@nativescript/angular';\nimport { Box } from './box';\nregisterElement('Box', () => Box, { skipAddToDom: false, insertChild(p: any, c: any) {}, removeChild(p: any, c: any) {} });\n");
+    const masonFound = registeredElements([masonEntry], join(dir, 'node_modules'));
+    check(masonFound.get('Box')?.meta?.join() === 'insertChild,removeChild', 'skipAddToDom: false is not treated as skipAddToDom: true');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1711,22 +1719,38 @@ export function openSheet(dialogs: NativeDialogService, cmp: any, config?: Nativ
 
   const meta = (fields: string, members = '') => thrown(() => angularComponent('/app/c.component.ts', `import { Component, input, output, viewChild, booleanAttribute } from '@angular/core';\nconst template = '';\n@Component({ selector: 'C', template: '<Label></Label>', ${fields} })\nexport class C { ${members} }\n`, new Map()));
   for (const [fields, text] of [
-    ["viewProviders: [Object]", "@Component's viewProviders"], ["host: { class: 'card' }", "@Component's host"],
     ["inputs: ['x']", "@Component's inputs"], ["outputs: ['y']", "@Component's outputs"], ["preserveWhitespaces: true", "@Component's preserveWhitespaces"],
     ["hostDirectives: []", "@Component's hostDirectives"], ["interpolation: ['[[', ']]']", "@Component's interpolation"],
   ]) {
     const e = meta(fields);
     check(e.includes(`${text} is not supported in a release build yet`), `${text} stops the build${e ? '' : ': it compiled'}`);
   }
+  check(!meta("viewProviders: [Object]") && !meta("host: { class: 'card', 'data-slot': 'box' }"), "@Component's viewProviders and host compile");
+  {
+    const hosted = angularComponent('/app/c.component.ts', "import { Component, input, booleanAttribute } from '@angular/core';\n@Component({ selector: 'C', host: { class: 'card', 'data-slot': 'box', '[attr.data-on]': 'on()' }, template: '<Label class=\"inner\"></Label>' })\nexport class C { on = input(false, { transform: booleanAttribute }); }\n", new Map())!;
+    const rootAttrs = (hosted.template[0] as { attrs: { name: string; value?: string; method?: string }[] }).attrs;
+    check(rootAttrs.some((a) => a.name === 'class' && a.value === 'card inner') && rootAttrs.some((a) => a.name === 'data-slot' && a.value === 'box') && rootAttrs.some((a) => a.name === 'data-on' && !!a.method)
+      && hosted.setters?.includes('on') && hosted.source.includes('$set_on(value: any) { this.on.$assign(booleanAttribute(value)); }'),
+      "@Component's host applies static/bound attributes to the root element and input() transform lowers to a $set_ setter");
+  }
+  check(!page(`<router-outlet></router-outlet>`) && !page(`<page-router-outlet id="MainContent" class="main"></page-router-outlet>`), '<router-outlet> and <page-router-outlet id="..."> compile');
   check(meta('template').includes("@Component's template is read as `name: value`"), "a shorthand @Component field stops the build");
   check(!meta("standalone: true, schemas: [], exportAs: 'c', animations: [], preserveWhitespaces: false, encapsulation: 2"), '@Component fields that only steer the compiler compile');
   for (const [members, text] of [
-    ["on = input(false, { transform: booleanAttribute });", "input()'s transform (on) is not supported in a release build yet"],
     ["done = output<void>({ alias: 'finished' });", "output()'s alias (done) is not supported in a release build yet"],
-    ["box = viewChild('box');", 'the signal query viewChild() (box) is not supported in a release build yet'],
+    ["box = contentChild('box');", 'the signal query contentChild() (box) is not supported in a release build yet'],
   ]) {
     const e = meta('standalone: true', members);
     check(e.includes(text), `${text.split(' is ')[0]} stops the build${e ? '' : ': it compiled'}`);
+  }
+  {
+    const q = angularComponent('/app/q.component.ts', "import { Component, ElementRef, viewChild, viewChildren } from '@angular/core';\n@Component({ selector: 'Q', template: '<StackLayout #box><Label #item></Label></StackLayout>' })\nexport class Q { box = viewChild<ElementRef>('box'); req = viewChild.required<ElementRef>('box'); items = viewChildren<ElementRef>('item'); }\n", new Map())!;
+    check(q.source.includes('signal<ElementRef | undefined>(undefined)') && q.source.includes('signal<ElementRef>(undefined as any)') && q.source.includes('signal<ElementRef[]>([])') && q.source.includes('this.box.set(new $ElementRef($q))') && q.source.includes('this.items.update((xs) => [...xs, new $ElementRef($q)])'),
+      'signal viewChild(), viewChild.required() and viewChildren() lower to writable signals updated by query hooks');
+    const dir = angularDirectives(['/app/ig.directive.ts'], () => "import { Directive } from '@angular/core';\n@Directive({ selector: 'hlm-input-group, [hlmInputGroup]' })\nexport class HlmInputGroup {}\n");
+    const hostDir = angularComponent('/app/ig.component.ts', "import { Component } from '@angular/core';\nimport { HlmInputGroup } from './ig.directive';\n@Component({ selector: 'Host', imports: [HlmInputGroup], template: '<hlm-input-group><Label text=\"ok\"></Label></hlm-input-group>' })\nexport class Host {}\n", new Map(), { directives: dir })!;
+    const rootEl = hostDir.template[0] as { tag?: string; directives?: unknown[] };
+    check(rootEl.tag === 'ContentView' && rootEl.directives?.length === 1, 'an unregistered custom element matched by an in-scope @Directive compiles as a host container with that directive');
   }
   check(!meta('standalone: true', "on = input(false, { alias: 'enabled', debugName: 'on' });"), "input()'s alias and debugName compile");
   const directive = (body: string, fields = '') => thrown(() => angularDirectives(['/app/d.directive.ts'], () => `import { Directive, input } from '@angular/core';\n@Directive({ selector: '[dim]'${fields} })\nexport class Dim { ${body} }\n`));
@@ -1782,8 +1806,6 @@ export function openSheet(dialogs: NativeDialogService, cmp: any, config?: Nativ
   }
   for (const [fields, members, text] of [
     ['providers: [Store, { provide: Store, useClass: Store, multi: true }]', '', "its multi is not supported in a release build yet"],
-    ['providers: [...SHARED]', '', "the provider ...SHARED in @Component's providers is not supported in a release build yet"],
-    ['providers: [provideStore()]', '', "the provider provideStore() in @Component's providers is not supported in a release build yet"],
     ['providers: SHARED', '', "@Component's providers are read as an array literal in a release build"],
     ['providers: [{ provide: Store }]', '', 'needs provide and one of useClass, useValue, useFactory or useExisting'],
     ['providers: [{ provide: Store, useFactory: (s: Store) => s, deps: [[new Optional(), Store]] }]', '', 'deps other than a list of tokens for useFactory are not supported'],
@@ -1793,6 +1815,7 @@ export function openSheet(dialogs: NativeDialogService, cmp: any, config?: Nativ
     const e = meta(fields, members);
     check(e.includes(text), `component providers: ${text.split(' is ')[0].split(' are ')[0]} stops the build${e ? '' : ': it compiled'}`);
   }
+  check(!meta('providers: [...SHARED]') && !meta('providers: [provideStore()]'), 'component providers accept spread arrays and provider factory calls (e.g. provideIcons)');
   const extended = thrown(() => angularComponent('/app/c.component.ts', "import { Component } from '@angular/core';\nclass Base {}\n@Component({ selector: 'C', template: '<Label></Label>', providers: [Base] })\nexport class C extends Base {}\n", new Map()));
   check(extended.includes("@Component's providers on a class that extends another are not supported in a release build yet"), 'component providers on a derived class stop the build');
   const ngModule = "import { NgModule } from '@angular/core';\n@NgModule({ declarations: [], providers: [{ provide: 'API', useValue: '/api' }] })\nexport class AppModule {}\n";
@@ -3791,6 +3814,48 @@ fun main() {
     }
     check(got === expected, 'F18: @let throw aborts view without NG0314 noise and @if tick update defers after sibling bindings (Kotlin)');
     if (got !== expected) console.log(`    got: ${got.slice(0, 1500)}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+})();
+
+// ---- Angular booleanAttribute & numberAttribute (Swift & Kotlin runtime) ----
+(() => {
+  const dir = mkdtempSync(join(tmpdir(), 'ns-release-checks-attrs-'));
+  try {
+    const expected = 'true,true,false,false,false|42,3.5,99,99,99';
+    let swGot = '';
+    try {
+      const out = join(dir, 'swift-attrs');
+      mkdirSync(out, { recursive: true });
+      writeFileSync(join(out, 'main.swift'), `import Foundation
+import NativeScriptKit
+let b = [booleanAttribute(""), booleanAttribute("true"), booleanAttribute("false"), booleanAttribute(nil), booleanAttribute(false)].map(String.init).joined(separator: ",")
+let n = [numberAttribute("42", 99), numberAttribute("3.5", 99), numberAttribute("", 99), numberAttribute("abc", 99), numberAttribute(nil, 99)].map { $0 == floor($0) ? String(Int($0)) : String($0) }.joined(separator: ",")
+print("\\(b)|\\(n)")
+`);
+      buildSwiftRuntime(nativeBuild, '-Onone');
+      const errors = swiftc(readdirSync(out).map((f) => join(out, f)), join(dir, 'main-attrs'), nativeBuild, '-Onone');
+      swGot = errors ? errors.join('\n').slice(0, 800) : spawnSync(join(dir, 'main-attrs'), { encoding: 'utf8' }).stdout.trim();
+    } catch (e) { swGot = String(e); }
+    check(swGot === expected, `booleanAttribute and numberAttribute match Angular (Swift${swGot === expected ? '' : `: ${swGot}`})`);
+
+    let ktGot = '';
+    try {
+      const out = join(dir, 'kotlin-attrs');
+      mkdirSync(out, { recursive: true });
+      writeFileSync(join(out, 'Main.kt'), `import org.nativescript.kit.*
+fun main() {
+    val b = listOf(booleanAttribute(""), booleanAttribute("true"), booleanAttribute("false"), booleanAttribute(null), booleanAttribute(false)).joinToString(",")
+    val n = listOf(numberAttribute("42", 99.0), numberAttribute("3.5", 99.0), numberAttribute("", 99.0), numberAttribute("abc", 99.0), numberAttribute(null, 99.0)).map { if (it == kotlin.math.floor(it)) it.toInt().toString() else it.toString() }.joinToString(",")
+    println("$b|$n")
+}
+`);
+      const runtime = buildKotlinRuntime(nativeBuild);
+      const errors = kotlinc(readdirSync(out).map((f) => join(out, f)), join(dir, 'classes-attrs'), [runtime]);
+      ktGot = errors ? errors.join('\n').slice(0, 800) : spawnSync('java', ['-cp', [join(dir, 'classes-attrs'), runtime, kotlinStdlib()].join(':'), 'MainKt'], { encoding: 'utf8' }).stdout.trim();
+    } catch (e) { ktGot = String(e); }
+    check(ktGot === expected, `booleanAttribute and numberAttribute match Angular (Kotlin${ktGot === expected ? '' : `: ${ktGot}`})`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

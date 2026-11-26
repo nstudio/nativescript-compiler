@@ -51,6 +51,23 @@ class SimpleChange(var previousValue: Any?, var currentValue: Any?, var firstCha
 
 fun forwardRef(fn: () -> Any?): Any? = fn
 
+/** Angular's `booleanAttribute` input transform: `false` / `"false"` / `null` / `undefined` -> `false`, else `true`. */
+fun booleanAttribute(value: Any?): Boolean {
+    val v = jsBox(value)
+    if (jsIsNullish(v)) return false
+    if (v is Boolean) return v
+    return jsToString(v) != "false"
+}
+
+/** Angular's `numberAttribute` input transform: parses a number or returns `fallbackValue` (`NaN`). */
+fun numberAttribute(value: Any?, fallbackValue: Double = Double.NaN): Double {
+    val v = jsBox(value)
+    if (jsIsNullish(v)) return fallbackValue
+    if (v is String && v.trim().isEmpty()) return fallbackValue
+    val n = jsToNumber(v)
+    return if (n.isNaN()) fallbackValue else n
+}
+
 fun resolveForwardRef(value: Any?): Any? {
     val flat = jsBox(value) ?: return null
     if (flat is Function0<*>) return try { flat.invoke() } catch (t: Throwable) { jsReportUncaught(jsCaught(t)); null }

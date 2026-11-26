@@ -15,7 +15,7 @@ export type { Platform };
 export function foldPlatform(text: string, fileName: string, platform: Platform, modulesDir?: string, defines: readonly (readonly [string, string])[] = []): string {
 	text = applyDefines(text, fileName, defines);
 	// A defined string compared with a literal (`'nativescript' === 'css-tree'`) folds as well.
-	if (!/\b(isIOS|isAndroid|__IOS__|__ANDROID__|__APPLE__|__VISIONOS__|__DEV__)\b|\bApplication\.(android|ios)\b|import\.meta\.hot|(['"])[^'"\n]*\2\)?\s*[!=]==?\s*\(?['"]/.test(text)) return text;
+	if (!/\b(isIOS|isAndroid|__IOS__|__ANDROID__|__APPLE__|__VISIONOS__|__WINDOWS__|__LINUX__|__DEV__)\b|\bApplication\.(android|ios)\b|import\.meta\.hot|(['"])[^'"\n]*\2\)?\s*[!=]==?\s*\(?['"]/.test(text)) return text;
 	// Core's `Application.android` and `Application.ios`, the platform's object or undefined: where the file imports core's Application.
 	const application = /import\s*\{[^}]*\bApplication\b[^}]*\}\s*from\s*['"]@nativescript\/core['"]/.test(text);
 	// A release build: `__DEV__` is false, as the bundlers define it for one.
@@ -26,6 +26,8 @@ export function foldPlatform(text: string, fileName: string, platform: Platform,
 		isAndroid: platform === 'android',
 		__ANDROID__: platform === 'android',
 		__VISIONOS__: false,
+		__WINDOWS__: false,
+		__LINUX__: false,
 		__DEV__: false,
 	};
 	const kind = fileName.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;

@@ -5,6 +5,49 @@ import UIKit
 // a framework's renderer adds them, properties set as the XML builder
 // sets them, errors reported as core reports what nothing catches.
 
+/// Registered `ViewClassMeta` (`insertChild` / `removeChild`) hooks from `registerElement(tag, () => Class, meta)`.
+private enum ViewMetaRegistry {
+    struct Entry {
+        let insertChild: Any?
+        let removeChild: Any?
+    }
+    private static var byName: [String: Entry] = [:]
+    private static var byType: [ObjectIdentifier: Entry] = [:]
+
+    static func register(_ tag: String, _ resolver: Any?, _ meta: Any?) {
+        guard let m = jsFlat(meta), !jsIsNullish(m) else { return }
+        let insertChild = (try? jsGet(m, "insertChild")).flatMap { jsIsNullish($0) ? nil : $0 }
+        let removeChild = (try? jsGet(m, "removeChild")).flatMap { jsIsNullish($0) ? nil : $0 }
+        guard insertChild != nil || removeChild != nil else { return }
+        let entry = Entry(insertChild: insertChild, removeChild: removeChild)
+        byName[tag.lowercased()] = entry
+        if let resolver = jsFlat(resolver), !jsIsNullish(resolver), let ctor = try? jsCall(resolver) {
+            if let cls = ctor as? Any.Type {
+                byType[ObjectIdentifier(cls)] = entry
+                byName[String(describing: cls).lowercased()] = entry
+            }
+            let name = jsConstructorName(ctor)
+            if !name.isEmpty, name != "Object" { byName[name.lowercased()] = entry }
+        }
+    }
+
+    static func meta(for view: ViewBase) -> Entry? {
+        var cls: AnyClass? = type(of: view)
+        while let cur = cls {
+            if let hit = byType[ObjectIdentifier(cur)] { return hit }
+            if let hit = byName[String(describing: cur).lowercased()] { return hit }
+            cls = class_getSuperclass(cur)
+        }
+        let name = jsConstructorName(view).lowercased()
+        return byName[name]
+    }
+}
+
+/// Registers a plugin element's `ViewClassMeta` (`insertChild` / `removeChild`) so compiled templates attach children through it.
+public func kitRegisterViewMeta(_ tag: String, _ resolver: Any?, _ meta: Any?) {
+    ViewMetaRegistry.register(tag, resolver, meta)
+}
+
 /// The template children of a container: its static views and its regions, in template order.
 final class TemplateChildren: RegionHost {
     nonisolated deinit {}
@@ -34,7 +77,30 @@ final class TemplateChildren: RegionHost {
         guard let owner else { return }
         let next: [ViewBase] = parts.flatMap(\.views)
         jsReport {
-            if let layout = owner as? LayoutBase {
+            if let meta = ViewMetaRegistry.meta(for: owner) {
+                let kept = Set(next.map(ObjectIdentifier.init))
+                var active: [ViewBase] = []
+                for old in placed {
+                    if kept.contains(ObjectIdentifier(old)) {
+                        active.append(old)
+                    } else if let remove = meta.removeChild {
+                        _ = try jsCall(remove, owner, old)
+                    }
+                }
+                let keptOrder = next.filter { view in active.contains(where: { $0 === view }) }
+                if active.count == keptOrder.count, zip(active, keptOrder).contains(where: { $0 !== $1 }), let remove = meta.removeChild {
+                    for old in active { _ = try jsCall(remove, owner, old) }
+                    active = []
+                }
+                var activeIds = Set(active.map(ObjectIdentifier.init))
+                if let insert = meta.insertChild {
+                    for (index, view) in next.enumerated() where !activeIds.contains(ObjectIdentifier(view)) {
+                        let nextSibling = next.dropFirst(index + 1).first { activeIds.contains(ObjectIdentifier($0)) }
+                        _ = try jsCall(insert, owner, view, nextSibling as Any?)
+                        activeIds.insert(ObjectIdentifier(view))
+                    }
+                }
+            } else if let layout = owner as? LayoutBase {
                 let kept = Set(next.map(ObjectIdentifier.init))
                 for old in placed where !kept.contains(ObjectIdentifier(old)) {
                     if let view = old as? View { try layout.removeChild(view) }

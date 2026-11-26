@@ -189,7 +189,11 @@ function globalCall(t: Translator, name: string, e: ts.CallExpression, decl: ts.
     return `toSignal(${t.expr(arg(0))}${initial ? `, initialValue: ${t.coerce(initial.initializer, inner)}` : ''})`;
   }
   if (name === 'firstValueFrom' && lib) return `rxFirstValueFrom(${t.expr(arg(0))})`;
-  if (name === 'registerElement' && (lib || core.adapterRuntimeFile(decl?.getSourceFile().fileName) === 'runtime/angular-rx.ts')) return '()';
+  if (name === 'registerElement' && (lib || core.adapterRuntimeFile(decl?.getSourceFile().fileName) === 'runtime/angular-rx.ts')) {
+    return e.arguments.length >= 3 && arg(2)
+      ? `kitRegisterViewMeta(${t.str(arg(0))}, ${t.coerce(arg(1), 'Any?')}, ${t.coerce(arg(2), 'Any?')})`
+      : '()';
+  }
   return undefined;
 }
 

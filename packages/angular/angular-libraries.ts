@@ -97,6 +97,114 @@ export interface RegisteredElement {
   from: string;
   /** The keys of the third argument (`insertChild`, `skipAddToDom`…), or null when it is not an object literal the file declares. */
   meta?: string[] | null;
+  /** Synthesized TypeScript expression registering a plugin FESM's `insertChild` / `removeChild` meta at startup. */
+  metaCode?: string;
+  /** True when the registration lives in an app source file whose own `registerElement` call runs at startup. */
+  fromApp?: boolean;
+}
+
+/** Annotates untyped parameters of JS function/arrow/method expressions inside a meta object literal so it compiles in strict TS. */
+function typedMetaLiteral(sf: ts.SourceFile, obj: ts.ObjectLiteralExpression): string {
+  const edits: { at: number; text: string }[] = [];
+  const visit = (n: ts.Node) => {
+    if (ts.isParameter(n) && !n.type) edits.push({ at: n.name.getEnd(), text: ': any' });
+    ts.forEachChild(n, visit);
+  };
+  visit(obj);
+  const start = obj.getStart(sf);
+  let text = obj.getText(sf);
+  for (const e of edits.sort((a, b) => b.at - a.at)) {
+    const pos = e.at - start;
+    text = text.slice(0, pos) + e.text + text.slice(pos);
+  }
+  return text;
+}
+
+/** Collects top-level constant literal declarations referenced by `obj` (e.g. `MAINCONTENT = 'MainContent'`). */
+function metaLiteralCode(sf: ts.SourceFile, obj: ts.ObjectLiteralExpression): string {
+  const consts = new Map<string, string>();
+  for (const st of sf.statements) {
+    if (!ts.isVariableStatement(st) || !(st.declarationList.flags & ts.NodeFlags.Const)) continue;
+    for (const d of st.declarationList.declarations) {
+      if (!ts.isIdentifier(d.name) || !d.initializer) continue;
+      if (ts.isStringLiteralLike(d.initializer) || ts.isNumericLiteral(d.initializer) || d.initializer.kind === ts.SyntaxKind.TrueKeyword || d.initializer.kind === ts.SyntaxKind.FalseKeyword) {
+        consts.set(d.name.text, `const ${d.name.text} = ${d.initializer.getText(sf)};`);
+      }
+    }
+  }
+  const used = new Set<string>();
+  const scanIds = (n: ts.Node) => {
+    if (ts.isIdentifier(n) && consts.has(n.text) && !(ts.isPropertyAccessExpression(n.parent) && n.parent.name === n) && !(ts.isPropertyAssignment(n.parent) && n.parent.name === n)) {
+      used.add(n.text);
+    }
+    ts.forEachChild(n, scanIds);
+  };
+  scanIds(obj);
+  const body = typedMetaLiteral(sf, obj);
+  if (!used.size) return body;
+  return `(() => { ${[...used].map((k) => consts.get(k)!).join(' ')} return ${body}; })()`;
+}
+
+/** Discovers elements registered via a plugin helper module (e.g. `<pkg>/elements.js` + `@CSSType` decorators in `<pkg>/web.js`). */
+function scanPluginElementTable(pkg: string, helperSubpath: string, modulesDir: string, metaObj: ts.ObjectLiteralExpression | null, fesmSf: ts.SourceFile, found: Map<string, RegisteredElement>): void {
+  const pkgDir = join(modulesDir, pkg);
+  const candidates = [join(pkgDir, helperSubpath + '.js'), join(pkgDir, helperSubpath, 'index.js'), join(pkgDir, helperSubpath + '.mjs')];
+  const helperFile = candidates.find(existsSync);
+  if (!helperFile) return;
+  const helperText = readFileSync(helperFile, 'utf8');
+  const helperSf = ts.createSourceFile(helperFile, helperText, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const helperImports = new Map<string, [string, string]>();
+  const namespaceImports: { local: string; spec: string }[] = [];
+  for (const st of helperSf.statements) {
+    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue;
+    const spec = st.moduleSpecifier.text;
+    const from = spec === '.' || spec === './' || spec === './index' ? pkg : spec.startsWith('./') ? `${pkg}/${spec.slice(2).replace(/\.js$/, '')}` : spec;
+    const clause = st.importClause;
+    if (clause?.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+      for (const el of clause.namedBindings.elements) {
+        helperImports.set(el.name.text, [(el.propertyName ?? el.name).text, from]);
+      }
+    } else if (clause?.namedBindings && ts.isNamespaceImport(clause.namedBindings)) {
+      namespaceImports.push({ local: clause.namedBindings.name.text, spec });
+    }
+  }
+  const seen = new Set<string>();
+  const metaCode = metaObj ? metaLiteralCode(fesmSf, metaObj) : undefined;
+  const add = (tag: string, name: string, from: string) => {
+    const key = tag.toLowerCase();
+    if (!key || seen.has(key) || found.has(tag)) return;
+    seen.add(key);
+    found.set(tag, { name, from, ...(metaObj ? { meta: ['insertChild', 'removeChild'] } : {}), ...(metaCode ? { metaCode } : {}) });
+  };
+  // Scan namespace-imported modules (e.g. `./web.js`) for `__decorate([CSSType('tag'), ...], Class)` via AST.
+  for (const ns of namespaceImports) {
+    const nsBase = resolve(dirname(helperFile), ns.spec);
+    const nsFile = [nsBase, nsBase + '.js', join(nsBase, 'index.js')].find(existsSync);
+    if (!nsFile) continue;
+    const nsFrom = ns.spec.startsWith('./') ? `${pkg}/${ns.spec.slice(2).replace(/\.js$/, '')}` : ns.spec;
+    const nsSf = ts.createSourceFile(nsFile, readFileSync(nsFile, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+    const visitNs = (n: ts.Node) => {
+      if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === '__decorate' && n.arguments.length >= 2 && ts.isArrayLiteralExpression(n.arguments[0]) && ts.isIdentifier(n.arguments[1])) {
+        const clsName = n.arguments[1].text;
+        for (const el of n.arguments[0].elements) {
+          if (ts.isCallExpression(el) && ts.isIdentifier(el.expression) && el.expression.text === 'CSSType' && el.arguments.length >= 1 && ts.isStringLiteralLike(el.arguments[0])) {
+            add(el.arguments[0].text, clsName, nsFrom);
+          }
+        }
+      }
+      ts.forEachChild(n, visitNs);
+    };
+    visitNs(nsSf);
+  }
+  // Scan tuple arrays `[['View', View], ['Scroll', Scroll], ...]` inside the helper module.
+  const visitTuples = (n: ts.Node) => {
+    if (ts.isArrayLiteralExpression(n) && n.elements.length === 2 && ts.isStringLiteralLike(n.elements[0]) && ts.isIdentifier(n.elements[1])) {
+      const imp = helperImports.get(n.elements[1].text);
+      if (imp) add(n.elements[0].text, imp[0], imp[1]);
+    }
+    ts.forEachChild(n, visitTuples);
+  };
+  visitTuples(helperSf);
 }
 
 /**
@@ -105,7 +213,7 @@ export interface RegisteredElement {
  */
 export function registeredElements(sources: string[], modulesDir: string): Map<string, RegisteredElement> {
   const found = new Map<string, RegisteredElement>();
-  const scan = (text: string, file: string | null) => {
+  const scan = (text: string, file: string | null, pluginPkg?: string) => {
     if (!text.includes('registerElement')) return;
     const imports = new Map<string, string>();
     for (const m of text.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/g)) {
@@ -124,19 +232,104 @@ export function registeredElements(sources: string[], modulesDir: string): Map<s
       }
       return null;
     };
-    const visit = (n: ts.Node) => {
-      ts.forEachChild(n, visit);
-      if (!ts.isCallExpression(n) || !ts.isIdentifier(n.expression) || n.expression.text !== 'registerElement') return;
-      const [tag, resolver, meta] = n.arguments;
-      if (!tag || !ts.isStringLiteralLike(tag) || !resolver || !ts.isArrowFunction(resolver) || resolver.parameters.length || !ts.isIdentifier(resolver.body)) return;
-      const imported = imports.get(resolver.body.text);
+    const stringArrays = new Map<string, string[]>();
+    const stringsOf = (e: ts.Expression): string[] | null => {
+      if (ts.isAsExpression(e)) return stringsOf(e.expression);
+      if (ts.isIdentifier(e)) return stringArrays.get(e.text) ?? null;
+      if (!ts.isArrayLiteralExpression(e)) return null;
+      const items: string[] = [];
+      for (const el of e.elements) {
+        if (ts.isStringLiteralLike(el)) items.push(el.text);
+        else if (ts.isSpreadElement(el)) {
+          const inner = stringsOf(el.expression);
+          if (!inner) return null;
+          items.push(...inner);
+        } else return null;
+      }
+      return items;
+    };
+    for (const st of sf.statements) {
+      if (!ts.isVariableStatement(st) || !(st.declarationList.flags & ts.NodeFlags.Const)) continue;
+      for (const d of st.declarationList.declarations) {
+        if (ts.isIdentifier(d.name) && d.initializer) {
+          const arr = stringsOf(d.initializer);
+          if (arr) stringArrays.set(d.name.text, arr);
+        }
+      }
+    }
+    const localBaseClass = (name: string, scope: ts.Node): string | undefined => {
+      for (let cur: ts.Node | undefined = scope; cur; cur = cur.parent) {
+        if (ts.isBlock(cur) || ts.isSourceFile(cur)) {
+          for (const st of cur.statements) {
+            if (ts.isClassDeclaration(st) && st.name?.text === name) {
+              const ext = st.heritageClauses?.find((h) => h.token === ts.SyntaxKind.ExtendsKeyword)?.types[0]?.expression;
+              if (ext && ts.isIdentifier(ext)) return ext.text;
+            }
+          }
+        }
+      }
+      return undefined;
+    };
+    const record = (tagText: string, clsId: string, meta: ts.Expression | undefined, scope: ts.Node) => {
+      const imported = imports.get(clsId) ?? (localBaseClass(clsId, scope) ? imports.get(localBaseClass(clsId, scope)!) : undefined);
       if (!imported) return;
       const [name, from] = JSON.parse(imported) as [string, string];
       // Core's own views are elements already.
       if (from === '@nativescript/core' || core.stubbedPlugins.has(core.packageOf(from))) return;
       const object = meta ? objectOf(meta) : null;
-      const keys = object && object.properties.every((p) => p.name && !ts.isComputedPropertyName(p.name)) ? object.properties.map((p) => p.name!.getText().replace(/^['"]|['"]$/g, '')) : null;
-      found.set(tag.text, { name, from: from.startsWith('.') && file ? resolve(dirname(file), from) : from, ...(meta ? { meta: keys } : {}) });
+      const keys = object && object.properties.every((p) => p.name && !ts.isComputedPropertyName(p.name))
+        ? object.properties.flatMap((p) => {
+            const key = p.name!.getText().replace(/^['"]|['"]$/g, '');
+            // `skipAddToDom: false` explicitly opts in to the visual tree (e.g. MasonKit's `masonMeta`).
+            if (key === 'skipAddToDom' && ts.isPropertyAssignment(p) && p.initializer.kind === ts.SyntaxKind.FalseKeyword) return [];
+            return [key];
+          })
+        : null;
+      const hasChildHooks = !!keys && keys.some((k) => k === 'insertChild' || k === 'removeChild');
+      const metaCode = !file && object && hasChildHooks ? metaLiteralCode(sf, object) : undefined;
+      found.set(tagText, {
+        name,
+        from: from.startsWith('.') && file ? resolve(dirname(file), from) : from,
+        ...(meta ? { meta: keys } : {}),
+        ...(metaCode ? { metaCode } : {}),
+        ...(file ? { fromApp: true } : {}),
+      });
+    };
+    const loopTags = new Map<string, string[]>();
+    const visit = (n: ts.Node) => {
+      if (ts.isForOfStatement(n)) {
+        const decl = ts.isVariableDeclarationList(n.initializer) ? n.initializer.declarations[0] : undefined;
+        if (decl && ts.isIdentifier(decl.name)) {
+          const tags = stringsOf(n.expression);
+          if (tags) {
+            loopTags.set(decl.name.text, tags);
+            ts.forEachChild(n.statement, visit);
+            loopTags.delete(decl.name.text);
+            return;
+          }
+        }
+        // Plugin FESM loop over an imported element-table helper (`for (const { tag, ctor } of getMasonKitElements(...))`).
+        if (!file && pluginPkg && ts.isCallExpression(n.expression) && ts.isIdentifier(n.expression.expression)) {
+          const imp = imports.get(n.expression.expression.text);
+          if (imp) {
+            const [, helperFrom] = JSON.parse(imp) as [string, string];
+            if (helperFrom.startsWith(pluginPkg + '/')) {
+              const metaIdent = /\bregisterElement\([^,]+,\s*[^,]+,\s*[^?]*\?\s*(\w+)/.exec(n.statement.getText(sf))?.[1];
+              const metaObj = metaIdent ? objectOf(ts.factory.createIdentifier(metaIdent)) : null;
+              scanPluginElementTable(pluginPkg, helperFrom.slice(pluginPkg.length + 1), modulesDir, metaObj, sf, found);
+            }
+          }
+        }
+      }
+      ts.forEachChild(n, visit);
+      if (!ts.isCallExpression(n) || !ts.isIdentifier(n.expression) || n.expression.text !== 'registerElement') return;
+      const [tag, resolver, meta] = n.arguments;
+      if (!tag || !resolver || !ts.isArrowFunction(resolver) || resolver.parameters.length || !ts.isIdentifier(resolver.body)) return;
+      if (ts.isStringLiteralLike(tag)) {
+        record(tag.text, resolver.body.text, meta, n);
+      } else if (ts.isIdentifier(tag) && loopTags.has(tag.text)) {
+        for (const t of loopTags.get(tag.text)!) record(t, resolver.body.text, meta, n);
+      }
     };
     visit(sf);
   };
@@ -147,7 +340,7 @@ export function registeredElements(sources: string[], modulesDir: string): Map<s
       if (core.stubbedPlugins.has(m[1])) continue;
       const dir = join(modulesDir, m[1], 'angular');
       const entry = existsSync(dir) ? readdirSync(dir).flatMap((d) => (/^fesm/.test(d) ? readdirSync(join(dir, d)).filter((x) => x.endsWith('.mjs')).map((x) => join(dir, d, x)) : [])).sort().reverse()[0] : undefined;
-      if (entry) scan(readFileSync(entry, 'utf8'), null);
+      if (entry) scan(readFileSync(entry, 'utf8'), null, m[1]);
     }
   }
   return found;

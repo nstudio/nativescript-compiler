@@ -5,6 +5,49 @@ package org.nativescript.kit
 // a framework's renderer adds them, properties set as the XML builder
 // sets them, errors reported as core reports what nothing catches.
 
+/** Registered `ViewClassMeta` (`insertChild` / `removeChild`) hooks from `registerElement(tag, () => Class, meta)`. */
+private object ViewMetaRegistry {
+    data class Entry(val insertChild: Any?, val removeChild: Any?)
+    private val byName = HashMap<String, Entry>()
+    private val byClass = HashMap<Class<*>, Entry>()
+
+    fun register(tag: String, resolver: Any?, meta: Any?) {
+        val m = jsBox(meta)
+        if (jsIsNullish(m)) return
+        val insertChild = jsGet(m, "insertChild").let { if (jsIsNullish(it)) null else it }
+        val removeChild = jsGet(m, "removeChild").let { if (jsIsNullish(it)) null else it }
+        if (insertChild == null && removeChild == null) return
+        val entry = Entry(insertChild, removeChild)
+        byName[tag.lowercase()] = entry
+        val ctor = try { if (!jsIsNullish(resolver)) jsCall(resolver) else null } catch (_: Throwable) { null }
+        when (ctor) {
+            is Class<*> -> {
+                byClass[ctor] = entry
+                byName[ctor.simpleName.lowercase()] = entry
+            }
+            else -> if (ctor != null && !jsIsNullish(ctor)) {
+                val name = jsConstructorName(ctor)
+                if (name.isNotEmpty() && name != "Object") byName[name.lowercase()] = entry
+            }
+        }
+    }
+
+    fun meta(owner: ViewBase): Entry? {
+        var c: Class<*>? = owner.javaClass
+        while (c != null && c != Any::class.java) {
+            byClass[c]?.let { return it }
+            byName[c.simpleName.lowercase()]?.let { return it }
+            c = c.superclass
+        }
+        return byName[jsConstructorName(owner).lowercase()]
+    }
+}
+
+/** Registers a plugin element's `ViewClassMeta` (`insertChild` / `removeChild`) so compiled templates attach children through it. */
+fun kitRegisterViewMeta(tag: String, resolver: Any?, meta: Any?) {
+    ViewMetaRegistry.register(tag, resolver, meta)
+}
+
 /** The template children of a container: its static views and its regions, in template order. */
 class TemplateChildren internal constructor(owner: ViewBase) : RegionHost {
     private val owner = java.lang.ref.WeakReference(owner)
@@ -31,7 +74,30 @@ class TemplateChildren internal constructor(owner: ViewBase) : RegionHost {
         val owner = owner.get() ?: return
         val next = parts.flatMap { it.views }
         jsReport {
-            when (owner) {
+            val meta = ViewMetaRegistry.meta(owner)
+            if (meta != null) {
+                val kept = next.toSet()
+                val active = ArrayList<ViewBase>()
+                for (old in placed) {
+                    if (old in kept) active.add(old)
+                    else if (meta.removeChild != null) jsCall(meta.removeChild, owner, old)
+                }
+                val keptOrder = next.filter { v -> active.any { it === v } }
+                if (active.size == keptOrder.size && active.indices.any { active[it] !== keptOrder[it] } && meta.removeChild != null) {
+                    for (old in active) jsCall(meta.removeChild, owner, old)
+                    active.clear()
+                }
+                val activeSet = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<ViewBase, Boolean>())
+                activeSet.addAll(active)
+                if (meta.insertChild != null) {
+                    for ((index, view) in next.withIndex()) {
+                        if (activeSet.contains(view)) continue
+                        val nextSibling = next.subList(index + 1, next.size).firstOrNull { activeSet.contains(it) }
+                        jsCall(meta.insertChild, owner, view, nextSibling)
+                        activeSet.add(view)
+                    }
+                }
+            } else when (owner) {
                 is LayoutBase -> {
                     val kept = next.toSet()
                     for (old in placed) if (old !in kept && old is View) owner.removeChild(old)

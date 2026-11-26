@@ -94,16 +94,36 @@ export default function adapter(core: CoreApi): FrameworkAdapter {
       // What each NgModule declares, imports and exports: a component's directives are those in its scope.
       const ngModuleNames = new Map(sources.flatMap((f) => [...declarablesIn(f, read(f), !libraries.includes(f)).modules]));
       const runtimeModule = join(appDir, COMMON_MODULE);
-      refuseBaseUses(sources);
-      const components = sources.map((f) => angularComponent(f, read(f), selectors, { platform, pipes, runtimeModule, directives, ngModules: ngModuleNames, hosts, elements: new Map([...elements].map(([tag, e]) => [tag, e.name])), elementMeta: new Map([...elements].flatMap(([tag, e]) => (e.meta === undefined ? [] : [[tag, e.meta] as const]))) })).filter((c): c is NonNullable<typeof c> => !!c);
+      refuseBaseUses(sources, undefined, app.aliased);
+      const components = sources.map((f) => angularComponent(f, read(f), selectors, { platform, pipes, runtimeModule, directives, ngModules: ngModuleNames, hosts, aliased: app.aliased, elements: new Map([...elements].map(([tag, e]) => [tag, e.name])), elementMeta: new Map([...elements].flatMap(([tag, e]) => (e.meta === undefined || (e.meta === null && e.fromApp) ? [] : [[tag, e.meta] as const]))) })).filter((c): c is NonNullable<typeof c> => !!c);
       const routed = new Set(tree ? routedComponents(tree.routes) : routes.map((r) => r.component));
       for (const c of components) c.page = routed.has(c.name);
       const overrides = new Map<string, string>();
       // The classes of registered tags, imported where the build can reach them: route files, which only configure, are not compiled.
       if (elements.size) {
         const file = join(appDir, '__elements.release.ts');
-        const specs = [...elements.values()];
-        overrides.set(file, specs.map((e) => `import { ${e.name} } from '${e.from}';`).join('\n') + `\nexport function $elements(): any[] { return [${specs.map((e) => `new ${e.name}()`).join(', ')}]; }\n`);
+        const entries = [...elements.entries()];
+        const unique = new Map<string, { name: string; alias: string; from: string }>();
+        const usedAliases = new Set<string>();
+        const aliasOf = (e: { name: string; from: string }) => {
+          const key = `${e.from}\0${e.name}`;
+          const existing = unique.get(key);
+          if (existing) return existing.alias;
+          let alias = e.name;
+          let i = 2;
+          while (usedAliases.has(alias)) alias = `${e.name}$${i++}`;
+          usedAliases.add(alias);
+          unique.set(key, { name: e.name, alias, from: e.from });
+          return alias;
+        };
+        for (const [, e] of entries) aliasOf(e);
+        const withMeta = entries.filter(([, e]) => !!e.metaCode);
+        const imports = [
+          ...(withMeta.length ? ["import { registerElement } from '@nativescript/angular';"] : []),
+          ...[...unique.values()].map((u) => `import { ${u.alias === u.name ? u.name : `${u.name} as ${u.alias}`} } from '${u.from}';`),
+        ].join('\n');
+        const registrations = withMeta.map(([tag, e]) => `registerElement(${JSON.stringify(tag)}, () => ${aliasOf(e)}, ${e.metaCode});`).join('\n');
+        overrides.set(file, `${imports}\n${registrations ? registrations + '\n' : ''}export function $elements(): any[] { return [${[...unique.values()].map((u) => `new ${u.alias}()`).join(', ')}]; }\n`);
       }
       const modules = [...sources.filter((f) => !routeFiles.has(f) && !components.some((c) => c.file === f.replace(/\.ts$/, '.release.ts'))), ...(elements.size ? [join(appDir, '__elements.release.ts')] : [])];
       // Route files only configure and are not compiled; their guards are, each file's in a module of its own.
