@@ -2,7 +2,7 @@
 
 Official nStudio NativeScript CLI plugin (`ns compile`) and framework adapters that compile NativeScript apps (TypeScript, `@nativescript/core`, framework templates, and plugins) directly to native **Swift** (iOS) and **Kotlin** (Android) — with **no JavaScript runtime** in the release binary.
 
-[Packages](#packages) · [Quick Start](#quick-start-end-users) · [Examples](#examples) · [Speed & Footprint](#speed-and-footprint-compiled-vs-js-v8-release) · [Local Development](#local-development) · [Generating Kits](#generating-swift--kotlin-kits-from-nativescriptcore)
+[Packages](#packages) · [Quick Start](#quick-start-end-users) · [Examples](#examples) · [Source Maps & Crash Retracing](#typescript-source-maps--crash-retracing) · [Speed & Footprint](#speed-and-footprint-compiled-vs-js-v8-release) · [Local Development](#local-development) · [Generating Kits](#generating-swift--kotlin-kits-from-nativescriptcore)
 
 ---
 
@@ -53,6 +53,74 @@ Apps built with NativeScript and compiled directly to native Swift and Kotlin (w
 | **OpenJS Foundation** | [App Store](https://apps.apple.com/us/app/openjs-foundation/id6792399541) | [Google Play](https://play.google.com/store/apps/details?id=org.openjsf.app) |
 | **Guitar Pocketbook** | [App Store](https://apps.apple.com/us/app/guitar-pocketbook/id6814297918) | [Google Play](https://play.google.com/store/apps/details?id=io.nstudio.guitarpocketbook) |
 
+## TypeScript Source Maps & Crash Retracing
+
+Even though compiled releases ship **no JavaScript runtime**, every translated statement still maps back to the exact `.ts`, `.vue`, `.tsx`, `.svelte`, or HTML template file and line it came from (`--no-source-lines` disables emission). Stack traces, Xcode/Instruments, TestFlight `.ips` crash logs, Google Play Console, Firebase Crashlytics, and Sentry all resolve back to your original TypeScript source lines.
+
+### iOS (Swift `#sourceLocation` & `.dSYM`)
+
+![iOS Swift TypeScript source maps via #sourceLocation and dSYM](docs/assets/source-maps-ios-swift.png)
+
+<details>
+<summary><strong>How iOS TypeScript source mapping &amp; symbolication work</strong></summary>
+
+1. **Compiler-emitted `#sourceLocation` directives:** Every translated statement in generated `.swift` files is preceded by `#sourceLocation(file: "<path>", line: <n>)` (and reset with `#sourceLocation()` around compiler-synthesized glue). `swiftc` bakes those TypeScript paths and line numbers directly into the Release `.dSYM` (DWARF debug info), so Xcode's debugger, Instruments, `fatalError`, and TestFlight crash logs report `.ts` files and lines natively.
+2. **Inlined frames preserved in Release builds:** Release Swift builds pass `-Xllvm -mergefunc-preserve-debug-info` so LLVM's function-merging pass does not collapse near-identical functions onto a single misleading line number.
+3. **Retracing stripped store crashes:** A stripped App Store binary logs frames as `at <compiled> (MyApp+0x3a8c70)` in `error.stack` and in `.ips` crash reports. `ns compile retrace` runs `atos -i` once against the build's `.xcarchive` or `.app.dSYM`, expanding inlined frames innermost-first and verifying the `.ips` image UUID against the archive:
+
+```sh
+ns compile retrace platforms/compiled/ios < trace.txt
+ns compile retrace MyApp.xcarchive MyApp-2026-11-12-101500.ips
+```
+
+```text
+Uncaught TypeError: Cannot read properties of undefined (reading 'name')
+    at hostInitials(_:) (crash-demo.ts:7)
+    at logMeetingHosts(_:) (crash-demo.ts:12)
+```
+
+> **Tip:** Archive each store release's `.xcarchive` (or `.app.dSYM`) — crash reports resolve only against the matching build UUID.
+
+</details>
+
+### Android (Kotlin `source-lines.json` & Composed R8 `mapping.txt`)
+
+![Android Kotlin TypeScript source maps via source-lines.json and composed R8 mapping.txt](docs/assets/source-maps-android-kotlin.png)
+
+<details>
+<summary><strong>How Android TypeScript source mapping &amp; R8 composition work</strong></summary>
+
+1. **Generated `source-lines.json` line table:** Because Kotlin has no `#sourceLocation` directive, the compiler writes `source-lines.json` alongside the generated Gradle project (and the generated `@nativescript/core` kit carries its own `source-lines.json`), mapping every generated Kotlin line to `[kotlinLine, "src/app/...", tsLine]`. Component virtual classes match script code by identifiers/literals and template bindings by expression (`src/program/source-lines.ts`).
+2. **Automatic R8 `mapping.txt` composition:** Crash reporters only read R8's ProGuard/R8 mapping file, so the Android release build automatically composes R8's output with both line tables (`src/targets/android/compose-mapping.ts`):
+   - Preserves R8's `pg_map_id` (referenced by DEX source files) and recomputes `pg_map_hash` (SHA-256).
+   - Emits `# {"id":"sourceFile","fileName":"crash-demo.ts"}` per class and splits R8 line ranges (including inlined frames and their callers) wherever the underlying `.ts` line changes.
+   - Keeps R8's original Kotlin mapping beside it as `mapping-kotlin.txt`.
+   - Ships the composed `mapping.txt` inside the `.aab` automatically — **Google Play Console** displays `.ts` lines with no manual upload, and the **Crashlytics** / **Sentry** Gradle plugins upload it automatically like any standard R8 mapping.
+3. **Retracing logs & Gradle build errors locally:**
+
+```sh
+# Retrace an Android crash or logcat stack trace to .ts lines
+adb logcat -d -s System.err AndroidRuntime | ns compile retrace platforms/compiled/android
+
+# Manually compose mapping.txt in place (if built without auto-composition)
+ns compile retrace --compose-mapping platforms/compiled/android
+
+# Rewrite Kotlin/Gradle build-log errors back to original .ts file & line
+ns compile retrace --build-log platforms/compiled/android gradle.log
+```
+
+```text
+    at org.nativescript.kit.ErrorsKt.jsCannotRead(Errors.kt:175)
+    at org.nativescript.crashng.Crash_demoKt.hostInitials(crash-demo.ts:7)
+    at org.nativescript.crashng.Crash_demoKt$logMeetingHosts$1.invoke(crash-demo.ts:12)
+    at org.nativescript.kit.JSArray.map(Array.kt:445)
+    at org.nativescript.crashng.Crash_demoKt.logMeetingHosts(crash-demo.ts:12)
+```
+
+For full technical details, see [REFERENCE.md](packages/compiler/docs/REFERENCE.md#source-lines-and-stack-traces) and [compile-retrace.md](packages/compiler/docs/cli/compile-retrace.md).
+
+</details>
+
 ## Speed and footprint: Compiled vs JS (V8) Release
 
 Measured in alternating 5-round A/B runs (`ns compile` vs `--release --no-compiled`, built from the same TypeScript benchmark app and `@nativescript/core`) on a fresh iPhone 17 Pro simulator (iOS 26.5) and Pixel 9 emulator (Android API 36, speed-compiled via `cmd package compile -m speed`). Numbers are medians across 5 alternating runs (simulator/emulator indications, not physical-device guarantees):
@@ -91,7 +159,7 @@ Measured in alternating 5-round A/B runs (`ns compile` vs `--release --no-compil
 | --- | ---: | ---: |
 | **Differential suite (990 cases)** | **926 / 979** match Node *(46 declared refusals, 7 known failures)* | **874 / 917** match Node *(40 declared refusals, 3 known failures)* |
 | **Decision parity (shared front)** | **8,825,940** decisions across 48 cases — **0** answered differently | *(same)* |
-| **Module layering & shared-front tests** | **303** modules, **0** cycles · **23 / 23** semantics tests · **85 / 85** expression-parser checks | *(same)* |
+| **Module layering & shared-front tests** | **306** modules, **0** cycles · **23 / 23** semantics tests · **85 / 85** expression-parser checks | *(same)* |
 
 ## Local Development
 
