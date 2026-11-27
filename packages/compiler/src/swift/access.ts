@@ -6,14 +6,14 @@ import { mathFunctionValue } from '../semantics/apis/math.ts';
 import { CONSOLE } from '../semantics/apis/console.ts';
 import { libFunctionValueKind } from '../semantics/apis/statics.ts';
 import { ERRORS, isLibGlobal } from '../semantics/globals.ts';
-import { spell, escapingFunction, functionParts, hasTopLevelArrow, ident, identPath, isFunctionType, isOptional, openSwiftChain, optionalType, splitTopLevel, swiftString, RT, lenientReader } from './syntax.ts';
+import { escapingFunction, functionParts, hasTopLevelArrow, ident, identPath, isFunctionType, isOptional, openSwiftChain, optionalType, splitTopLevel, swiftString, RT, lenientReader } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { elementReceiverCell, keyName, receiverCell, receiverSlot, isEnumObject, nullishField, type ReceiverCell } from '../semantics/placement.ts';
 import { ambientAddedMemberOf, augmentedPropertyRead, functionProperty, uncheckedMatch, wellKnownMember, isSelf } from '../semantics/lang.ts';
 import { convertedRead, onlyNull } from '../semantics/states/predicates.ts';
 import { isLibDeclaration, isWriteTarget, notIterable } from '../semantics/ast.ts';
 import { isStatic } from '../semantics/throws.ts';
-import { isKit, isNamed, isUntyped, iterableAssertion, spelledType, type NativeType } from '../semantics/types.ts';
+import { isKit, isNamed, isUntyped, iterableAssertion, spelledType } from '../semantics/types.ts';
 import { programSymbolKey } from '../program/stable-names.ts';
 import { tested } from './native/bridging.ts';
 import { rethrowUnlessRefused } from '../semantics/refusals.ts';
@@ -370,14 +370,15 @@ export const accessMethods = {
 
 	/** App code's indexed receiver Swift holds optional, outside an optional chain: JavaScript's TypeError where it is missing. */
 	elementReceiver(this: Translator, e: ts.ElementAccessExpression, target: string): string {
-		if (this.library || e.questionDotToken || ts.isOptionalChain(e) || this.marks.isUnwrap(target)) return target;
+		if (this.library || e.questionDotToken || ts.isOptionalChain(e)) return target;
+		// A compound assignment or update reads the element first.
+		const set = ts.isBinaryExpression(e.parent) && e.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken && e.parent.left === e;
 		const cell = elementReceiverCell(this.receivers, e);
-		if (cell.cell === 'present') return this.marks.ownTried(this.receiverCode(cell, keyName(e.argumentExpression))!);
+		if (cell.cell === 'present') return this.marks.ownTried(this.receiverCode(cell, keyName(e.argumentExpression), set)!);
+		if (this.marks.isUnwrap(target)) return target;
 		if (!this.typeOf(e.expression).endsWith('?') && (isWriteTarget(e) || !this.widenedParameterRead(ts.skipOuterExpressions(e.expression, ts.OuterExpressionKinds.Parentheses)))) return target;
 		const k = e.argumentExpression;
 		const key = swiftString(ts.isStringLiteralLike(k) || ts.isNumericLiteral(k) ? k.text : k.getText());
-		// A compound assignment or update reads the element first.
-		const set = ts.isBinaryExpression(e.parent) && e.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken && e.parent.left === e;
 		return this.marks.ownTried(this.marks.helper('jsUnwrap', target, set ? `, setting: ${key}` : `, ${key}${onlyNull(this.checker.getTypeAtLocation(e.expression)) ? ', null: true' : ''}`));
 	},
 
@@ -544,11 +545,6 @@ export const accessMethods = {
 			return this.returnTypeOf(root);
 		}
 		return this.returnTypeOf(decl);
-	},
-
-	/** `assertedUntyped`'s cast: strict code's, to a class or shape whose checked conversion can fail. */
-	untypedCastChecks(this: Translator, e: ts.Expression, t: NativeType): boolean {
-		return !this.lenient && this.isObjectRef(e) && this.castChecks(spell(t));
 	},
 
 	/** An `assertedUntyped` assertion read as the optional it may be: missing where the value is undefined or null. */

@@ -1267,6 +1267,10 @@ extension JSArray: JSArrayViewing {
     static func jsViewing(_ source: JSArrayProtocol) -> AnyObject { source.jsView(as: Element.self) }
 }
 
+extension Optional: JSArrayViewing where Wrapped: JSArrayViewing {
+    static func jsViewing(_ source: JSArrayProtocol) -> AnyObject { Wrapped.jsViewing(source) }
+}
+
 /// An array type an array of another element type, whose elements it can hold, becomes, keeping that array as its view.
 protocol JSArrayAdopting {
     static func jsAdopt(_ plain: JSArrayAdoptable) -> AnyObject?

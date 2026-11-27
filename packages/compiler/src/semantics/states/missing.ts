@@ -213,6 +213,12 @@ export const missingMethods = {
 	 */
 	widenedObject(this: ValueStates, x: ts.Expression): 'undefined' | 'null' | null {
 		const results = (e: ts.Expression): ts.SignatureDeclaration[] => {
+			if (ts.isAwaitExpression(e)) {
+				const inner = ts.skipOuterExpressions(e.expression, ts.OuterExpressionKinds.Parentheses);
+				if (!ts.isCallExpression(inner)) return [];
+				const d = this.checker.getResolvedSignature(inner)?.getDeclaration();
+				return d && !ts.isJSDocSignature(d) && (this.lenientAsync(d) || !this.appCode(d)) ? [d] : [];
+			}
 			if (!ts.isCallExpression(e)) return [];
 			const d = this.checker.getResolvedSignature(e)?.getDeclaration();
 			return d && !ts.isJSDocSignature(d) && this.widenedResult(d) ? [d] : [];

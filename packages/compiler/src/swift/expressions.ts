@@ -239,6 +239,8 @@ export const expressionsMethods = {
 			if (isUntyped(spelledType(to))) {
 				const raw = this.untypedMemberValue(e.expression);
 				if (raw) return raw;
+				const maybe = this.maybeUndefined(e.expression);
+				if (maybe) return this.marks.leading(`(${maybe} as Any?)`, maybe);
 			}
 			// `<Array<View>>views` of a ViewBase[]: Swift's arrays of the two are distinct types, so the elements are read as the asserted one, in a copy unless the array already is one.
 			const fromArray = /^JSArray<(.+)>[?!]?$/.exec(from),

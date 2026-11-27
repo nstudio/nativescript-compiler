@@ -52,7 +52,7 @@ export const callsMethods = {
 		// rethrows what its computation threw.
 		if (mayBeUnset(callee, this.checker, this.framework) || this.throwsInfo.linkedThrows(callee)) return this.marks.ownTried(`${own !== undefined && this.props.has(own) ? `self.${ident(own)}` : this.expr(callee)}.requiredValue()`);
 		if (own !== undefined && (this.props.has(own) || this.signalFields.has(own))) return `self.${ident(own)}.value`;
-		if (this.framework.signalKind(this.symbolName(callee)) === 'computed' && this.isComputedProperty(callee)) return this.expr(callee);
+		if (this.framework.signalKind(this.symbolName(callee)) === 'computed' && this.isSwiftComputedProperty(callee)) return this.expr(callee);
 		return plain(`${this.expr(callee)}.value`);
 	},
 
@@ -260,6 +260,8 @@ export const callsMethods = {
 			if (typedThisArg) return this.ignoringThisArg(e, target, () => this.call(typedThisArg));
 			if (isKit(spelledType(t), 'JSArray')) {
 				// `observers?.find(…)` on an array TypeScript types as present, which lenient code may hold as undefined: cast to optional, valid either way.
+				const checked = !callee.questionDotToken && !ts.isOptionalChain(callee) ? this.receiver(target, method) : null;
+				if (checked) return this.arrayMethod(method, target, e, '', this.marks.ownTried(checked));
 				const asserted = callee.questionDotToken ? null : assertedReceiverCell(this.receivers, target, method);
 				if (asserted?.cell === 'present') return this.arrayMethod(method, target, e, q, this.marks.ownTried(this.receiverCode(asserted, method)!));
 				if (!callee.questionDotToken || q || !this.lenient) return this.arrayMethod(method, target, e, q);

@@ -448,7 +448,7 @@ export class Throws {
 			if (this.untyped(n.expression)) return true;
 			if (ts.isPropertyAccessExpression(n) && this.dynamicMember(n)) return true;
 			if (ts.isPropertyAccessExpression(n) && !n.questionDotToken && unsafeReceiver(n.expression, c)) return true;
-			if (ts.isElementAccessExpression(n) && !n.questionDotToken && ts.isOptionalChain(n) && unsafeReceiver(n.expression, c)) return true;
+			if (ts.isElementAccessExpression(n) && !n.questionDotToken && unsafeReceiver(n.expression, c)) return true;
 			if ((ts.isPropertyAccessExpression(n) || ts.isElementAccessExpression(n)) && !n.questionDotToken && uncheckedMatch(n.expression, c)) return true;
 			if (ts.isPropertyAccessExpression(n) && !n.questionDotToken && c.getTypeAtLocation(n.expression).flags & ts.TypeFlags.Never) return true;
 			const sym = c.getSymbolAtLocation(ts.isPropertyAccessExpression(n) ? n.name : n.argumentExpression);

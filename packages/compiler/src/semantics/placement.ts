@@ -765,9 +765,13 @@ export function assertedReceiverCell(b: ReceiverBackend, target: ts.Expression, 
 	return receiverCell(b, receiverSlot(target, key));
 }
 
-/** An element read's receiver cell (`assertedReceiverCell`). */
+/** An element read's receiver cell (`assertedReceiverCell` or `unsafeReceiver`). */
 export function elementReceiverCell(b: ReceiverBackend, e: ts.ElementAccessExpression): ReceiverCell {
-	return ts.isOptionalChain(e) ? { cell: 'asIs' } : assertedReceiverCell(b, e.expression, keyName(e.argumentExpression));
+	if (ts.isOptionalChain(e)) return { cell: 'asIs' };
+	const key = keyName(e.argumentExpression);
+	const asserted = assertedReceiverCell(b, e.expression, key);
+	if (asserted.cell !== 'asIs') return asserted;
+	return unsafeReceiver(e.expression, b.checker) ? receiverCell(b, receiverSlot(e.expression, key)) : { cell: 'asIs' };
 }
 
 /** The name a TypeError reading by `key` gives: a literal key's text, else the key's source. */
