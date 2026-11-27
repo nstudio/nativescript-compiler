@@ -18,8 +18,20 @@ export const objectClassesMethods = {
 		// A view keeps no fields: each reads and writes its root's key, and its own object's fields are `jsOwn`'s. A result
 		// interface's class in the kit has one for an app's untyped object of it.
 		const view = !symbolic.length && !keyed.length && (this.library ? resultShapeNamed(this, name) : this.viewed.has(name));
+		// Fast direct JSON writer for plain shapes (no views, symbols, Any, functions, BigInt, or declared toJSON).
+		const fastJSON =
+			!this.library &&
+			!view &&
+			!symbolic.length &&
+			!keyed.length &&
+			fields.length > 0 &&
+			!fields.some((f) => {
+				const h = this.shapeHeld(f);
+				const base = h.replace(/[?!]$/, '');
+				return f.name === 'toJSON' || base === 'Any' || isFunctionType(base.replace(/^\((.*)\)$/, '$1')) || /^JS(Nullish|BigInt)\b/.test(base);
+			});
 		this.shapesWritten.add(name);
-		const lines = [`final class ${name}: ${['JSDynamic', ...this.shapeProtocols(allFields).map((x) => x.conformance), ...(symbolic.length ? [] : ['JSObjectConvertible']), ...(view ? ['JSViewing'] : []), ...(keyed.length ? ['JSSymbolKeyed'] : [])].join(', ')} {`, NONISOLATED_DEINIT];
+		const lines = [`final class ${name}: ${['JSDynamic', ...this.shapeProtocols(allFields).map((x) => x.conformance), ...(symbolic.length ? [] : ['JSObjectConvertible']), ...(fastJSON ? ['JSJSONFastSerializable'] : []), ...(view ? ['JSViewing'] : []), ...(keyed.length ? ['JSSymbolKeyed'] : [])].join(', ')} {`, NONISOLATED_DEINIT];
 		const held = (f: ShapeField) => this.shapeHeld(f);
 		// A field the object lacks, or holds of another type (JSON without an optional field), reads as JavaScript converts it where used.
 		const fieldType = (f: ShapeField) => (this.lenient ? held(f).replace(/^\((.*)\)!$/, '($1)?') : held(f).endsWith('!') ? optionalType(f.type) : f.type);
@@ -109,6 +121,58 @@ export const objectClassesMethods = {
 		}
 		members[0] = `    var jsKeys: [String] {\n${view ? '        if let __r = jsRoot { return __r.jsKeys }\n' : ''}        let order = jsOrder ?? ${declared}\n        let keys = order + (jsExtra?.jsKeys ?? []).filter { !order.contains($0) }\n        return ${optional.length ? 'keys.filter(jsHas)' : 'keys'}\n    }`;
 		lines.push(...members);
+		if (fastJSON) {
+			const canFast = ['jsOrder == nil', 'jsExtra == nil', ...(nullable.length ? ['jsNulls == nil'] : []), ...(optional.length ? ['jsUnset == nil'] : [])].join(' && ');
+			const safe = (f: ShapeField) => ['Double', 'String', 'Bool'].includes(this.shapeHeld(f));
+			const guaranteedFirst = safe(fields[0]);
+			const steps: string[] = [];
+			if (guaranteedFirst) {
+				fields.forEach((f, idx) => {
+					const h = this.shapeHeld(f);
+					const opt = h.endsWith('?');
+					const base = h.replace(/[?!]$/, '');
+					const ref = `self.${ident(memberOf(f))}`;
+					const keyLit = JSON.stringify(f.name);
+					const prefix = idx === 0 ? `{${keyLit}:` : `,${keyLit}:`;
+					if (!opt && h === 'Double') steps.push(`        out.appendJSONLiteral(${swiftString(prefix)}); out.appendJSONNumber(${ref})`);
+					else if (!opt && h === 'String') steps.push(`        out.appendJSONLiteral(${swiftString(prefix)}); out.appendJSONString(${ref})`);
+					else if (!opt && h === 'Bool') steps.push(`        out.appendJSONLiteral(${swiftString(prefix)}); out.appendJSONBool(${ref})`);
+					else if (opt && base === 'Double') steps.push(`        if let __v = ${ref} { out.appendJSONLiteral(${swiftString(prefix)}); out.appendJSONNumber(__v) }`);
+					else if (opt && base === 'String') steps.push(`        if let __v = ${ref} { out.appendJSONLiteral(${swiftString(prefix)}); out.appendJSONString(__v) }`);
+					else if (opt && base === 'Bool') steps.push(`        if let __v = ${ref} { out.appendJSONLiteral(${swiftString(prefix)}); out.appendJSONBool(__v) }`);
+					else if (base === 'JSArray<Double>') steps.push(`        if !out.appendJSONNumbersIfPlain(${swiftString(prefix)}, ${ref}) { try writeField(${swiftString(prefix)}, ${swiftString(f.name)}, ${ref}) }`);
+					else if (base === 'JSArray<String>') steps.push(`        if !out.appendJSONStringsIfPlain(${swiftString(prefix)}, ${ref}) { try writeField(${swiftString(prefix)}, ${swiftString(f.name)}, ${ref}) }`);
+					else steps.push(`        try writeField(${swiftString(prefix)}, ${swiftString(f.name)}, ${ref})`);
+				});
+				steps.push('        out.appendJSONLiteral("}")');
+			} else {
+				steps.push('        out.appendJSONLiteral("{")');
+				steps.push('        var __first = true');
+				const needsMark = fields.some((f) => !['Double', 'String', 'Bool'].includes(this.shapeHeld(f).replace(/\?$/, '')));
+				if (needsMark) steps.push('        var __m = 0');
+				for (const f of fields) {
+					const h = this.shapeHeld(f);
+					const opt = h.endsWith('?');
+					const base = h.replace(/[?!]$/, '');
+					const ref = `self.${ident(memberOf(f))}`;
+					const keyLit = JSON.stringify(f.name);
+					const p0 = `${keyLit}:`;
+					const p1 = `,${keyLit}:`;
+					const pExpr = `__first ? ${swiftString(p0)} : ${swiftString(p1)}`;
+					if (!opt && h === 'Double') steps.push(`        out.appendJSONLiteral(${pExpr}); out.appendJSONNumber(${ref}); __first = false`);
+					else if (!opt && h === 'String') steps.push(`        out.appendJSONLiteral(${pExpr}); out.appendJSONString(${ref}); __first = false`);
+					else if (!opt && h === 'Bool') steps.push(`        out.appendJSONLiteral(${pExpr}); out.appendJSONBool(${ref}); __first = false`);
+					else if (opt && base === 'Double') steps.push(`        if let __v = ${ref} { out.appendJSONLiteral(${pExpr}); out.appendJSONNumber(__v); __first = false }`);
+					else if (opt && base === 'String') steps.push(`        if let __v = ${ref} { out.appendJSONLiteral(${pExpr}); out.appendJSONString(__v); __first = false }`);
+					else if (opt && base === 'Bool') steps.push(`        if let __v = ${ref} { out.appendJSONLiteral(${pExpr}); out.appendJSONBool(__v); __first = false }`);
+					else if (base === 'JSArray<Double>') steps.push(`        __m = out.count; if !out.appendJSONNumbersIfPlain(${pExpr}, ${ref}) { try writeField(${pExpr}, ${swiftString(f.name)}, ${ref}) }; if out.count != __m { __first = false }`);
+					else if (base === 'JSArray<String>') steps.push(`        __m = out.count; if !out.appendJSONStringsIfPlain(${pExpr}, ${ref}) { try writeField(${pExpr}, ${swiftString(f.name)}, ${ref}) }; if out.count != __m { __first = false }`);
+					else steps.push(`        __m = out.count; try writeField(${pExpr}, ${swiftString(f.name)}, ${ref}); if out.count != __m { __first = false }`);
+				}
+				steps.push('        out.appendJSONLiteral("}")');
+			}
+			lines.push(`    var jsCanFastJSON: Bool { ${canFast} }`, '    func jsWriteJSONFast(to out: JSUTF8Buffer, writeField: (StaticString, String, Any?) throws -> Void) throws -> Bool {', '        if !jsCanFastJSON { return false }', ...steps, '        return true', '    }');
+		}
 		lines.push('}');
 		return lines.join('\n');
 	},

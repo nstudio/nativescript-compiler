@@ -440,10 +440,17 @@ public protocol JSToJSONConvertible: AnyObject {
     func jsToJSON(_ key: String) throws -> Any?
 }
 
+/// Generated typed object shapes implement this to write directly into `JSUTF8Buffer` on the fast path
+/// (no replacer, no indent, no `jsOrder`/`jsExtra`/`jsNulls`/`jsUnset`, depth < 64), bypassing `jsKeys` and `subscript[jsKey:]`.
+public protocol JSJSONFastSerializable: AnyObject {
+    var jsCanFastJSON: Bool { get }
+    func jsWriteJSONFast(to out: JSUTF8Buffer, writeField: (StaticString, String, Any?) throws -> Void) throws -> Bool
+}
+
 /// What JSON.stringify does with an instance of a class, found once per class: casts to the runtime's
 /// protocols look up conformances, and a value cast to one only to fail costs as much as one that succeeds.
 private enum JSJSONClassKind {
-    case null, plainObject, numbers, strings, values, array, match, matchIndices, toJSON, date, function, other
+    case null, plainObject, fastObject, numbers, strings, values, array, match, matchIndices, toJSON, date, function, other
     /// A dynamic object whose `toJSON` is looked up; an error's is not.
     case dynamic, error
 }
@@ -524,6 +531,26 @@ private struct JSJSONWriter {
                     try membersDirect(plain, plain.keys) { plain[$0] }
                     return true
                 }
+            case .fastObject:
+                let fast = object as! JSJSONFastSerializable
+                if fast.jsCanFastJSON {
+                    if replacer == nil && allowed == nil && gap.isEmpty {
+                        if try writeFastDirect(fast) { return true }
+                    }
+                    if replacer == nil {
+                        let dynamic = object as! JSDynamic
+                        try membersDirect(dynamic, dynamic.jsKeys) { dynamic[jsKey: $0] }
+                        return true
+                    }
+                } else {
+                    let dynamic = object as! JSDynamic
+                    if let f = jsFlat(dynamic[jsKey: "toJSON"]), jsIsFunction(f) {
+                        v = try jsInvoke(f, dynamic, [key()])
+                    } else if replacer == nil {
+                        try membersDirect(dynamic, dynamic.jsKeys) { dynamic[jsKey: $0] }
+                        return true
+                    }
+                }
             case .dynamic:
                 let dynamic = object as! JSDynamic
                 if let f = jsFlat(dynamic[jsKey: "toJSON"]), jsIsFunction(f) {
@@ -577,20 +604,35 @@ private struct JSJSONWriter {
         case .plainObject:
             let plain = unsafeDowncast(object, to: JSObject.self)
             try membersDirect(plain, plain.keys) { plain[$0] }
+        case .fastObject:
+            if replacer == nil && allowed == nil && gap.isEmpty {
+                let fast = object as! JSJSONFastSerializable
+                if try writeFastDirect(fast) { break }
+            }
+            let dynamic = object as! JSDynamic
+            try membersDirect(dynamic, dynamic.jsKeys) { dynamic[jsKey: $0] }
         case .dynamic, .error:
             let dynamic = object as! JSDynamic
             try membersDirect(dynamic, dynamic.jsKeys) { dynamic[jsKey: $0] }
         case .numbers:
             let array = unsafeDowncast(object, to: JSArray<Double>.self)
             array.track()
-            try elementsDirect(array, array.storage.count) {
-                let d = array.storage[$0]
-                return d.isNaN ? JSArray<Double>.untyped(d) : d
+            if replacer == nil && gap.isEmpty && array.shared == nil && jsSideProperties(array, create: false) == nil {
+                output.appendJSONNumbers(array)
+            } else {
+                try elementsDirect(array, array.storage.count) {
+                    let d = array.storage[$0]
+                    return d.isNaN ? JSArray<Double>.untyped(d) : d
+                }
             }
         case .strings:
             let array = unsafeDowncast(object, to: JSArray<String>.self)
             array.track()
-            try elementsDirect(array, array.storage.count) { jsIsHoleString(array.storage[$0]) ? nil : array.storage[$0] }
+            if replacer == nil && gap.isEmpty && array.shared == nil && jsSideProperties(array, create: false) == nil {
+                output.appendJSONStrings(array)
+            } else {
+                try elementsDirect(array, array.storage.count) { jsIsHoleString(array.storage[$0]) ? nil : array.storage[$0] }
+            }
         case .values where unsafeDowncast(object, to: JSArray<Any?>.self).jsTracker == nil && unsafeDowncast(object, to: JSArray<Any?>.self).shared == nil:
             let array = unsafeDowncast(object, to: JSArray<Any?>.self)
             try elementsDirect(array, array.storage.count) { array.storage[$0] }
@@ -646,6 +688,23 @@ private struct JSJSONWriter {
         output.append(0x5D)
     }
 
+    private mutating func writeFastDirect(_ fast: JSJSONFastSerializable) throws -> Bool {
+        try enter(fast)
+        defer { leave(fast) }
+        depth += 1
+        defer { depth -= 1 }
+        let mark = output.count
+        if try fast.jsWriteJSONFast(to: output, writeField: { prefix, key, value in
+            let fieldMark = self.output.count
+            self.output.append(prefix)
+            if try !self.property(fast, key, value) { self.output.truncate(to: fieldMark) }
+        }) {
+            return true
+        }
+        output.truncate(to: mark)
+        return false
+    }
+
     private mutating func membersDirect(_ object: AnyObject, _ keys: [String], _ member: (String) -> Any?) throws {
         try enter(object)
         defer { leave(object) }
@@ -676,6 +735,12 @@ private struct JSJSONWriter {
             case .plainObject:
                 let plain = unsafeDowncast(object, to: JSObject.self)
                 if let f = jsFlat(plain["toJSON"]), jsIsFunction(f) { v = try jsInvoke(f, plain, [key()]) }
+            case .fastObject:
+                let fast = object as! JSJSONFastSerializable
+                if !fast.jsCanFastJSON {
+                    let dynamic = object as! JSDynamic
+                    if let f = jsFlat(dynamic[jsKey: "toJSON"]), jsIsFunction(f) { v = try jsInvoke(f, dynamic, [key()]) }
+                }
             case .dynamic:
                 let dynamic = object as! JSDynamic
                 if let f = jsFlat(dynamic[jsKey: "toJSON"]), jsIsFunction(f) { v = try jsInvoke(f, dynamic, [key()]) }
@@ -764,6 +829,7 @@ private struct JSJSONWriter {
         case is JSDate: .date
         case let f where jsIsFunction(f): .function
         case is JSError: .error
+        case is JSJSONFastSerializable: .fastObject
         case is JSDynamic: .dynamic
         default: .other
         }
@@ -809,7 +875,7 @@ private struct JSJSONWriter {
         case .plainObject:
             let plain = unsafeDowncast(object, to: JSObject.self)
             try pushObject(plain, .plain(plain), plain.keys)
-        case .dynamic, .error:
+        case .dynamic, .fastObject, .error:
             let dynamic = object as! JSDynamic
             try pushObject(dynamic, .dynamic(dynamic), dynamic.jsKeys)
         case .numbers:
@@ -990,7 +1056,7 @@ func jsJSONQuote(_ s: String) -> String {
     return output.string
 }
 
-extension JSUTF8Buffer {
+public extension JSUTF8Buffer {
     /// Number::toString. Integers below 2^53 are written digit by digit, and a number with at most three decimals
     /// is found as the integer of its hundredths (say) whose quotient is the same double: what parsing those digits
     /// would give, so that they are its shortest round-trip form. Other fractions take Swift's shortest digits,
@@ -1025,14 +1091,61 @@ extension JSUTF8Buffer {
         }
         append(0x22)
     }
+
+    @inline(__always) func appendJSONBool(_ b: Bool) {
+        append(b ? "true" : "false")
+    }
+
+    @inline(__always) func appendJSONLiteral(_ text: StaticString) {
+        append(text)
+    }
+
+    func appendJSONNumbers(_ array: JSArray<Double>) {
+        array.track()
+        let items = array.held
+        guard !items.isEmpty else { return append("[]") }
+        append(0x5B)
+        for i in 0..<items.count {
+            if i > 0 { append(0x2C) }
+            let d = items[i]
+            if d.isFinite { appendJSONNumber(d) } else { append("null") }
+        }
+        append(0x5D)
+    }
+
+    func appendJSONStrings(_ array: JSArray<String>) {
+        array.track()
+        let items = array.held
+        guard !items.isEmpty else { return append("[]") }
+        append(0x5B)
+        for i in 0..<items.count {
+            if i > 0 { append(0x2C) }
+            let s = items[i]
+            if jsIsHoleString(s) { append("null") } else { appendJSONString(s) }
+        }
+        append(0x5D)
+    }
+    func appendJSONNumbersIfPlain(_ prefix: StaticString, _ array: JSArray<Double>?) -> Bool {
+        guard let array, array.shared == nil, jsSideProperties(array, create: false) == nil else { return false }
+        append(prefix)
+        appendJSONNumbers(array)
+        return true
+    }
+
+    func appendJSONStringsIfPlain(_ prefix: StaticString, _ array: JSArray<String>?) -> Bool {
+        guard let array, array.shared == nil, jsSideProperties(array, create: false) == nil else { return false }
+        append(prefix)
+        appendJSONStrings(array)
+        return true
+    }
 }
 
 /// UTF-8 text written a byte or a run at a time, into storage that doubles as it fills: an array would check
 /// that its storage is unshared on every append.
-private nonisolated final class JSUTF8Buffer {
+public nonisolated final class JSUTF8Buffer {
     private var base: UnsafeMutablePointer<UInt8>
     private var capacity: Int
-    private(set) var count = 0
+    public private(set) var count = 0
 
     init(capacity: Int = 256) {
         self.capacity = capacity

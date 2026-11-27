@@ -262,6 +262,8 @@ export const builtinMethods = {
 							? `<${acc}>`
 							: '';
 					if (element === 'Double' && !q && name === 'reduce' && literal && arity <= 2 && acc === 'Double' && !adapted) {
+						const fused = this.fusedDoubleReduce(target, f, init);
+						if (fused) return fused;
 						return `${t}.reduceDouble(${this.fn(f, '(Double, Double) -> Double')}, ${this.coerce(init, 'Double')})`;
 					}
 					return `${t}.${name}${named}(${adapted ?? this.fn(f, `(${types(acc).join(', ')}) -> ${acc}`)}, ${this.coerce(init, acc)})`;
@@ -270,6 +272,46 @@ export const builtinMethods = {
 			}
 		}
 		throw this.error(e, `Array.${name}`);
+	},
+
+	/** Fuses pure `number[].map(...).filter(...).reduce(...)` (or `.map().reduce()` / `.filter().reduce()`) into a single allocation-free loop. */
+	fusedDoubleReduce(this: Translator, target: ts.Expression, reducer: ts.Expression, init: ts.Expression): string | null {
+		const pureExpr = (n: ts.Node): boolean => {
+			if (ts.isIdentifier(n) || ts.isNumericLiteral(n) || n.kind === ts.SyntaxKind.TrueKeyword || n.kind === ts.SyntaxKind.FalseKeyword) return true;
+			if (ts.isParenthesizedExpression(n)) return pureExpr(n.expression);
+			if (ts.isPrefixUnaryExpression(n) && [ts.SyntaxKind.PlusToken, ts.SyntaxKind.MinusToken, ts.SyntaxKind.ExclamationToken, ts.SyntaxKind.TildeToken].includes(n.operator)) return pureExpr(n.operand);
+			if (ts.isBinaryExpression(n)) {
+				const k = n.operatorToken.kind;
+				if (k >= ts.SyntaxKind.FirstAssignment && k <= ts.SyntaxKind.LastAssignment) return false;
+				return pureExpr(n.left) && pureExpr(n.right);
+			}
+			if (ts.isConditionalExpression(n)) return pureExpr(n.condition) && pureExpr(n.whenTrue) && pureExpr(n.whenFalse);
+			return false;
+		};
+		const pureUnary = (fn: ts.Expression | undefined): fn is ts.ArrowFunction => !!fn && ts.isArrowFunction(fn) && !ts.isBlock(fn.body) && fn.parameters.filter((p) => !isThisParameter(p)).length === 1 && pureExpr(fn.body);
+		const stage = (expr: ts.Expression, method: 'map' | 'filter'): { base: ts.Expression; fn: ts.ArrowFunction } | null => {
+			const call = ts.skipParentheses(expr);
+			if (!ts.isCallExpression(call) || call.questionDotToken || call.arguments.length !== 1) return null;
+			if (!ts.isPropertyAccessExpression(call.expression) || call.expression.questionDotToken || call.expression.name.text !== method) return null;
+			const base = call.expression.expression;
+			if (this.typeOf(base) !== 'JSArray<Double>' || this.states.heldOptional(base)) return null;
+			if (this.thisArgUse(call, base).kind !== 'plain') return null;
+			const fn = call.arguments[0];
+			return pureUnary(fn) ? { base, fn } : null;
+		};
+		const fStage = stage(target, 'filter');
+		if (fStage) {
+			const mStage = stage(fStage.base, 'map');
+			if (mStage) {
+				return `${this.expr(mStage.base)}.mapFilterReduceDouble(${this.fn(mStage.fn, '(Double) -> Double')}, ${this.fn(fStage.fn, '(Double) -> Boolean')}, ${this.fn(reducer, '(Double, Double) -> Double')}, ${this.coerce(init, 'Double')})`;
+			}
+			return `${this.expr(fStage.base)}.filterReduceDouble(${this.fn(fStage.fn, '(Double) -> Boolean')}, ${this.fn(reducer, '(Double, Double) -> Double')}, ${this.coerce(init, 'Double')})`;
+		}
+		const mStage = stage(target, 'map');
+		if (mStage) {
+			return `${this.expr(mStage.base)}.mapReduceDouble(${this.fn(mStage.fn, '(Double) -> Double')}, ${this.fn(reducer, '(Double, Double) -> Double')}, ${this.coerce(init, 'Double')})`;
+		}
+		return null;
 	},
 
 	/** A built-in's call taking a callback and a thisArg, made as `thisArgUse` has it; `make` translates it without the thisArg. */

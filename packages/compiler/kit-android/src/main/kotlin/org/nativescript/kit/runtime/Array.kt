@@ -940,6 +940,94 @@ inline fun JSArray<Double>.reduceDouble(f: (Double, Double) -> Double, initial: 
     return acc
 }
 
+/** Fused single-pass `number[].map(m).filter(p).reduce(r, initial)` with zero intermediate array allocations. */
+inline fun JSArray<Double>.mapFilterReduceDouble(
+    map: (Double) -> Double,
+    filter: (Double) -> Boolean,
+    reduce: (Double, Double) -> Double,
+    initial: Double,
+): Double {
+    var acc = initial
+    val d = doubles
+    if (d != null) {
+        val n = dSize
+        var i = 0
+        while (i < n) {
+            val v = map(d[i])
+            if (filter(v)) acc = reduce(acc, v)
+            i++
+        }
+        return acc
+    }
+    val list = storage
+    val n = size
+    var i = 0
+    if (jsTracker == null) {
+        while (i < n && i < list.size) {
+            val v = map(list[i])
+            if (filter(v)) acc = reduce(acc, v)
+            i++
+        }
+    } else {
+        while (i < n && i < list.size) {
+            val v = map(read(i))
+            if (filter(v)) acc = reduce(acc, v)
+            i++
+        }
+    }
+    return acc
+}
+
+/** Fused single-pass `number[].map(m).reduce(r, initial)` with zero intermediate array allocation. */
+inline fun JSArray<Double>.mapReduceDouble(
+    map: (Double) -> Double,
+    reduce: (Double, Double) -> Double,
+    initial: Double,
+): Double {
+    var acc = initial
+    val d = doubles
+    if (d != null) {
+        val n = dSize
+        var i = 0
+        while (i < n) { acc = reduce(acc, map(d[i])); i++ }
+        return acc
+    }
+    val list = storage
+    val n = size
+    var i = 0
+    while (i < n && i < list.size) { acc = reduce(acc, map(if (jsTracker == null) list[i] else read(i))); i++ }
+    return acc
+}
+
+/** Fused single-pass `number[].filter(p).reduce(r, initial)` with zero intermediate array allocation. */
+inline fun JSArray<Double>.filterReduceDouble(
+    filter: (Double) -> Boolean,
+    reduce: (Double, Double) -> Double,
+    initial: Double,
+): Double {
+    var acc = initial
+    val d = doubles
+    if (d != null) {
+        val n = dSize
+        var i = 0
+        while (i < n) {
+            val v = d[i]
+            if (filter(v)) acc = reduce(acc, v)
+            i++
+        }
+        return acc
+    }
+    val list = storage
+    val n = size
+    var i = 0
+    while (i < n && i < list.size) {
+        val v = if (jsTracker == null) list[i] else read(i)
+        if (filter(v)) acc = reduce(acc, v)
+        i++
+    }
+    return acc
+}
+
 /** Unboxed in-place stable merge sort for `number[].sort((a, b) => ...)`. */
 inline fun JSArray<Double>.sortDouble(compare: (Double, Double) -> Double): JSArray<Double> {
     val d = doubles
