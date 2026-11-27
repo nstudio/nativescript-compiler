@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import ts from 'typescript';
-import { flattenStringConcat, planArithmetic, planLogicalAssign, planRelational, planUnary } from '../../src/semantics/lower.ts';
+import { flattenStringConcat, planArithmetic, planEquality, planLogicalAssign, planNullishCoalesce, planRelational, planUnary, typeofComparison } from '../../src/semantics/lower.ts';
 import { CodeMarks, emitted, exprText, markedExpr, pureExpr } from '../../src/semantics/marks.ts';
 
 const K = ts.SyntaxKind;
@@ -42,6 +42,33 @@ describe('semantics/lower', () => {
 		};
 		const parts = flattenStringConcat(expr, isStr).map((p) => p.getText(sf));
 		assert.deepEqual(parts, ["'item'", '(a + b)', "';'", 'n']);
+	});
+
+	it('plans equality, nullish coalescing, and typeof comparisons', () => {
+		assert.deepEqual(planEquality(K.EqualsEqualsEqualsToken, false, false, false, false), { kind: 'strict', negated: false, mode: 'direct' });
+		assert.deepEqual(planEquality(K.ExclamationEqualsEqualsToken, true, false, false, false), { kind: 'strict', negated: true, mode: 'dynamic' });
+		assert.deepEqual(planEquality(K.EqualsEqualsToken, false, false, false, true), { kind: 'loose', negated: false, mode: 'nullish' });
+		assert.deepEqual(planEquality(K.ExclamationEqualsToken, false, false, false, false), { kind: 'loose', negated: true, mode: 'dynamic' });
+		assert.equal(planEquality(K.LessThanToken, false, false, false, false), null);
+
+		assert.deepEqual(planNullishCoalesce(true, false), { kind: 'dynamic' });
+		assert.deepEqual(planNullishCoalesce(false, true), { kind: 'optional' });
+		assert.deepEqual(planNullishCoalesce(false, false), { kind: 'identity' });
+
+		const sf = ts.createSourceFile('t.ts', "const a = typeof x === 'string'; const b = 'number' !== typeof y; const c = x === 'string';", ts.ScriptTarget.ES2022, true);
+		const exprAt = (i: number) => ((sf.statements[i] as ts.VariableStatement).declarationList.declarations[0].initializer)! as ts.BinaryExpression;
+		const cmpA = typeofComparison(exprAt(0));
+		assert.equal(cmpA?.tag, 'string');
+		assert.equal(cmpA?.negated, false);
+		assert.equal(cmpA?.strict, true);
+		assert.equal(cmpA?.operand.getText(sf), 'x');
+
+		const cmpB = typeofComparison(exprAt(1));
+		assert.equal(cmpB?.tag, 'number');
+		assert.equal(cmpB?.negated, true);
+		assert.equal(cmpB?.operand.getText(sf), 'y');
+
+		assert.equal(typeofComparison(exprAt(2)), null);
 	});
 });
 

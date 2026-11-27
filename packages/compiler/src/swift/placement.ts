@@ -286,7 +286,7 @@ export const placementMethods = {
 	},
 
 	coerced(this: Translator, e: ts.Expression, target: string): string {
-		if (this.isComputedProperty(e) && /^Signal<.*>[?!]?$/.test(target)) {
+		if (this.isSwiftComputedProperty(e) && /^Signal<.*>[?!]?$/.test(target)) {
 			const inner = target.replace(/[?!]$/, '').slice(7, -1);
 			return `Signal<${inner}>(computing: { ${this.marks.tryBefore(this.tryPrefix(e), this.coerce(e, inner))} })`;
 		}

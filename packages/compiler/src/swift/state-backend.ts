@@ -63,7 +63,7 @@ export const stateBackendMethods = {
 				return t.library;
 			},
 			get native() {
-				return t.native;
+				return { holdsNil: (d: ts.Declaration) => t.native.iosHoldsNil(d) };
 			},
 			get framework() {
 				return t.framework;
@@ -87,7 +87,8 @@ export const stateBackendMethods = {
 				return heldAs(t, isOptional(t) || t.endsWith('!'));
 			},
 			declaredOptional: (x) => this.declaredOptional(x),
-			kitNil: (x) => !this.library && this.core.kitNil(x),
+			kitNil: (x) => !this.library && this.core.swiftKitNil(x),
+			untypedCastChecks: (e, t) => !this.lenient && this.isObjectRef(e) && this.castChecks(spell(t)),
 
 			keyedClass: (c) => keyedClass(c, this.states, this.shapeFacts()),
 		};

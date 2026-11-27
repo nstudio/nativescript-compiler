@@ -31,7 +31,7 @@ export interface KotlinNative {
 	expressionName?(type: string, where: ts.Node | undefined): string;
 	isNativeDeclaration(d: ts.Node): boolean;
 	/** Whether a typings declaration's Java binding holds null: a field's value, a method's result, a parameter's argument. */
-	holdsNil?(d: ts.Declaration): boolean;
+	jvmHoldsNil?(d: ts.Declaration): boolean;
 	identifier(e: ts.Identifier): string | null;
 	property(e: ts.PropertyAccessExpression): string | null;
 	/** A method of a Java object read as a value through an optional chain (`layout?.getImeInsets`). */
@@ -95,7 +95,7 @@ export interface KotlinCore {
 	assign(left: ts.PropertyAccessExpression, right: ts.Expression): string | null;
 	nonVirtualEntry(type: string, name: string): string | null;
 	augmentedRead(e: ts.PropertyAccessExpression): string | null;
-	kitNil?(x: ts.Expression): boolean;
+	kotlinKitNil?(x: ts.Expression): boolean;
 }
 
 /** What the Kotlin translator is given at construction beyond what both are (semantics/config.ts). */

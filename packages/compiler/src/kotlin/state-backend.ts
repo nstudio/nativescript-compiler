@@ -46,7 +46,7 @@ export const stateBackendMethods = {
 				return t.library;
 			},
 			get native() {
-				return t.native;
+				return t.native ? { holdsNil: (d: ts.Declaration) => !!t.native!.jvmHoldsNil?.(d) } : null;
 			},
 			get framework() {
 				return t.framework;
@@ -70,7 +70,11 @@ export const stateBackendMethods = {
 				const t = this.heldSpelling(x);
 				return heldAs(t, isNullable(t));
 			},
-			kitNil: (x) => !this.library && !!this.core?.kitNil?.(x),
+			kitNil: (x) => !this.library && !!this.core?.kotlinKitNil?.(x),
+			untypedCastChecks: (_e, t) => {
+				const type = spell(t);
+				return this.isObjectType(type) && !/^JS(Array|Record|Promise|Date|Error)\b/.test(type);
+			},
 			declaredOptional: (x) => {
 				const sym = this.resolve(x);
 				return !!sym && (!!this.undefinedVars.get(sym)?.endsWith('?') || !!this.declaredTypeOf(x)?.endsWith('?'));

@@ -143,3 +143,15 @@ export function propSignal(e: ts.Expression, checker: ts.TypeChecker, framework:
 	const kind = name === undefined ? undefined : framework.signalKind(name);
 	return kind === 'input' || kind === 'model';
 }
+
+/** Whether `n` declares or references an untyped variable initialized from a read of a signal holding null (`const card = this.morning()`). */
+export function isGivenNullSignalValue(n: ts.Node, resolve: (id: ts.Node) => ts.Symbol | undefined, isNullSignalRead: (init: ts.Expression) => boolean): boolean {
+	const d = (ts.isVariableDeclaration(n.parent) && n.parent.name === n ? n.parent : ts.isIdentifier(n) ? resolve(n)?.valueDeclaration : undefined) as ts.VariableDeclaration | undefined;
+	if (!d || !ts.isVariableDeclaration(d) || d.type || !d.initializer) return false;
+	return isNullSignalRead(d.initializer);
+}
+
+/** Whether a class property declaration initializes a read-only signal via memoization or `.asReadonly()`. */
+export function isReadonlySignalProperty(decl: ts.PropertyDeclaration, checker: ts.TypeChecker, framework: Framework, callee: string): boolean {
+	return !!framework.memoized(decl, checker) || /\.asReadonly$/.test(callee);
+}

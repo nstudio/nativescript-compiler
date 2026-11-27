@@ -22,7 +22,7 @@ export const optionalChainsMethods = {
 			if (rightMaybe) return `(${this.coerce(e.left, optionalType(this.typeOf(e)))} ?: ${rightMaybe})`;
 		}
 		// A kit method whose Kotlin signature returns nullable (`ViewBase.getViewById`: `ViewBase?`) though core's typings say present.
-		if (ts.isCallExpression(e) && !this.library && !this.nullOk.has(e) && !isNullable(this.typeOf(e)) && this.isObjectRef(e) && !isFunctionType(this.typeOf(e)) && this.core?.kitNil?.(e)) {
+		if (ts.isCallExpression(e) && !this.library && !this.nullOk.has(e) && !isNullable(this.typeOf(e)) && this.isObjectRef(e) && !isFunctionType(this.typeOf(e)) && this.core?.kotlinKitNil?.(e)) {
 			this.nullOk.add(e);
 			try {
 				return this.expr(e);

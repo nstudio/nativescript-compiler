@@ -547,7 +547,7 @@ export const frontMethods = traceMethods('front', {
 	 * An assertion of an untyped value to a present type the backend checks (`x as Foo` of an untyped `x`): its read
 	 * converts, checked, and reads as the optional it may be where the program tests it. Not in library mode.
 	 */
-	assertedUntyped(this: Front & TypeReader & { untypedCastChecks(e: ts.Expression, t: NativeType): boolean }, e: ts.Expression): ts.AsExpression | ts.TypeAssertion | null {
+	assertedUntyped(this: Front & TypeReader & { readonly states: { readonly backend: { untypedCastChecks(e: ts.Expression, t: NativeType): boolean } } }, e: ts.Expression): ts.AsExpression | ts.TypeAssertion | null {
 		e = ts.skipOuterExpressions(e, ts.OuterExpressionKinds.Parentheses);
 		if (!(ts.isAsExpression(e) || ts.isTypeAssertionExpression(e)) || isWriteTarget(e)) return null;
 		try {
@@ -556,7 +556,7 @@ export const frontMethods = traceMethods('front', {
 			if (isUntyped(t) || t.kind === 'never' || t.kind === 'void' || t.optional || t.implicit || (t.kind === 'function' && t.head === undefined) || this.library) return null;
 			// JavaScript's assertion converts nothing: an empty value asserted to an array is still empty where it is read.
 			if (isPrimitive(t) || t.kind === 'array') return isUntyped(from) ? e : null;
-			return isUntyped(from) && this.untypedCastChecks(e, t) ? e : null;
+			return isUntyped(from) && this.states.backend.untypedCastChecks(e, t) ? e : null;
 		} catch (err) {
 			rethrowUnlessRefused(err);
 			return null;

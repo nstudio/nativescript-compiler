@@ -5,7 +5,7 @@ import { resultSlot } from '../semantics/placement.ts';
 import type { ResultSlot } from '../semantics/placement.ts';
 import { capturesThis, escapingParam, ident, isFunctionType, isMethodValue, isOptional, metatype, nullishType, optionalType, swiftString, withoutThenables, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
-import { equalOption } from '../semantics/signals.ts';
+import { equalOption, isReadonlySignalProperty } from '../semantics/signals.ts';
 import { isTemplateMethod } from '../semantics/trust.ts';
 import { extendsHeritage, hasModifier, nonSuperStatements } from '../semantics/ast.ts';
 import { nullableTypeNode, resultsAreUndefinedElements } from '../semantics/lang.ts';
@@ -345,7 +345,7 @@ export const componentMethods = {
 	},
 
 	/** Whether a `Signal<T>` node is lowered as a Swift computed property (`var x: T`) rather than a `Signal<T>` instance. */
-	isComputedProperty(this: Translator, n: ts.Node): boolean {
+	isSwiftComputedProperty(this: Translator, n: ts.Node): boolean {
 		if (ts.isIdentifier(n) && this.moduleComputed(n)) return true;
 		const decl = ts.isIdentifier(n) || ts.isPropertyAccessExpression(n) ? this.resolve(n)?.valueDeclaration : n;
 		if (!decl) return false;
@@ -355,7 +355,7 @@ export const componentMethods = {
 		}
 		if (ts.isPropertyDeclaration(decl) && ts.isClassDeclaration(decl.parent) && !this.pluginFiles.has(decl.getSourceFile().fileName) && decl.initializer) {
 			const callee = this.calleeName(decl.initializer);
-			if (this.framework.memoized(decl, this.checker) || /\.asReadonly$/.test(callee) || (ts.isIdentifier(decl.initializer) && !!this.moduleComputed(decl.initializer))) return true;
+			if (isReadonlySignalProperty(decl, this.checker, this.framework, callee) || (ts.isIdentifier(decl.initializer) && !!this.moduleComputed(decl.initializer))) return true;
 		}
 		return false;
 	},

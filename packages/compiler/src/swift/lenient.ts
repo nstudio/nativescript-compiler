@@ -2,7 +2,7 @@
 import ts from 'typescript';
 import { balanced, functionParts, hasTopLevelArrow, isFunctionType, isOptional, splitTopLevel, swiftString, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
-import { accessedDeclaration, evolvingElementContext, isSelf, untypedVariableInitializer } from '../semantics/lang.ts';
+import { accessedDeclaration, evolvingElementContext, isSelf } from '../semantics/lang.ts';
 import { hasModifier, isWriteTarget, notIterable } from '../semantics/ast.ts';
 import { rethrowUnlessRefused } from '../semantics/refusals.ts';
 import { isUntyped, spelledType } from '../semantics/types.ts';
@@ -236,12 +236,6 @@ export const lenientMethods = {
 		if (!this.nullSignalRead(x)) return false;
 		const t = this.typeOf(x);
 		return !isFunctionType(t) && this.nullableRef(t) !== t;
-	},
-
-	/** A variable declared without a type whose value is a read of a signal holding null (`const card = this.morning()`). */
-	givenNullSignalValue(this: Translator, n: ts.Node): boolean {
-		const init = untypedVariableInitializer(n, (id) => this.resolve(id));
-		return !!init && this.nullSignalRead(init);
 	},
 
 	nullSignalRead(this: Translator, e: ts.Expression): boolean {

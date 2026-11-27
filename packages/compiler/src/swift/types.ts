@@ -6,7 +6,7 @@ import { SPELLING, spell, functionParts, heldType, isFunctionLiteral, isFunction
 import type { Translator } from './translator.ts';
 import { literalOverArray, membersOverTypeParameter, readByKey, definedField, untypedResultBinding, untypedResultField } from '../semantics/shapes.ts';
 import { ambientAddedMemberOf, ambientBase, augmentedPropertyRead, evolvingArrayRead, evolvingArrayType, isAmbientClass, isRegExpProtocol, mergedInterfaceMemberOf, statementLevel, tokenClassBase, undeclaredMemberOf, isArguments, nullableTypeNode } from '../semantics/lang.ts';
-import { nullishSignalType } from '../semantics/signals.ts';
+import { isGivenNullSignalValue, nullishSignalType } from '../semantics/signals.ts';
 import { hasModifier, isLibDeclaration, isSymbolIterator, isWriteTarget, implementationOf, declaresThis } from '../semantics/ast.ts';
 import { isCoreDeclaration } from '../program/core-facts.ts';
 import { coreTypeKind, eventDataTypeLiteral, hasMappedIntersection, isJsDocConstructorFunction, isKit, isLibObjectType, isUntyped, libraryNativeType, libraryType, mappedOrErasedType, nonNullableInner, nonOptionalSpelling, parseNativeType, spelledType, valueModuleKind } from '../semantics/types.ts';
@@ -166,7 +166,7 @@ export const typesMethods = {
 			if (!this.lenient && !this.library && nullishSignalType(c, t, (n) => this.framework.signalKind(n))) return `Signal<${nullishType(arg(0))}>`;
 			return `Signal<${arg(0)}>`;
 		}
-		if (kind === 'computed') return where && this.isComputedProperty(where) ? arg(0) : `Signal<${arg(0)}>`;
+		if (kind === 'computed') return where && this.isSwiftComputedProperty(where) ? arg(0) : `Signal<${arg(0)}>`;
 		if (kind) return `Signal<${arg(0)}>`;
 		const mapped = name === undefined ? undefined : this.framework.typeMapping(name);
 		if (mapped && (!mapped.shim || sym?.declarations?.[0]?.getSourceFile().fileName.startsWith('/__shims__/'))) {
@@ -532,7 +532,7 @@ export const typesMethods = {
 		if (/^JS(Map<Any\?, Any\?>|Set<Any\?>)[?!]?$/.test(t) && (ts.isIdentifier(n) || ts.isPropertyAccessExpression(n)) && !(ts.isIdentifier(n) && n.parent && (ts.isParameter(n.parent) || ts.isVariableDeclaration(n.parent) || ts.isPropertyDeclaration(n.parent) || ts.isBindingElement(n.parent)) && n.parent.name === n)) {
 			if (isUntyped(spelledType(this.declaredTypeOf(n as ts.Expression)))) return 'Any?';
 		}
-		if ((t === 'Bool' || t === 'String' || t === 'Double') && (this.holdsUndefined(n) || this.givenNullSignalValue(n) || this.states.lenientNullField(n))) return `${t}?`;
+		if ((t === 'Bool' || t === 'String' || t === 'Double') && (this.holdsUndefined(n) || isGivenNullSignalValue(n, (id) => this.resolve(id), (init) => this.nullSignalRead(init)) || this.states.lenientNullField(n))) return `${t}?`;
 		if (t === 'JSArray<String>' && this.unsetGroups(n)) return 'JSArray<String?>';
 		if (this.looseObjectDeclaration(n, t) || (isFunctionType(t) && (this.lenientAppOptional(n) || this.widenedFunctionField(n)))) return optionalType(t);
 		// An element of an array literal typed `never[]` (`callbacks = []` under strict checks), which Swift holds as any value.

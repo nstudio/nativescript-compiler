@@ -380,7 +380,7 @@ export const nativeCallsMethods = {
 	 * Whether a typings declaration's Swift binding holds nil (an optional): a property's value, a method's result, a
 	 * parameter's argument, or a parameter of a block the method takes. False where the tables have no such member.
 	 */
-	holdsNil(this: NativeAPI, d: ts.Declaration): boolean {
+	iosHoldsNil(this: NativeAPI, d: ts.Declaration): boolean {
 		try {
 			const block = ts.isParameter(d) && ts.isFunctionTypeNode(d.parent) && ts.isParameter(d.parent.parent) ? d.parent.parent : null;
 			const param = block ?? (ts.isParameter(d) ? d : null);

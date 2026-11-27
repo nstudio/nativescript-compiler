@@ -163,7 +163,7 @@ export const namesMethods = {
 	 * App mode: a type name Swift code already has unqualified (the standard library's, the runtime's, the app module's own
 	 * Swift, or a native module's the app imports), which a program type of that name would hide from the app.
 	 */
-	nativeClash(this: Translator, name: string): boolean {
+	swiftTypeClash(this: Translator, name: string): boolean {
 		return !this.library && (SWIFT_NATIVE_TYPES.has(name) || runtimeTypeName(name) || this.appSwiftNames.has(name) || this.importedTypeNames().has(name));
 	},
 	/** The Swift type names of `nativeModules` and of the SDK modules whose declarations the program's code names. */
@@ -233,7 +233,7 @@ export const namesMethods = {
 			if (kitClash && list.some((x) => this.library?.moduleName(x.file.fileName))) this.kitClashes.push(name);
 			// A type the hand-written kit declares for itself (Signals' `Source`), or an app's type named as one Swift has already
 			// (`Result`): the generated one takes its module's name.
-			const internalClash = !!this.library?.internalTypes?.has(name) || (list.some((x) => typeLike(x.decl) || ts.isInterfaceDeclaration(x.decl)) && this.nativeClash(name));
+			const internalClash = !!this.library?.internalTypes?.has(name) || (list.some((x) => typeLike(x.decl) || ts.isInterfaceDeclaration(x.decl)) && this.swiftTypeClash(name));
 			if (list.length < 2 && !kitClash && !internalClash) continue;
 			// The app's first declaration keeps its name; the others take their module's.
 			// A class keeps its name over an interface of the same name, as it is the public API.
@@ -266,7 +266,7 @@ export const namesMethods = {
 			};
 			for (const sf of this.sourceFiles) if (!sf.isDeclarationFile) for (const st of sf.statements) if (ts.isModuleDeclaration(st)) collect(st);
 			for (const [name, list] of hoisted) {
-				if (!byName.has(name) && list.length < 2 && !this.core.has(name) && !this.nativeClash(name)) continue;
+				if (!byName.has(name) && list.length < 2 && !this.core.has(name) && !this.swiftTypeClash(name)) continue;
 				for (const x of list) this.renamedTop.set(x.decl, `${name}__${(this.namespacePath(x.ns) ?? '').replace(/\./g, '_')}`);
 			}
 		}

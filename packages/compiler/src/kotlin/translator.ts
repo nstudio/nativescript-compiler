@@ -566,7 +566,7 @@ export class Translator implements AsyncTranslator {
 				const sub = substitutedExpr(this.subst, e, true);
 				if (sub) return this.convert(sub.code, this.typeOf(sub.bare), target);
 				const inner = /^Signal<(.*)>\??$/.exec(target)?.[1];
-				return inner && this.isComputedProperty(e) ? `Signal.computing { ${this.coerce(e, inner)} }` : null;
+				return inner && this.isKotlinComputedProperty(e) ? `Signal.computing { ${this.coerce(e, inner)} }` : null;
 			},
 			readHeld: (e) => this.readHeld(e),
 			untypedRead: (code, target) => this.fromAnyCode(code, target, this.lenient),

@@ -224,7 +224,7 @@ export const declarationsMethods = {
 		if (!js) {
 			const value = this.coerce(init, this.typeOf(init));
 			// What the kit holds optional though the declarations say present (`getActualSize()`): JavaScript's TypeError destructuring undefined.
-			if (ts.isObjectBindingPattern(name) && this.marks.isUnwrap(value) && !this.lenient && this.core.kitNil(init)) return `: ${this.typeOf(init)} = try ${this.required(init, this.marks.unwrapInner(value)!)}`;
+			if (ts.isObjectBindingPattern(name) && this.marks.isUnwrap(value) && !this.lenient && this.core.swiftKitNil(init)) return `: ${this.typeOf(init)} = try ${this.required(init, this.marks.unwrapInner(value)!)}`;
 			return `: ${this.typeOf(init)} = ${this.marks.tryBefore(this.tryPrefix(init), value)}`;
 		}
 		const rest = (name as ts.ArrayBindingPattern).elements.some((el) => ts.isBindingElement(el) && el.dotDotDotToken);

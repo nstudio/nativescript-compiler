@@ -5,7 +5,7 @@ import { BUFFER_TYPES, WEB_DICTIONARIES, webClassName } from '../semantics/globa
 import { SPELLING, spell, destructuringSource, functionTypeParts, kotlinString, nullishType, optionalElementsType, optionalType, presentConst, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { ambientBase, evolvingArrayRead, evolvingArrayType, isAmbientClass, isRegExpProtocol, memberOwner, namesOwnTypeParameter, tokenClassBase, isArguments } from '../semantics/lang.ts';
-import { nullishSignalType } from '../semantics/signals.ts';
+import { isGivenNullSignalValue, nullishSignalType } from '../semantics/signals.ts';
 import { hasModifier, isLibDeclaration, isWriteTarget, implementationOf, takesOwnThis } from '../semantics/ast.ts';
 import { isCoreDeclaration } from '../program/core-facts.ts';
 import { coreTypeKind, eventDataTypeLiteral, hasMappedIntersection, isJsDocConstructorFunction, isKit, isLibObjectType, isNamed, isUntyped, libraryNativeType, libraryType, mappedOrErasedType, nonNullableInner, nonOptionalSpelling, parseNativeType, spelledType, valueModuleKind } from '../semantics/types.ts';
@@ -166,14 +166,14 @@ export const typesMethods = {
 		const javaClass = this.library && !!sym?.declarations?.length && sym.declarations.every((d) => this.native?.isNativeDeclaration(d)) ? this.native?.type(t) : null;
 		if (javaClass) return javaClass;
 		// A program type renamed for a name Kotlin has already (`Iterator`, `Pair`) is not the library's type of that name.
-		const clashing = !this.library && sym?.valueDeclaration && this.nativeClash(sym.name) ? this.topNames().get(sym.valueDeclaration) : undefined;
+		const clashing = !this.library && sym?.valueDeclaration && this.kotlinTypeClash(sym.name) ? this.topNames().get(sym.valueDeclaration) : undefined;
 		if (clashing) return `${clashing}${this.declaredTypeArguments(t, sym!.valueDeclaration!, where)}`;
 		const kind = name === undefined ? undefined : this.framework.signalKind(name);
 		if (kind === 'writable' || kind === 'input' || kind === 'model') {
 			if (!this.lenient && !this.library && nullishSignalType(c, t, (n) => this.framework.signalKind(n))) return `Signal<${nullishType(arg(0))}>`;
 			return `Signal<${arg(0)}>`;
 		}
-		if (kind === 'computed') return where && this.isComputedProperty(where) ? arg(0) : `Signal<${arg(0)}>`;
+		if (kind === 'computed') return where && this.isKotlinComputedProperty(where) ? arg(0) : `Signal<${arg(0)}>`;
 		if (kind) return `Signal<${arg(0)}>`;
 		const mapped = name === undefined ? undefined : this.framework.typeMapping(name);
 		if (mapped && (!mapped.shim || sym?.declarations?.[0]?.getSourceFile().fileName.startsWith('/__shims__/'))) return mapped.type.includes('$0') ? mapped.type.replace('$0', () => arg(0)) : mapped.type;
@@ -413,7 +413,7 @@ export const typesMethods = {
 		const own = ts.isPropertySignature(n) || ts.isPropertyDeclaration(n) ? n : (n.parent as ts.NamedDeclaration | undefined)?.name === n ? n.parent : undefined;
 		const t = this.isLenientDecl(own) ? this.lenientRef(declared) : this.states.looseDeclaration(own) ? optionalType(declared) : declared;
 		if (this.holdingNull(t, n)) return t.replace(/>$/, '?>');
-		if (['String', 'Double', 'Boolean'].includes(t) && this.givenNullSignalValue(n)) return `${t}?`;
+		if (['String', 'Double', 'Boolean'].includes(t) && isGivenNullSignalValue(n, (id) => this.resolve(id), (read) => ts.isCallExpression(read) && !read.arguments.length && /^Signal<.*\?>$/.test(this.typeOf(read.expression)))) return `${t}?`;
 		if (/^JSArray<String>\??$/.test(t) && this.unsetGroups(n)) return t.replace('JSArray<String>', 'JSArray<String?>');
 		if (t === 'String' && ts.isIdentifier(n) && this.unset.element(n)) return 'String?';
 		if (!t.includes('.')) return t;

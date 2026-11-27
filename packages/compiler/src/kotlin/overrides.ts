@@ -556,7 +556,7 @@ export const overridesMethods = {
 	 * App mode: a type name Kotlin code already has unqualified (a default import's, the runtime's, a thread annotation's,
 	 * whose import outranks the app's package). Java classes are spelled qualified, so their names hide nothing.
 	 */
-	nativeClash(this: Translator, name: string): boolean {
+	kotlinTypeClash(this: Translator, name: string): boolean {
 		return !this.library && (KOTLIN_NATIVE_TYPES.has(name) || runtimeTypeName(name) || THREAD_ANNOTATIONS.includes(name));
 	},
 
@@ -639,7 +639,7 @@ export const overridesMethods = {
 			const kitClash = (list.some((x) => typeLike(x.decl)) && !!this.core?.has(name) && !this.core.nested?.(name)) || (coreFunctions.has(name) && list.some((x) => ts.isFunctionDeclaration(x.decl) || ts.isVariableDeclaration(x.decl)));
 			// A type the hand-written kit declares for itself, or an app's type named as one Kotlin has already (`Pair`): the
 			// generated one takes its module's name.
-			const internalClash = !!this.library?.internalTypes?.has(name) || (list.some((x) => typeLike(x.decl) || ts.isInterfaceDeclaration(x.decl)) && this.nativeClash(name));
+			const internalClash = !!this.library?.internalTypes?.has(name) || (list.some((x) => typeLike(x.decl) || ts.isInterfaceDeclaration(x.decl)) && this.kotlinTypeClash(name));
 			if (list.length < 2 && !kitClash && !internalClash) continue;
 			// The app's declaration keeps its name (the first app module's, of several); the others take their module's.
 			const keep = kitClash || internalClash ? undefined : keptDeclaration(list, this.pluginFiles, !!this.library);

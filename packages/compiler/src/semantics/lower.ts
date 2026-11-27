@@ -7,6 +7,22 @@ const K = ts.SyntaxKind;
 export type RelationalSymbol = '<' | '>' | '<=' | '>=';
 export type ArithmeticSymbol = '+' | '-' | '*' | '/' | '%' | '**';
 export type LogicalAssignSymbol = '??=' | '||=' | '&&=';
+export type EqualityKind = 'strict' | 'loose';
+
+export type EqualityPlan = {
+	readonly kind: EqualityKind;
+	readonly negated: boolean;
+	readonly mode: 'nullish' | 'dynamic' | 'direct';
+};
+
+export type NullishCoalescePlan = { readonly kind: 'dynamic' | 'optional' | 'identity' };
+
+export interface TypeofComparison {
+	readonly operand: ts.Expression;
+	readonly tag: string;
+	readonly negated: boolean;
+	readonly strict: boolean;
+}
 
 export type RelationalPlan =
 	| { readonly kind: 'string'; readonly op: RelationalSymbol }
@@ -111,4 +127,54 @@ export function flattenStringConcat(expr: ts.Expression, isString: (e: ts.Expres
 	};
 	visit(expr);
 	return out;
+}
+
+/** Classifies `===`, `!==`, `==`, `!=` into nullish comparison, dynamic runtime helper, or direct backend comparison. */
+export function planEquality(op: ts.SyntaxKind, leftAny: boolean, rightAny: boolean, leftNullish: boolean, rightNullish: boolean): EqualityPlan | null {
+	let kind: EqualityKind;
+	let negated: boolean;
+	switch (op) {
+		case K.EqualsEqualsEqualsToken:
+			kind = 'strict';
+			negated = false;
+			break;
+		case K.ExclamationEqualsEqualsToken:
+			kind = 'strict';
+			negated = true;
+			break;
+		case K.EqualsEqualsToken:
+			kind = 'loose';
+			negated = false;
+			break;
+		case K.ExclamationEqualsToken:
+			kind = 'loose';
+			negated = true;
+			break;
+		default:
+			return null;
+	}
+	if (leftNullish || rightNullish) return { kind, negated, mode: 'nullish' };
+	if (leftAny || rightAny || kind === 'loose') return { kind, negated, mode: 'dynamic' };
+	return { kind, negated, mode: 'direct' };
+}
+
+/** Classifies `a ?? b` based on whether the left operand is untyped, optional, or statically present. */
+export function planNullishCoalesce(leftAny: boolean, leftOptional: boolean): NullishCoalescePlan {
+	if (leftAny) return { kind: 'dynamic' };
+	if (leftOptional) return { kind: 'optional' };
+	return { kind: 'identity' };
+}
+
+/** Extracts `typeof x === 'tag'` (or `!==`, `==`, `!=`, in either operand order) into a backend-neutral descriptor. */
+export function typeofComparison(e: ts.BinaryExpression): TypeofComparison | null {
+	const op = e.operatorToken.kind;
+	const strict = op === K.EqualsEqualsEqualsToken || op === K.ExclamationEqualsEqualsToken;
+	const loose = op === K.EqualsEqualsToken || op === K.ExclamationEqualsToken;
+	if (!strict && !loose) return null;
+	const negated = op === K.ExclamationEqualsEqualsToken || op === K.ExclamationEqualsToken;
+	const left = ts.skipParentheses(e.left);
+	const right = ts.skipParentheses(e.right);
+	if (ts.isTypeOfExpression(left) && ts.isStringLiteralLike(right)) return { operand: left.expression, tag: right.text, negated, strict };
+	if (ts.isTypeOfExpression(right) && ts.isStringLiteralLike(left)) return { operand: right.expression, tag: left.text, negated, strict };
+	return null;
 }

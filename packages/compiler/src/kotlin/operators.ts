@@ -14,6 +14,7 @@ import { nullAs } from './expressions.ts';
 import { bigIntArithmetic, bigIntCompare, bigIntPlan, type BigIntInfix } from '../semantics/apis/bigint.ts';
 import { BIT_ASSIGNMENTS, addCall, bitOperation, concatOperand, numericThrowing, untypedBinary, untypedConversion } from '../semantics/apis/operators.ts';
 import { flattenStringConcat, planRelational } from '../semantics/lower.ts';
+import { isReadonlySignalProperty } from '../semantics/signals.ts';
 
 /** BigInt's operations the backend spells as an operator. */
 const BIGINT_INFIX: { readonly [Op in BigIntInfix]: string } = { add: '+', subtract: '-', multiply: '*', and: 'and', or: 'or', xor: 'xor' };
@@ -383,7 +384,7 @@ export const operatorsMethods = {
 	},
 
 	/** Whether a `Signal<T>` node is lowered as a Kotlin property reading its value (`val x: T get() = …`) rather than a `Signal<T>`. */
-	isComputedProperty(this: Translator, n: ts.Node): boolean {
+	isKotlinComputedProperty(this: Translator, n: ts.Node): boolean {
 		if (this.library) return false;
 		const decl = ts.isIdentifier(n) || ts.isPropertyAccessExpression(n) || ts.isPrivateIdentifier(n) ? this.resolve(n)?.valueDeclaration : n;
 		if (!decl) return false;
@@ -391,13 +392,13 @@ export const operatorsMethods = {
 		if (!ts.isPropertyDeclaration(decl) || !ts.isClassLike(decl.parent) || !decl.initializer) return false;
 		const init = decl.initializer,
 			callee = this.calleeName(init);
-		if (this.framework.heldSignal(callee) || /\.asReadonly$/.test(callee)) return true;
+		if (this.framework.heldSignal(callee) || isReadonlySignalProperty(decl, this.checker, this.framework, callee)) return true;
 		return this.signalAlias(decl);
 	},
 
 	/** A read-only signal's current value. */
 	signalValue(this: Translator, e: ts.Expression): string {
-		return this.isComputedProperty(e) ? this.expr(e) : `${this.expr(e)}.value`;
+		return this.isKotlinComputedProperty(e) ? this.expr(e) : `${this.expr(e)}.value`;
 	},
 
 	/** A field initialized with another read-only signal (`dayColor = ink`, a module's memo): a property reading through it. */

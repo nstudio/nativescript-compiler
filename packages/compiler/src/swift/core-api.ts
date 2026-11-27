@@ -485,7 +485,7 @@ export class CoreAPI extends KitTypes {
 	}
 
 	/** A kit property's value or method's result the kit holds optional, read where core's typings say present. */
-	kitNil(x: ts.Expression): boolean {
+	swiftKitNil(x: ts.Expression): boolean {
 		try {
 			x = ts.skipOuterExpressions(x, ts.OuterExpressionKinds.Parentheses);
 			if (ts.isCallExpression(x) && ts.isIdentifier(x.expression)) {
@@ -521,7 +521,7 @@ export class CoreAPI extends KitTypes {
 	 */
 	optionalKitValue(x: ts.Expression): boolean {
 		while (ts.isParenthesizedExpression(x)) x = x.expression;
-		if (!this.t.lenient && !this.t.library && this.kitNil(x)) return true;
+		if (!this.t.lenient && !this.t.library && this.swiftKitNil(x)) return true;
 		if (ts.isIdentifier(x)) {
 			const sym = this.t.resolve(x);
 			const decl = sym?.declarations?.[0];

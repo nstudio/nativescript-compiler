@@ -43,7 +43,7 @@ export class AndroidNativeAPI implements KotlinNative {
 	 * Whether a typings declaration's Java binding holds null: a field's value, a method's result, a parameter's argument.
 	 * Java's reference types are platform types, null unless annotated `@NonNull`; its primitives never are.
 	 */
-	holdsNil(d: ts.Declaration): boolean {
+	jvmHoldsNil(d: ts.Declaration): boolean {
 		const param = ts.isParameter(d) ? d : null;
 		const member = param ? param.parent : d;
 		const k = param ? (member as ts.SignatureDeclaration).parameters.indexOf(param) : -1;

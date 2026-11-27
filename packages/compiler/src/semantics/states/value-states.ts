@@ -68,6 +68,7 @@ export interface StateBackend {
 	optional(t: NativeType): boolean;
 	functionType(t: NativeType): boolean;
 	/** The object shapes the translation writes: a question asked here requires none (`ShapeMap.question`). */
+	untypedCastChecks(e: ts.Expression, t: NativeType): boolean;
 	readonly shapes: { question<T>(f: () => T): T };
 	/** A method whose native signature is its own: no base, interface or override shares it. */
 	ownSignature(fn: ts.Node): fn is ts.MethodDeclaration;

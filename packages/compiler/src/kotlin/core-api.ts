@@ -55,7 +55,7 @@ export class CoreKotlin extends KitTypes implements KotlinCore {
 	}
 
 	/** A kit property's value or method's result the kit holds nullable, read where core's typings say present. */
-	kitNil(x: ts.Expression): boolean {
+	kotlinKitNil(x: ts.Expression): boolean {
 		try {
 			x = ts.skipOuterExpressions(x, ts.OuterExpressionKinds.Parentheses);
 			const access = ts.isCallExpression(x) ? x.expression : x;
