@@ -220,7 +220,9 @@ export const classMethodsMethods = {
 			const plain = (t: string) => t.replace(/^\((any .*)\)!$/, '$1?').replace(/!$/, '?');
 			// A method reading `arguments` takes the call's arguments as one list; a rest parameter (`fill(...args)`) the arguments from its place.
 			const params = this.readsArguments(m) ? ['JSRest<Any?>'] : sig.params.map((p, k) => (k === restAt ? `JSRest<${/^JSArray<(.*)>$/.exec(plain(p.type))?.[1] ?? 'Any?'}>` : isFunctionType(p.type) ? `@escaping ${p.type}` : plain(p.type)));
-			k.dynMethods.push({ name: n, type: `(${params.join(', ')}) throws -> ${plain(sig.ret)}`, available: this.gatedFunctions.get(m), length: scriptLength(m) });
+			const defFrom = !overridden && !this.readsArguments(m) && restAt < 0 ? m.parameters.findIndex((p) => p.initializer) : -1;
+			const trailingFrom = defFrom >= 0 && !m.typeParameters?.length && m.parameters.slice(defFrom).every((p) => p.initializer && !p.dotDotDotToken) && splitTopLevel(this.params(m, false)).every((p) => p.trim().startsWith('_ ')) ? defFrom : undefined;
+			k.dynMethods.push({ name: n, type: `(${params.join(', ')}) throws -> ${plain(sig.ret)}`, available: this.gatedFunctions.get(m), length: scriptLength(m), trailingFrom });
 		}
 	},
 

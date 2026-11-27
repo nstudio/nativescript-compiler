@@ -6,34 +6,51 @@ import Foundation
 public final class JSRecord<Value>: JSDynamic, JSReactiveConvertible, ExpressibleByDictionaryLiteral {
     nonisolated deinit {}
     public let object: JSObject
+    internal var backing: JSDynamic?
 
     public init(object: JSObject = JSObject()) {
         self.object = object
+        self.backing = nil
     }
 
     public init(dictionaryLiteral elements: (String, Value)...) {
         self.object = JSObject()
+        self.backing = nil
         for (key, value) in elements { object[key] = value }
     }
 
     public init(_ entries: [(String, Value)]) {
         self.object = JSObject()
+        self.backing = nil
         for (key, value) in entries { object[key] = value }
     }
 
     public init(_ dictionary: [String: Value]) {
         self.object = JSObject()
+        self.backing = nil
         for key in dictionary.keys.sorted() { object[key] = dictionary[key] }
     }
 
     public subscript(key: String) -> Value? {
-        get { object[key] as? Value }
-        set { if let newValue { object[key] = newValue } else { _ = object.delete(key) } }
+        get {
+            if object.has(key) { return object[key] as? Value }
+            return backing?[jsKey: key] as? Value
+        }
+        set {
+            if let newValue {
+                object[key] = newValue
+                backing?[jsKey: key] = newValue
+            } else {
+                _ = object.delete(key)
+                backing?[jsKey: key] = nil
+            }
+        }
     }
 
     /// The entry of a record whose values may be undefined: nil for a missing key and a stored undefined alike.
     public subscript<Wrapped>(entry key: String) -> Wrapped? where Value == Wrapped? {
-        (object[key] as? Value) ?? nil
+        if object.has(key) { return (object[key] as? Value) ?? nil }
+        return (backing?[jsKey: key] as? Value) ?? nil
     }
 
     @discardableResult public func delete(_ key: String) -> Bool { object.delete(key) }
@@ -46,8 +63,11 @@ public final class JSRecord<Value>: JSDynamic, JSReactiveConvertible, Expressibl
     public var jsKeys: [String] { object.jsKeys }
     public var jsClassName: String? { nil }
     public subscript(jsKey key: String) -> Any? {
-        get { object[jsKey: key] }
-        set { object[jsKey: key] = newValue }
+        get { object.has(key) ? object[jsKey: key] : backing?[jsKey: key] }
+        set {
+            object[jsKey: key] = newValue
+            backing?[jsKey: key] = newValue
+        }
     }
 
     public var jsTracker: JSTracker? {

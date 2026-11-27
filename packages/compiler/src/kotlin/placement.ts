@@ -434,7 +434,8 @@ export const placementMethods = {
 				const call = `${this.library ? this.refName(e as ts.Identifier) : ident((e as ts.Identifier).text)}(${names.map((n, k) => this.convert(n, g!.params[k], f!.params[k])).join(', ')})`;
 				return `{ ${g!.params.map((p, k) => `${names[k]}: ${p}`).join(', ')} -> ${call} }`;
 			}
-			if (f && g && f.params.length <= g.params.length && (f.params.length < g.params.length || f.params.some((p, k) => p !== g.params[k] && this.convert('x', g.params[k], p) !== 'x')) && f.params.length <= g.params.length && (g.ret === 'Unit' || g.ret === f.ret || (isUntyped(spelledType(g.ret)) && (this.library || f.ret !== 'Unit')) || (!this.library && isUntyped(spelledType(f.ret))))) {
+			const voidPromiseRet = !this.library && !!f && !!g && f.ret === 'JSPromise<Unit>' && /^JSPromise<.+>$/.test(g.ret) && g.ret !== f.ret;
+			if (f && g && f.params.length <= g.params.length && (f.params.length < g.params.length || voidPromiseRet || f.params.some((p, k) => p !== g.params[k] && this.convert('x', g.params[k], p) !== 'x')) && (g.ret === 'Unit' || g.ret === f.ret || voidPromiseRet || (isUntyped(spelledType(g.ret)) && (this.library || f.ret !== 'Unit')) || (!this.library && isUntyped(spelledType(f.ret))))) {
 				const names = g.params.map((_, k) => this.marks.pureCode(`__a${k}`));
 				const fn = this.functionValue(e);
 				// A function field Kotlin declares nullable (one left unset): unwrapped where it is called.
@@ -443,8 +444,8 @@ export const placementMethods = {
 					.slice(0, f.params.length)
 					.map((n, k) => this.convert(n, g.params[k], f.params[k]))
 					.join(', ')})`;
-				// An untyped result is read as the slot's.
-				const call = isUntyped(spelledType(f.ret)) && g.ret !== 'Unit' && !isUntyped(spelledType(g.ret)) && !this.library ? this.fromAny(called, g.ret) : called;
+				// An untyped result (or Promise<void> into Promise<T | void>) is read as the slot's.
+				const call = voidPromiseRet || (isUntyped(spelledType(f.ret)) && g.ret !== 'Unit' && !isUntyped(spelledType(g.ret)) && !this.library) ? this.fromAny(called, g.ret) : called;
 				const adapter = `{ ${g.params.map((p, k) => `${names[k]}: ${p}`).join(', ')} -> ${call} }`;
 				// An optional member (`closeCallback?: …`) given to an optional parameter (`cb?: …`): undefined stays undefined,
 				// as the checker without strictNullChecks types neither as optional.
@@ -525,7 +526,7 @@ export const placementMethods = {
 				return elements(code);
 			}
 		}
-		if (!this.library && sb === 'JSPromise<Any?>' && /^JSPromise<(.+)>$/.test(tb)) return this.fromAny(this.functionValue(e), target);
+		if (!this.library && (sb === 'JSPromise<Any?>' || sb === 'JSPromise<Unit>') && /^JSPromise<(.+)>$/.test(tb) && tb !== sb) return this.fromAny(this.functionValue(e), target);
 		if (head(sb) && head(sb) === head(tb) && sb !== tb) return cast(this.functionValue(e), target);
 		if (sb !== tb && anyArguments(sb, tb)) return this.unchecked(target, this.functionValue(e));
 		// An object given where an object type of the program's is declared, which it meets without naming it (`btn` as a `MeasuredView`): read through it by name.

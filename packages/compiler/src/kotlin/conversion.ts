@@ -6,7 +6,7 @@ import type { DynamicMembers, ShapeField, Translator } from './translator.ts';
 import { UNKEYED, holdsNil, inPlanOrder, madeBitIn, memberKeysOf, memberOf, shapePlanOfShape, spelledOptional, resultShapeNamed } from '../semantics/shapes.ts';
 import type { ShapePlan } from '../semantics/shapes.ts';
 import { codeStoreSlot, placeCode } from '../semantics/placement.ts';
-import { heldOf, isUntyped, parseNativeType, spelledType } from '../semantics/types.ts';
+import { heldOf, isKit, isUntyped, parseNativeType, spelledType } from '../semantics/types.ts';
 import { observers } from '../semantics/observers.ts';
 import { abstractField, overAbstractOnly } from '../semantics/classes.ts';
 
@@ -260,8 +260,12 @@ export const conversionMethods = {
 		};
 		const ownNames = new Set([...this.instanceKeys()].map((d) => d.name.getText()));
 		// A method read by name is a script function calling it with the arguments it is given.
-		const method = (m: { name: string; key?: string; params: string[]; unread?: boolean[]; ret: string }) => {
-			const args = m.params.map((t, k) => (m.unread?.[k] && this.zero(t)) || this.fromAnyCode(this.marks.pureCode(`__a.getOrNull(${k})`), t, true));
+		const method = (m: { name: string; key?: string; params: string[]; defaults?: (string | undefined)[]; unread?: boolean[]; ret: string }) => {
+			const args = m.params.map((t, k) => {
+				if (m.unread?.[k] && this.zero(t)) return this.zero(t)!;
+				const read = this.fromAnyCode(this.marks.pureCode(`__a.getOrNull(${k})`), t, true);
+				return m.defaults?.[k] ? `(if (__a.getOrNull(${k}) == null) ${m.defaults[k]} else ${read})` : read;
+			});
 			// An app class's method sees the object it is called on as `this` when that is one of the class's (`obj[k].call(other)`).
 			const call = `${receiver && !m.key ? `${RT.jsMethodReceiver}(__s, this, ${receiver}::class.java)` : 'this'}.${this.methodIdent(m.name)}(${args.join(', ')})`;
 			const fn = receiver && !m.key ? `JSMethod(${m.params.length}) ${lambda(['__s', '__a'], m.ret === 'Unit' ? `${call}; null` : call)}` : `${RT.jsFunction} ${lambda(['__a'], m.ret === 'Unit' ? `${call}; null` : call)}`;
@@ -374,7 +378,7 @@ export const conversionMethods = {
 		if (orZero && this.library && type === 'Boolean') return `${RT.jsConvertedBooleanOrFalse}(${code})`;
 		// App code: an untyped string or boolean is converted as JavaScript converts it where it is used, never refused.
 		if (orZero && (type === 'String' || type === 'Boolean')) return this.fromAny(code, type);
-		if (orZero && zero && zero !== 'null' && !type.endsWith('?')) return `(${safeCast(code, type)} ?: ${zero})`;
+		if (orZero && zero && zero !== 'null' && !type.endsWith('?') && !isKit(spelledType(type), 'JSNullish')) return `(${safeCast(code, type)} ?: ${zero})`;
 		return this.fromAny(code, type);
 	},
 
@@ -430,6 +434,14 @@ export const conversionMethods = {
 		if (fn && fn.params.length <= 7) {
 			// Where the signatures do not settle it, a wrapper is read back as its own function (`, false`).
 			const kind = /^JSArray</.test(fn.params.at(-1) ?? '') && fn.params.length <= 3 ? (this.restFunctionTypes.get(type.replace(/^\((.*)\)\?$/, '$1')) ?? 'both') : 'array';
+			const promiseRet = !this.library ? /^JSPromise<(.+)>$/.exec(fn.ret) : null;
+			if (promiseRet && !isUntyped(spelledType(promiseRet[1]))) {
+				const rawTyped = `${kind === 'array' ? 'jsFunction' : 'jsRestFunction'}${fn.params.length}<${[...fn.params, 'Any?'].join(', ')}>`;
+				const names = fn.params.map((_, k) => this.marks.pureCode(`__p${k}`));
+				const invoke = `${rawTyped}(__f${kind === 'both' ? ', false' : ''})(${names.join(', ')})`;
+				const wrap = (x: string) => `${x}.let { __f -> { ${fn.params.map((p, k) => `${names[k]}: ${p}`).join(', ')}${fn.params.length ? ' -> ' : ''}${this.fromAny(invoke, fn.ret)} } }`;
+				return /\)\?$/.test(type) ? `${RT.jsUnlessNullish}(${code}) { ${wrap('it')} }` : wrap(code);
+			}
 			const typed = `${kind === 'array' ? 'jsFunction' : 'jsRestFunction'}${fn.params.length}<${[...fn.params, fn.ret].join(', ')}>`;
 			const call = (x: string) => `${typed}(${x}${kind === 'both' ? ', false' : ''})`;
 			return /\)\?$/.test(type) ? `${RT.jsUnlessNullish}(${code}) { ${call('it')} }` : call(code);

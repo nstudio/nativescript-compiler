@@ -650,12 +650,16 @@ export const modulesMethods = {
 			return { name: (m.name as ts.Identifier).text, type: m.questionToken ? optionalType(t) : t, readonly: hasModifier(m, ts.SyntaxKind.ReadonlyKeyword) };
 		});
 		const methods = members.filter(ts.isMethodSignature).map((m) => {
-			const params = m.parameters.map((p, k) => ({ name: ts.isIdentifier(p.name) ? ident(p.name.text) : `p${k}`, type: this.requirementParamType(p), undefinedDefault: !!p.questionToken && this.states.nullishHeld(p) }));
+			const params = m.parameters.map((p, k) => {
+				const type = this.requirementParamType(p);
+				const defaultVal = p.questionToken ? (this.states.nullishHeld(p) ? ' = JSNullish.Undefined' : isNullable(type) || isUntyped(spelledType(type)) ? ' = null' : '') : '';
+				return { name: ts.isIdentifier(p.name) ? ident(p.name.text) : `p${k}`, type, defaultVal };
+			});
 			const methodName = protocolMethodName(m.name, this.checker, ident);
 			return { name: methodName, key: m.name.getText(), params, ret: this.returnTypeOf(m) };
 		});
-		// The interface's own declaration gives an omitted `JSNullish` argument its undefined; overrides inherit it.
-		const signature = (m: (typeof methods)[0], declared = false) => `fun ${m.name}(${m.params.map((p) => `${p.name}: ${p.type}${declared && p.undefinedDefault ? ' = JSNullish.Undefined' : ''}`).join(', ')})${m.ret === 'Unit' ? '' : `: ${m.ret}`}`;
+		// The interface's own declaration gives an omitted optional argument its default; overrides inherit it.
+		const signature = (m: (typeof methods)[0], declared = false) => `fun ${m.name}(${m.params.map((p) => `${p.name}: ${p.type}${declared ? p.defaultVal : ''}`).join(', ')})${m.ret === 'Unit' ? '' : `: ${m.ret}`}`;
 		const fnType = (m: (typeof methods)[0]) => `(${m.params.map((p) => p.type).join(', ')}) -> ${m.ret}`;
 		const lines = [`interface ${name} : JSDynamic {`];
 		// Library mode: read-only in the interface, so a class implementing it may hold a narrower type (`android: MotionEvent` for `any`).

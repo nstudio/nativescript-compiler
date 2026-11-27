@@ -458,11 +458,14 @@ public func jsIsSafeInteger(_ x: Double) -> Bool { jsIsInteger(x) && abs(x) <= 9
 /// `n.toString(radix)`; nil radix is 10.
 public func jsNumberToString(_ x: Double, radix: Double?) throws -> String { try radix.map { try jsNumberToRadixString(x, $0) } ?? jsNumberToString(x) }
 
-/// An untyped value read as a dictionary-typed object: a record already, or a record of an object's keys.
+/// An untyped value read as a dictionary-typed object: a record already, or a record of an object's keys
+/// (keeping a class instance's dynamic lookup as a fallback for methods and getters).
 public func jsRecordOf<T>(_ value: Any?, _ element: (Any?) throws -> T) rethrows -> JSRecord<T> {
     if let record = jsFlat(value) as? JSRecord<T> { return record }
     guard let object = jsFlat(value) as? JSDynamic else { return JSRecord<T>() }
-    return JSRecord(try object.jsKeys.map { ($0, try element(object[jsKey: $0])) })
+    let record = JSRecord(try object.jsKeys.map { ($0, try element(object[jsKey: $0])) })
+    if !(object is JSObject) { record.backing = object }
+    return record
 }
 
 /// The RegExp match, matchAll and search make of a pattern that is not one.

@@ -377,6 +377,7 @@ enum WorkerTestsMain {
             failed += 1
             print("✗ uncaught in test driver: \(jsToString(jsCaught(error)))")
         }
+        _ = pumpUntil(2000) { !JSWorker.hasActiveWorkers }
         check("swift: no active workers left", !JSWorker.hasActiveWorkers)
         print("\(passed) of \(passed + failed) swift worker checks pass")
         exit(failed == 0 ? 0 : 1)

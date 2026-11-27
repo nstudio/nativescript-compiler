@@ -5,7 +5,7 @@ import { ident, isFunctionType, isNullable, kotlinString, nullishType, optionalT
 import type { Translator } from './translator.ts';
 import { UNKEYED, definesDuringConstruction, implementedOptionalMembers, restrictsField, definedField } from '../semantics/shapes.ts';
 import { extendsHeritage, hasModifier, isLibDeclaration, nonSuperStatements } from '../semantics/ast.ts';
-import { implementedInterfaces } from '../semantics/lang.ts';
+import { implementedInterfaces, isEmittedInterface } from '../semantics/lang.ts';
 import { isCoreDeclaration } from '../program/core-facts.ts';
 import { isStatic } from '../semantics/throws.ts';
 import { isUntyped, spelledType } from '../semantics/types.ts';
@@ -285,6 +285,7 @@ export const componentMethods = {
 	/** The interfaces a class implements, named or met, that are Kotlin interfaces it implements; `witnesses` gets the adapters its methods need. */
 	implementedProtocols(this: Translator, cls: ts.ClassLikeDeclaration, witnesses: string[], notOverrides: Set<string>): string[] {
 		const implemented: string[] = implementedInterfaces(this.checker, cls)
+			.filter((i) => isEmittedInterface(this.checker.getTypeAtLocation(i)))
 			.filter((i) => !isLibDeclaration(this.checker.getTypeAtLocation(i).getSymbol()?.declarations?.[0]))
 			// An interface of a module that is not translated (a package's `types.ts`, which declares only types) is no Kotlin interface.
 			.filter((i) => !this.untranslatedInterface(i))

@@ -156,6 +156,7 @@ export const overridesMethods = {
 			return `${code}.let { __f -> { ${g.params.map((p, k) => `${names[k]}: ${p}`).join(', ')} -> ${result} } }`;
 		}
 		if (isUntyped(spelledType(from))) return this.fromAny(code, to);
+		if (!this.library && from === 'JSPromise<Unit>' && /^JSPromise<(.+)>$/.test(to) && to !== from) return this.fromAny(code, to);
 		if (to === optionalType(from)) return code;
 		// An array of one element type where another is declared (`string[]` given as `any[]`): convert structural elements, else share the array.
 		if (/^JSArray<.*>$/.test(from.replace(/\?$/, '')) && /^JSArray<.*>$/.test(to.replace(/\?$/, '')) && from.replace(/\?$/, '') !== to.replace(/\?$/, '')) {

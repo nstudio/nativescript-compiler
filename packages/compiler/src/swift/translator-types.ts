@@ -98,7 +98,7 @@ export interface DynamicMembers {
 	className: string | null;
 	/** Below a class that has these members: its keys come first and its members take the rest. */
 	override?: boolean;
-	methods?: { name: string; type: string; available?: number; length?: number }[];
+	methods?: { name: string; type: string; available?: number; length?: number; trailingFrom?: number }[];
 	/** Optional ones (an object type's `[K]?: T`) are own keys while they hold a value. */
 	symbols?: { key: string; member: string; type: string; optional?: boolean }[];
 	/** Non-expando app classes' symbol-named instance methods, reached by `subscript(jsKey:)` and `jsHasMember`. */

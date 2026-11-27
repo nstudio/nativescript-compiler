@@ -47,7 +47,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { kitProjectDir } from '../../src/targets/android/build.ts';
 import { KIT_ANDROID } from '../../src/driver/paths.ts';
 import { check, finish, KotlinTranslator as Translator, nativeBuild, SwiftTranslator } from './checks.ts';
-import { buildKotlinRuntime, buildSwiftRuntime, kotlinc, kotlinStdlib, modulesDir, swiftc, swiftMain, translateKotlin, translateSwift } from '../native-build.ts';
+import { buildKotlinRuntime, buildSwiftRuntime, kotlinc, kotlinMain, kotlinStdlib, modulesDir, swiftc, swiftMain, translateKotlin, translateSwift } from '../native-build.ts';
 import ts from 'typescript';
 import { BuildContext } from '../../src/program/build-context.ts';
 import { desugarClassMixins } from '../../src/program/class-mixins.ts';
@@ -2386,6 +2386,156 @@ export const boundRegister = Application.android.registerBroadcastReceiver.bind(
       const kt = new Translator(prog.checker, new Map(), prog.files, { core: (t) => new CoreKotlin(t), errors: [] });
       const mod = translateKotlinModules(kt, prog.program, [bindFile])[0];
       check(mod.code.includes('?: 2.0') && !mod.code.includes('::registerBroadcastReceiver'), `Issue #21: .bind() on core method with non-null Double default forwards default value (${mod.code.slice(0, 200)})`);
+    }
+    // Issues #22–#26: mapped/Pick type methods in jsGet, Promise<T | void> Unit->null bridging,
+    // getViewById<View> & (x as View | undefined) safe casts, JSMethod JSNullish/default boxing,
+    // and optional parameters on Kotlin interface methods.
+    {
+      const issuesFile = join(dir, 'issues_22_26.ts');
+      writeFileSync(
+        issuesFile,
+        `// #22: mapped/Pick type aliases erased to Any?
+class RealClient {
+  getCurrentUacMode(): { mode: number; name: string } { return { mode: 1, name: 'UAC 1.0' }; }
+}
+export type Controller = Pick<RealClient, 'getCurrentUacMode'>;
+export type ControllerAsync = {
+  [K in keyof Controller]: Controller[K] extends (...args: infer A) => infer R ? (...args: A) => Promise<R> : Controller[K];
+};
+class PromisifiedController implements ControllerAsync {
+  constructor(private readonly controller: Controller) {}
+  getCurrentUacMode() { return Promise.resolve(this.controller.getCurrentUacMode()); }
+}
+class ContextHolder { ds3?: ControllerAsync; }
+export async function readUacMode(ctrl: ControllerAsync): Promise<number> {
+  return (await ctrl.getCurrentUacMode()).mode;
+}
+
+// #23: Promise<T | void> via union/jsView AND direct async void function
+export interface ChoiceSetting { kind: 'choice'; write(value: number): Promise<number | void>; }
+export interface ToggleSetting { kind: 'toggle'; write(value: boolean): Promise<boolean | void>; }
+type AnySetting = ChoiceSetting | ToggleSetting;
+const settings: AnySetting[] = [
+  { kind: 'choice', write: async (value: number) => { await Promise.resolve(value); } },
+  { kind: 'choice', write: async (value: number) => { await Promise.resolve(value); return value + 10; } },
+  { kind: 'toggle', write: async (value: boolean) => { await Promise.resolve(value); } },
+];
+async function applyChoice(s: ChoiceSetting, value: number): Promise<number> {
+  const result = await s.write(value);
+  return typeof result === 'number' ? result : value;
+}
+async function applyToggle(s: ToggleSetting, value: boolean): Promise<boolean> {
+  const result = await s.write(value);
+  return typeof result === 'boolean' ? result : value;
+}
+async function noopVoid(): Promise<void> { await Promise.resolve(); }
+const directChoice: ChoiceSetting = { kind: 'choice', write: noopVoid };
+
+// #24 part 2: nullable object assertion (parent as ViewNode | undefined)?.width
+class BaseNode { id = 'base'; }
+class ViewNode extends BaseNode { width = 320; }
+class OtherNode extends BaseNode { label = 'other'; }
+function measureParent(parent: BaseNode | undefined): number {
+  return (parent as ViewNode | undefined)?.width ?? -1;
+}
+
+// #25: JSMethod dispatchers for JSNullish<T> AND constant-default params
+class Ds3Client {
+  getEqMode(mode: number | null = 0xff): string {
+    return mode === null ? 'null' : String(mode);
+  }
+  getEqBands(mode: number, bandCount = 8): number {
+    return mode * 100 + bandCount;
+  }
+}
+
+// #26: Optional parameters on interface methods
+export interface Ds3ControllerAsync {
+  getLedSwitch(ledIndex?: number): Promise<number>;
+}
+class LedImpl implements Ds3ControllerAsync {
+  async getLedSwitch(ledIndex?: number): Promise<number> { return ledIndex ?? 1; }
+}
+export async function readLed(ds3: Ds3ControllerAsync): Promise<string> {
+  const a = await ds3.getLedSwitch();
+  const b = await ds3.getLedSwitch(5);
+  return a + ',' + b;
+}
+
+async function run22To26() {
+  const holder = new ContextHolder();
+  holder.ds3 = new PromisifiedController(new RealClient());
+  const r22 = await readUacMode(holder.ds3);
+  const r23 = [
+    await applyChoice(settings[0] as ChoiceSetting, 42),
+    await applyChoice(settings[1] as ChoiceSetting, 42),
+    await applyToggle(settings[2] as ToggleSetting, true),
+    await applyChoice(directChoice, 99),
+  ].join(',');
+  const r24 = [measureParent(new ViewNode()), measureParent(new OtherNode()), measureParent(undefined)].join(',');
+  const ds3 = new Ds3Client();
+  const rec = ds3 as unknown as Record<string, unknown>;
+  const fnMode = rec['getEqMode'] as (...args: unknown[]) => unknown;
+  const fnBands = rec['getEqBands'] as (...args: unknown[]) => unknown;
+  const r25 = [fnMode.apply(ds3, [7]), fnMode.apply(ds3, [null]), fnMode.apply(ds3, []), fnBands.apply(ds3, [7, 32]), fnBands.apply(ds3, [7])].join(',');
+  const r26 = await readLed(new LedImpl());
+  console.log([r22, r23, r24, r25, r26].join('|'));
+}
+run22To26();
+`,
+      );
+      const expected2226 = '1|42,52,true,99|320,-1,-1|7,null,255,732,708|1,5';
+      // Kotlin native execution
+      {
+        let ktGot = '';
+        try {
+          const out = join(dir, 'kotlin-22-26');
+          const mods = translateKotlin([issuesFile], out, 'org.example.issues2226');
+          writeFileSync(join(out, '__Main.kt'), kotlinMain(mods, 'org.example.issues2226'));
+          const runtime = buildKotlinRuntime(nativeBuild);
+          const errors = kotlinc(readdirSync(out).filter((f) => f.endsWith('.kt')).map((f) => join(out, f)), join(dir, 'classes-22-26'), [runtime]);
+          const runRes = errors ? null : spawnSync('java', ['-cp', [join(dir, 'classes-22-26'), runtime, kotlinStdlib()].join(':'), 'org.example.issues2226.entry.__MainKt'], { encoding: 'utf8' });
+          ktGot = errors ? errors.slice(0, 3).join(' ; ') : runRes!.status ? `exit ${runRes!.status}: ${(runRes!.stderr || runRes!.stdout).trim()}` : runRes!.stdout.trim();
+        } catch (e) { ktGot = String(e); }
+        check(ktGot === expected2226, `Issues #22, #23, #24, #25, #26 run natively (Kotlin${ktGot === expected2226 ? '' : `: ${ktGot.slice(0, 300)}`})`);
+      }
+      // Swift native execution
+      {
+        let swGot = '';
+        try {
+          const out = join(dir, 'swift-22-26');
+          const mods = translateSwift([issuesFile], out);
+          writeFileSync(join(out, 'main.swift'), swiftMain(mods));
+          const errors = swiftc(readdirSync(out).map((f) => join(out, f)), join(dir, 'main-22-26'), nativeBuild, '-Onone');
+          swGot = errors ? errors.slice(0, 3).join(' ; ') : spawnSync(join(dir, 'main-22-26'), { encoding: 'utf8' }).stdout.trim();
+        } catch (e) { swGot = String(e); }
+        check(swGot === expected2226, `Issues #22, #23, #24, #25, #26 run natively (Swift${swGot === expected2226 ? '' : `: ${swGot.slice(0, 300)}`})`);
+      }
+      // #24 Part 1 & Part 2 against @nativescript/core ViewBase.getViewById<View> and (view.parent as View | undefined)
+      {
+        const viewFile = join(dir, 'view_24.ts');
+        writeFileSync(
+          viewFile,
+          `import { View, ViewBase } from '@nativescript/core';
+export function toggleDisclosure(card: ViewBase, bodyView: View | undefined, id: string): number {
+  const view = bodyView ?? card.getViewById<View>(id);
+  if (view) {
+    return view.getMeasuredWidth() || (view.parent as View | undefined)?.getMeasuredWidth() || 0;
+  }
+  return -1;
+}
+`,
+        );
+        const prog = createProgram([viewFile], new Map(), 'android', modulesDir);
+        const kt = new Translator(prog.checker, new Map(), prog.files, { core: (t) => new CoreKotlin(t), errors: [] });
+        const mod = translateKotlinModules(kt, prog.program, [viewFile])[0];
+        check(
+          mod.code.includes('card.getViewById(id) as? View') &&
+            mod.code.includes('.parent as? View') &&
+            !/\bas View\b/.test(mod.code),
+          `Issue #24: getViewById<View>(id) and (view.parent as View | undefined) emit safe as? View casts (${mod.code.slice(0, 300)})`,
+        );
+      }
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });

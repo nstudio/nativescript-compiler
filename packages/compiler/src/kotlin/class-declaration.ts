@@ -48,7 +48,7 @@ export interface ClassParts {
 	/** Where each field's lines start, for its doc comment. */
 	readonly fieldStarts: [number, ts.PropertyDeclaration][];
 	readonly dynAccessors: { name: string; type: string; readable: boolean; settable: boolean; set?: string }[];
-	readonly dynMethods: { name: string; key?: string; fixed?: boolean; either?: boolean; maybeUndefined?: boolean; params: string[]; unread?: boolean[]; ret: string }[];
+	readonly dynMethods: { name: string; key?: string; fixed?: boolean; either?: boolean; maybeUndefined?: boolean; params: string[]; defaults?: (string | undefined)[]; unread?: boolean[]; ret: string }[];
 }
 
 export const classDeclMethods = {

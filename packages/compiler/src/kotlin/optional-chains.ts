@@ -5,7 +5,7 @@ import { isLibGlobal } from '../semantics/globals.ts';
 import { cast, earlyBacking, ident, isFunctionType, isNullable, kotlinString, optionalType, safeCast, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { elementReceiverCell, keyName, isEnumObject, receiverCell, receiverSlot } from '../semantics/placement.ts';
-import { uncheckedMatch } from '../semantics/lang.ts';
+import { nullableTypeNode, uncheckedMatch } from '../semantics/lang.ts';
 import { isLibDeclaration, isWriteTarget } from '../semantics/ast.ts';
 import { isKit, isNamed, isUntyped, parseNativeType, spelledType } from '../semantics/types.ts';
 
@@ -13,9 +13,26 @@ export const optionalChainsMethods = {
 	maybeUndefined(this: Translator, e: ts.Expression): string | null {
 		while (ts.isParenthesizedExpression(e)) e = e.expression;
 		// `a ?? b` of objects where `b` may be missing too: missing then.
-		if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken && !this.library && this.isObjectRef(e) && !isNullable(this.typeOf(e)) && this.states.missingObject(e)) {
-			const code = this.expr(e);
-			if (this.isAsserted(code)) return this.unasserted(code);
+		if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken && !this.library && this.isObjectRef(e) && !isNullable(this.typeOf(e))) {
+			if (this.states.missingObject(e)) {
+				const code = this.expr(e);
+				if (this.isAsserted(code)) return this.unasserted(code);
+			}
+			const rightMaybe = this.maybeUndefined(e.right);
+			if (rightMaybe) return `(${this.coerce(e.left, optionalType(this.typeOf(e)))} ?: ${rightMaybe})`;
+		}
+		// A kit method whose Kotlin signature returns nullable (`ViewBase.getViewById`: `ViewBase?`) though core's typings say present.
+		if (ts.isCallExpression(e) && !this.library && !this.nullOk.has(e) && !isNullable(this.typeOf(e)) && this.isObjectRef(e) && !isFunctionType(this.typeOf(e)) && this.core?.kitNil?.(e)) {
+			this.nullOk.add(e);
+			try {
+				return this.expr(e);
+			} finally {
+				this.nullOk.delete(e);
+			}
+		}
+		// `x as T | undefined` / `x as T | null` where non-strictNullChecks stripped the union: safe cast returning nullable.
+		if ((ts.isAsExpression(e) || ts.isTypeAssertionExpression(e)) && !this.library && !isNullable(this.typeOf(e)) && this.isObjectRef(e) && this.isObjectRef(e.expression) && nullableTypeNode(e.type)) {
+			return safeCast(this.expr(e.expression), this.typeOf(e));
 		}
 		const assertion = this.assertedUntyped(e);
 		if (assertion) return this.assertedOptional(assertion);

@@ -376,6 +376,8 @@ open class JSSet<T>() : Iterable<T>, JSReactiveConvertible {
  * key order (integer-like keys ascending, then insertion order) and reference semantics.
  */
 class JSRecord<V>(val obj: JSObject) : JSDynamic, JSReactiveConvertible {
+    internal var backing: JSDynamic? = null
+
     constructor() : this(JSObject())
 
     constructor(entries: List<Pair<String, V>>) : this() {
@@ -383,9 +385,12 @@ class JSRecord<V>(val obj: JSObject) : JSDynamic, JSReactiveConvertible {
     }
 
     @Suppress("UNCHECKED_CAST")
-    operator fun get(key: String): V? = obj[key] as V?
+    operator fun get(key: String): V? = if (obj.has(key)) obj[key] as V? else backing?.jsGet(key) as V?
 
-    operator fun set(key: String, value: V?) { obj[key] = value }
+    operator fun set(key: String, value: V?) {
+        obj[key] = value
+        backing?.jsSet(key, value)
+    }
 
     fun delete(key: String): Boolean = obj.delete(key)
     fun has(key: String): Boolean = obj.has(key)
@@ -396,8 +401,11 @@ class JSRecord<V>(val obj: JSObject) : JSDynamic, JSReactiveConvertible {
     @Suppress("UNCHECKED_CAST")
     val entries: JSArray<Pair<String, V>> get() = JSArray(obj.jsKeys.map { Pair(it, obj[it] as V) })
 
-    override fun jsGet(key: String): Any? = obj.jsGet(key)
-    override fun jsSet(key: String, value: Any?) = obj.jsSet(key, value)
+    override fun jsGet(key: String): Any? = if (obj.has(key)) obj.jsGet(key) else backing?.jsGet(key)
+    override fun jsSet(key: String, value: Any?) {
+        obj.jsSet(key, value)
+        backing?.jsSet(key, value)
+    }
     override val jsKeys: List<String> get() = obj.jsKeys
     override val jsClassName: String? get() = null
 
@@ -408,14 +416,15 @@ class JSRecord<V>(val obj: JSObject) : JSDynamic, JSReactiveConvertible {
 
 /**
  * An untyped value read as a dictionary (`Record<string, V>`): a plain object is
- * shared, so writes through either show in both; another object's own keys are copied.
+ * shared, so writes through either show in both; another object's own keys are copied
+ * and its dynamic lookup (methods, getters) stays reachable as a fallback.
  */
 @Suppress("UNCHECKED_CAST")
 fun <V> jsRecordOrNull(value: Any?): JSRecord<V>? = when (value) {
     null, JSNull -> null
     is JSRecord<*> -> value as JSRecord<V>
     is JSObject -> JSRecord(value)
-    is JSDynamic -> JSRecord<V>().also { r -> for (k in value.jsKeys) r.obj[k] = value.jsGet(k) }
+    is JSDynamic -> JSRecord<V>().also { r -> r.backing = value; for (k in value.jsKeys) r.obj[k] = value.jsGet(k) }
     else -> throw JSException(JSTypeError("${jsTypeof(value)} is not an object"))
 }
 

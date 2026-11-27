@@ -192,7 +192,7 @@ export const classMethodsMethods = {
 				let root: ts.MethodDeclaration = m;
 				for (let up = this.inheritedMethod(cls, n); up; up = this.inheritedMethod(up.parent as ts.ClassLikeDeclaration, n)) root = up;
 				if (root.parameters.length !== m.parameters.length) continue;
-				dynMethods.push({ name: n, params: root.parameters.map((p) => this.paramType(p)), ret: this.returnTypeOf(root) });
+				dynMethods.push({ name: n, params: root.parameters.map((p) => this.paramType(p)), defaults: root.parameters.map((p) => (this.constantDefault(p) ? this.stored(p.initializer!, p, this.paramType(p)) : undefined)), ret: this.returnTypeOf(root) });
 			}
 		}
 	},

@@ -333,7 +333,7 @@ export const conversionMethods = {
 			observers.keep?.('swift', 'promise', from, to, this.currentFile, !!this.library);
 			// An untyped promise is read as the same promise, its reactions in the ticks they would have in JavaScript.
 			if (isUntyped(spelledType(pf)) && !this.lenient && !isOptional(from)) return `${RT.jsPromiseOf}(${code}) { ${pt === 'Void' ? '_ in ()' : this.presentFromAny('$0', pt)} }`;
-			const value = pt === 'Void' ? '' : `return ${isUntyped(spelledType(pf)) ? this.presentFromAny('__v', pt) : this.convert('__v', pf, pt)}`;
+			const value = pt === 'Void' ? '' : `return ${pf === 'Void' ? 'nil' : isUntyped(spelledType(pf)) ? this.presentFromAny('__v', pt) : this.convert('__v', pf, pt)}`;
 			// Lenient code's promise (or a plugin's, held optional) may be missing: then nothing is chained.
 			return `${this.lenient || isOptional(from) ? `(${code} as JSPromise<${pf}>?)?` : code}.then({ (__v: ${pf}) throws -> ${pt} in ${value} })`;
 		}

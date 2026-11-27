@@ -4,12 +4,13 @@ import { join } from 'node:path';
 import { addedDeclarations, augmentedProperty, isCoreDeclaration, ownPropertyOnly } from '../program/core-facts.ts';
 import { KitTypes, coreClass, kitExtends, kitMember, type KitMember, type KitType } from '../kit/kit-index.ts';
 import { KIT_NAMES_ANDROID } from './library.ts';
-import { functionTypeParts, kotlinString, numberLiteral, splitTopLevel, RT } from './syntax.ts';
+import { functionTypeParts, kotlinString, numberLiteral, safeCast, splitTopLevel, RT } from './syntax.ts';
 import type { KotlinCore, Translator } from './translator.ts';
 import { KIT_ANDROID } from '../driver/paths.ts';
 import type { AdapterKit } from '../api/adapter-api.ts';
 import { rethrowUnlessRefused } from '../semantics/refusals.ts';
 import { isMixinOwnMember } from '../semantics/classes.ts';
+import { nullableTypeNode } from '../semantics/lang.ts';
 import { isUntyped, spelledType } from '../semantics/types.ts';
 import { kotlinKitIndex, TOP_LEVEL, NATIVE_MEMBERS, SCRIPT_OBJECTS, KIT } from './core-index.ts';
 
@@ -63,7 +64,7 @@ export class CoreKotlin extends KitTypes implements KotlinCore {
 			const m = owner && kitMember(this.index, owner.name, this.kitName(owner.name, access.name.text));
 			if (!m || m.kind !== (ts.isCallExpression(x) ? 'func' : 'var')) return false;
 			const k = m.type.trim();
-			return k.endsWith('?') && !isUntyped(spelledType(k)) && !functionTypeParts(k.replace(/^\((.*)\)\?$/, '$1'));
+			return k.endsWith('?') && (!isUntyped(spelledType(k)) || !isUntyped(spelledType(this.t.typeOf(x)))) && !functionTypeParts(k.replace(/^\((.*)\)\?$/, '$1'));
 		} catch (e) {
 			rethrowUnlessRefused(e);
 			return false;
@@ -383,7 +384,7 @@ export class CoreKotlin extends KitTypes implements KotlinCore {
 			if (owner.isStatic) return (this.index.get(owner.name) as (KitType & { object?: boolean }) | undefined)?.object ? `${recv}::${name}` : `${recv}.Companion::${name}`;
 			return recv.endsWith('?') ? `${recv.slice(0, -1)}?.let { __r -> __r::${name} }` : `${recv}::${name}`;
 		}
-		return this.fromKit(`${recv}.${name}`, m.type, t.typeOf(e), t.nullTolerant(e) || t.states.nilKept(e));
+		return this.fromKit(`${recv}.${name}`, m.type, t.typeOf(e), t.nullTolerant(e) || t.states.nilKept(e) || keepsNullable(e));
 	}
 
 	/** A core-typed receiver's code: unwrapped where it is nullable and the access is not an optional one (code checked without strictNullChecks). */
@@ -486,7 +487,7 @@ export class CoreKotlin extends KitTypes implements KotlinCore {
 		}
 		// A function held in a field the kit declares nullable (`CssAnimationProperty.register`): present where it is called.
 		const callee = held && /\)\?$/.test(m.type.trim()) ? `(${recv}.${name} ?: ${RT.jsNotAFunction}(${kotlinString(e.expression.getText().replace(/\s+/g, ''))}))` : `${recv}.${name}`;
-		return this.fromKit(`${callee}(${args.join(', ')})`, m.type, t.typeOf(e), keepsNullable(e) || t.states.nilKept(e));
+		return this.fromKit(`${callee}(${args.join(', ')})`, m.type, t.typeOf(e), keepsNullable(e) || t.states.nilKept(e) || t.nullOk.has(e));
 	}
 
 	construct(e: ts.NewExpression): string | null {
@@ -675,7 +676,7 @@ export class CoreKotlin extends KitTypes implements KotlinCore {
 		if (kb === 'Any' && isFn(tsType)) return this.t.fromAnyCode(code, tsType, true);
 		// One array of the kit's where TypeScript names another element class (`Frame._stack()`, FrameBase's).
 		if (/^JSArray<.*>$/.test(kb) && /^JSArray<.*>$/.test(tb) && kb !== tb) return this.t.unchecked(tsType, code);
-		if (kb !== tb && this.index.has(tb) && (kb === 'Any' || kitExtends(this.index, tb, kb))) return `(${code} as ${tb}${k.endsWith('?') && (tsType.endsWith('?') || keepNull) ? '?' : ''})`;
+		if (kb !== tb && this.index.has(tb) && (kb === 'Any' || kitExtends(this.index, tb, kb))) return k.endsWith('?') && (tsType.endsWith('?') || keepNull) ? safeCast(code, tb) : `(${code} as ${tb})`;
 		if (k.endsWith('?') && !tsType.endsWith('?') && !isUntyped(spelledType(tsType))) {
 			const zero = tsType === 'String' ? '""' : tsType === 'Double' ? '0.0' : tsType === 'Boolean' ? 'false' : null;
 			return zero ? (heldLoss('kitResult', zero, { native: !!this.t.native }), `(${code} ?: ${zero})`) : keepNull ? code : this.t.asserted(code);
@@ -690,12 +691,20 @@ export class CoreKotlin extends KitTypes implements KotlinCore {
 	}
 }
 
-/** Whether `e`'s value is only tested (a condition, the operand of `!`) or dropped. */
+/** Whether `e`'s value is only tested (a condition, the operand of `!`), asserted nullable, optional-chained, coalesced, or dropped. */
 function keepsNullable(e: ts.Expression): boolean {
 	let n: ts.Node = e;
 	while (ts.isParenthesizedExpression(n.parent)) n = n.parent;
 	const p = n.parent;
-	return ts.isExpressionStatement(p) || (ts.isConditionalExpression(p) && p.condition === n) || (ts.isIfStatement(p) && p.expression === n) || (ts.isPrefixUnaryExpression(p) && p.operator === ts.SyntaxKind.ExclamationToken);
+	return (
+		ts.isExpressionStatement(p) ||
+		((ts.isAsExpression(p) || ts.isTypeAssertionExpression(p)) && nullableTypeNode(p.type)) ||
+		(ts.isConditionalExpression(p) && p.condition === n) ||
+		(ts.isIfStatement(p) && p.expression === n) ||
+		(ts.isPrefixUnaryExpression(p) && p.operator === ts.SyntaxKind.ExclamationToken) ||
+		(ts.isBinaryExpression(p) && p.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken && p.left === n) ||
+		((ts.isPropertyAccessExpression(p) || ts.isElementAccessExpression(p) || ts.isCallExpression(p)) && p.expression === n && !!p.questionDotToken)
+	);
 }
 
 /**

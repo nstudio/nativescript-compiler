@@ -268,6 +268,7 @@ export const expressionsMethods = {
 				// `args.object as Button` of another class: a TypeError, catchable as script's failure on a member it lacks would be.
 				const made = this.madeClass(e.expression);
 				if (made && sameClass(made, to)) return this.expr(e.expression);
+				if (isOptional(to)) return this.marks.castCode(this.expr(e.expression), to.slice(0, -1), 'as?');
 				return this.castThrows(e) ? this.marks.ownTried(`${RT.jsChecked}(${this.expr(e.expression)}, ${metatype(to)})`) : this.marks.castCode(this.expr(e.expression), to, 'as!');
 			}
 			// A non-strict app's assertion of a value that may be missing (`<UITableViewCell>table.cellForRow(…)`): unwrapped where used.

@@ -2,7 +2,7 @@
 import ts from 'typescript';
 import { ident, isOptional, metatype, optionalType, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
-import { implementedInterfaces } from '../semantics/lang.ts';
+import { implementedInterfaces, isEmittedInterface } from '../semantics/lang.ts';
 import { UNKEYED } from '../semantics/shapes.ts';
 import { hasModifier, isLibDeclaration } from '../semantics/ast.ts';
 import { isCoreDeclaration } from '../program/core-facts.ts';
@@ -37,7 +37,7 @@ export const protocolsMethods = {
 		const named = implementedInterfaces(this.checker, cls).map((i) => ({ name: this.heritageName(i), type: this.checker.getTypeAtLocation(i) }));
 		const met = [...(this.structural.get(cls) ?? [])].map((d) => ({ name: this.topName(d, d.name.text), type: this.checker.getTypeAtLocation(d.name) }));
 		const implemented = [...named, ...met.filter((m) => !named.some((n) => n.name === m.name))]
-			.filter((i) => !isLibDeclaration(i.type.getSymbol()?.declarations?.[0]) && !this.uncompiledType(i.type))
+			.filter((i) => isEmittedInterface(i.type) && !isLibDeclaration(i.type.getSymbol()?.declarations?.[0]) && !this.uncompiledType(i.type))
 			// An interface only a declaration file has is no Swift protocol (a plugin's `IHttpsResponseLegacy` in its `.d.ts`), unless core's
 			// that the kit has; nor is one the program has no declaration of (a plugin's `import { IOptions } from '.'`, which the platform
 			// suffix resolves to the importing file itself).

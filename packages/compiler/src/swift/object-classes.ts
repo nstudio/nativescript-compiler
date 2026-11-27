@@ -305,7 +305,8 @@ export const objectClassesMethods = {
 						.filter((m) => !fields.some((f) => f.name === m.name))
 						.map((m) => {
 							// An app class's method sees the object it is called on as `this` when that is one of the class's (`obj[k].call(other)`).
-							const value = byName ? `${RT.jsMethodValue}(self) { (__s: ${byName.receiver}) in ${this.boxFunction(`__s.${ident(m.name)}`, m.type, -1, m.name, m.length, undefined, false)} }` : this.boxFunction(`self.${ident(m.name)}`, m.type, -1, m.name, m.length, undefined, false);
+							const trailing = m.trailingFrom !== undefined ? { ref: `${byName ? '__s' : 'self'}.${ident(m.name)}`, from: m.trailingFrom } : undefined;
+							const value = byName ? `${RT.jsMethodValue}(self) { (__s: ${byName.receiver}) in ${this.boxFunction(`__s.${ident(m.name)}`, m.type, -1, m.name, m.length, trailing, false)} }` : this.boxFunction(`self.${ident(m.name)}`, m.type, -1, m.name, m.length, trailing, false);
 							// A value the instance holds in the method's place (`obj.step = …`) is what reading it gives.
 							const own = byName && ownNames.has(m.name) ? `if let __own = ${RT.jsOwnProperty}(self, ${swiftString(m.name)}) { return __own }; ` : '';
 							return { name: m.name, code: m.available ? `${own}if #available(iOS ${m.available}, *) { return ${value} } else { return nil }` : `${own}return ${value}` };

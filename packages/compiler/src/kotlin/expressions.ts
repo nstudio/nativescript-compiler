@@ -6,7 +6,7 @@ import { BUFFER_TYPES } from '../semantics/globals.ts';
 import { branch, cast, escapeText, functionTypeParts, ident, isFunctionType, isNullable, kotlinString, numberLiteral, optionalType, safeCast, RT, assertedReader } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { awaitedCell, isEnumObject, nullishField } from '../semantics/placement.ts';
-import { globalProxyUse, isStringRaw, readWrite, statementLevel, templateParts } from '../semantics/lang.ts';
+import { globalProxyUse, isStringRaw, nullableTypeNode, readWrite, statementLevel, templateParts } from '../semantics/lang.ts';
 import { readKeyOf } from '../semantics/nullish.ts';
 import { convertedRead, onlyNull } from '../semantics/states/predicates.ts';
 import { isLibDeclaration, isWriteTarget } from '../semantics/ast.ts';
@@ -226,12 +226,15 @@ export const expressionsMethods = {
 				return from.endsWith('?') ? `${this.expr(e.expression)}?.let { ${this.viewOf(toName, 'it')} }` : this.viewOf(toName, this.expr(e.expression));
 			}
 			if (from !== to && from.replace(/\?$/, '') !== to.replace(/\?$/, '') && this.isObjectRef(e) && this.isObjectRef(e.expression)) {
+				// A nullable type assertion (`x as View | undefined`, `x as View | null`): safe cast (`as?`), returning null for null or another class.
+				if (isNullable(to)) return safeCast(this.expr(e.expression), to.replace(/\?$/, ''));
+				if (!this.library && !ts.isSatisfiesExpression(e) && nullableTypeNode(e.type) && (this.nullOk.has(e) || this.nullTolerant(e) || ts.isOptionalChain(ts.walkUpParenthesizedExpressions(e.parent)))) return safeCast(this.expr(e.expression), to);
 				// Library mode: a script assertion never fails, so a value of another class (a TabViewItem walked up to as a parent)
 				// or a null Java result (`dlg.findViewById(id) as TextView`) reads as null instead of throwing ClassCastException/NPE.
-				if (this.library && this.isClassDowncast(e) && (isNullable(to) || this.functionLiteralArgument(e))) return safeCast(this.expr(e.expression), to.replace(/\?$/, ''));
+				if (this.library && this.isClassDowncast(e) && this.functionLiteralArgument(e)) return safeCast(this.expr(e.expression), to.replace(/\?$/, ''));
 				if (this.library && this.native?.type(this.checker.getNonNullableType(this.checker.getTypeAtLocation(e))) && this.native?.type(this.checker.getNonNullableType(this.checker.getTypeAtLocation(e.expression)))) {
 					const safe = safeCast(this.expr(e.expression), to.replace(/\?$/, ''));
-					return isNullable(to) || this.nullOk.has(e) ? safe : this.unchecked(to, safe);
+					return this.nullOk.has(e) ? safe : this.unchecked(to, safe);
 				}
 				return this.classCast(this.expr(e.expression), from, to);
 			}

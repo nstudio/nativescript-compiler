@@ -315,7 +315,7 @@ class JSPromise<T> internal constructor() : JSThenable, JSDynamic {
         viewed?.let { source ->
             val read = viewRead!!
             source.performThen({ v ->
-                val typed = try { read(v) } catch (e: Throwable) { onRejected(jsCaught(e)); return@performThen }
+                val typed = try { read(jsBox(v)) } catch (e: Throwable) { onRejected(jsCaught(e)); return@performThen }
                 onFulfilled(typed)
             }, onRejected)
             return

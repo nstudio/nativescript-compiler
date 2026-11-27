@@ -129,7 +129,7 @@ export interface DynamicMembers {
 	inherits?: boolean;
 	/** Optional ones (an object type's `[K]?: T`) are own keys while they hold a value; `fixed`: the front's `fixedKey`. */
 	symbols?: { key: string; fixed?: boolean; either?: boolean; maybeUndefined?: boolean; member: string; type: string; optional?: boolean }[];
-	methods?: { name: string; key?: string; fixed?: boolean; either?: boolean; maybeUndefined?: boolean; params: string[]; unread?: boolean[]; ret: string }[];
+	methods?: { name: string; key?: string; fixed?: boolean; either?: boolean; maybeUndefined?: boolean; params: string[]; defaults?: (string | undefined)[]; unread?: boolean[]; ret: string }[];
 	accessors?: { name: string; type: string; readable: boolean; settable: boolean; set?: string }[];
 	/** The base whose `jsHasMember` takes the rest. */
 	superclass?: string;

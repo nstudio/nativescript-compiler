@@ -11,6 +11,11 @@ export type { ReadWrite } from './lang/prototypes.ts';
 
 // JavaScript semantics both translators share, decided from the syntax tree and the checker.
 
+/** Whether `t`'s symbol has an explicit `interface` declaration (not a mapped/`Pick` type alias erased to `Any?`). */
+export function isEmittedInterface(t: ts.Type): boolean {
+	return (t.getSymbol()?.declarations ?? []).some(ts.isInterfaceDeclaration);
+}
+
 /** A type written with `| null` or `| undefined`, which code checked without strictNullChecks types without them. */
 export function nullableTypeNode(t: ts.TypeNode | undefined): boolean {
 	return !!t && ts.isUnionTypeNode(t) && t.types.some((x) => x.kind === ts.SyntaxKind.UndefinedKeyword || (ts.isLiteralTypeNode(x) && x.literal.kind === ts.SyntaxKind.NullKeyword));

@@ -273,6 +273,7 @@ export const byNameCallsMethods = {
 			viewed = new Map<ts.ClassLikeDeclaration, Set<string>>();
 		const extendsInterface = (t: ts.Type, wanted: ts.Symbol, depth = 0): boolean => depth < 32 && (t.getSymbol() === wanted || (t.isClassOrInterface() && c.getBaseTypes(t).some((b) => extendsInterface(b, wanted, depth + 1))));
 		const names = (cls: ts.ClassLikeDeclaration, wanted: ts.Symbol): boolean => {
+			if (!(wanted.declarations ?? []).some(ts.isInterfaceDeclaration)) return false;
 			// A library base's own interface (`extends Error` where `Error` is wanted) is the class's too.
 			if (extendsInterface(c.getTypeAtLocation(cls.name ?? cls), wanted)) return true;
 			for (let b: ts.ClassLikeDeclaration | undefined = cls; b; b = programBase(b, c)) {
@@ -280,23 +281,31 @@ export const byNameCallsMethods = {
 			}
 			return false;
 		};
-		for (const x of this.placed.keys()) {
+		for (const [x, slots] of this.placed) {
+			const rawTypes: ts.Type[] = [];
 			const at = c.getContextualType(x);
-			const wt = at && c.getNonNullableType(at);
-			const wanted = wt?.getSymbol();
-			if (!wanted || !(wanted.flags & (ts.SymbolFlags.TypeLiteral | ts.SymbolFlags.Interface)) || wanted.flags & ts.SymbolFlags.Class || wt!.getCallSignatures().length || wt!.getConstructSignatures().length || !wt!.getProperties().length) continue;
+			if (at) rawTypes.push(at);
+			for (const s of slots) {
+				const rt = this.find(s).type;
+				if (rt) rawTypes.push(rt);
+			}
 			const t = c.getNonNullableType(c.getTypeAtLocation(x));
-			for (const part of t.isUnion() ? t.types : [t]) {
-				const cls = part.getSymbol()?.declarations?.find((d): d is ts.ClassLikeDeclaration => ts.isClassLike(d) && !declarationFile(d));
-				if (cls && part.getConstructSignatures().length) {
-					for (let b: ts.ClassLikeDeclaration | undefined = cls; b; b = programBase(b, c)) this.viewedStatic.add(b);
-					continue;
-				}
-				if (!cls || names(cls, wanted)) continue;
-				const keys = wt!.getProperties().map((p) => p.name);
-				for (let b: ts.ClassLikeDeclaration | undefined = cls; b; b = programBase(b, c)) {
-					const into = viewed.get(b) ?? viewed.set(b, new Set()).get(b)!;
-					for (const k of keys) into.add(k);
+			for (const raw of rawTypes) {
+				const wt = c.getNonNullableType(raw);
+				const wanted = wt.getSymbol();
+				if (!wanted || !(wanted.flags & (ts.SymbolFlags.TypeLiteral | ts.SymbolFlags.Interface)) || wanted.flags & ts.SymbolFlags.Class || wt.getCallSignatures().length || wt.getConstructSignatures().length || !wt.getProperties().length) continue;
+				for (const part of t.isUnion() ? t.types : [t]) {
+					const cls = part.getSymbol()?.declarations?.find((d): d is ts.ClassLikeDeclaration => ts.isClassLike(d) && !declarationFile(d));
+					if (cls && part.getConstructSignatures().length) {
+						for (let b: ts.ClassLikeDeclaration | undefined = cls; b; b = programBase(b, c)) this.viewedStatic.add(b);
+						continue;
+					}
+					if (!cls || names(cls, wanted)) continue;
+					const keys = wt.getProperties().map((p) => p.name);
+					for (let b: ts.ClassLikeDeclaration | undefined = cls; b; b = programBase(b, c)) {
+						const into = viewed.get(b) ?? viewed.set(b, new Set()).get(b)!;
+						for (const k of keys) into.add(k);
+					}
 				}
 			}
 		}

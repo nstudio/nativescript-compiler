@@ -41,7 +41,7 @@ export interface ClassParts {
 	keyInits: string[];
 	symKeyCount: number;
 	dynAccessors: { name: string; get: string | null; set: string | null }[];
-	dynMethods: { name: string; type: string; available?: number; length?: number }[];
+	dynMethods: { name: string; type: string; available?: number; length?: number; trailingFrom?: number }[];
 }
 
 export const classDeclMethods = {
