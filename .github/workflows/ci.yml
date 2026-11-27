@@ -100,38 +100,39 @@ jobs:
       - name: Windows virtual path, Kotlin codegen & Gradle wrapper smoke check
         shell: pwsh
         run: |
-          node --input-type=module -e "
-            import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-            import { tmpdir } from 'node:os';
-            import { join } from 'node:path';
-            import ts from 'typescript';
-            import { createProgram } from './packages/compiler/src/program/program.ts';
-            import { gradleWrapper, KIT_ANDROID } from './packages/compiler/src/driver/paths.ts';
-            import { Translator as KotlinTranslator } from './packages/compiler/src/kotlin/translator.ts';
-            import { addKotlinInterfaces, translateKotlinModules } from './packages/compiler/src/kotlin/app-modules.ts';
-            if (!existsSync(join(KIT_ANDROID, 'gradlew.bat'))) throw new Error('missing gradlew.bat');
-            const cmd = gradleWrapper(['--version'], KIT_ANDROID);
-            if (!/cmd\.exe$/i.test(cmd.command) || !cmd.args.some((a) => a.endsWith('gradlew.bat'))) {
-              throw new Error('unexpected gradleWrapper on win32: ' + JSON.stringify(cmd));
-            }
-            const dir = mkdtempSync(join(tmpdir(), 'ns-win-smoke-'));
-            try {
-              const root = join(dir, 'win.release.ts');
-              const iface = join(dir, 'types.ts');
-              writeFileSync(iface, 'export interface WinConfig { host: string; port: number; }\n');
-              const virtual = new Map([[root, 'import type { WinConfig } from \"./types\";\nexport const cfg: WinConfig = { host: \"localhost\", port: 8080 };\n']]);
-              const prog = createProgram([root, iface], virtual, 'android', join(process.cwd(), 'packages/compiler/tests/node_modules'));
-              const sf = prog.program.getSourceFile(root);
-              const diags = ts.getPreEmitDiagnostics(prog.program, sf);
-              if (!sf || diags.length) throw new Error('Windows virtual .release.ts failed: ' + diags.map((d) => d.messageText).join('; '));
-              const kt = new KotlinTranslator(prog.checker, new Map(), prog.files, { errors: [] });
-              const mods = translateKotlinModules(kt, prog.program, [root, iface]);
-              addKotlinInterfaces(kt, mods);
-              const ifaceMod = mods.find((m) => m.file.replace(/\\\\/g, '/') === iface.replace(/\\\\/g, '/'));
-              if (!ifaceMod || !ifaceMod.code.includes('class WinConfig')) throw new Error('Windows interfacesOf dropped WinConfig: ' + ifaceMod?.code);
-              console.log('Windows smoke passed:', cmd.command, cmd.args.join(' '));
-            } finally {
-              rmSync(dir, { recursive: true, force: true });
-            }
-          "
+          @'
+          import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+          import { tmpdir } from 'node:os';
+          import { join } from 'node:path';
+          import ts from 'typescript';
+          import { createProgram } from './packages/compiler/src/program/program.ts';
+          import { gradleWrapper, KIT_ANDROID } from './packages/compiler/src/driver/paths.ts';
+          import { Translator as KotlinTranslator } from './packages/compiler/src/kotlin/translator.ts';
+          import { addKotlinInterfaces, translateKotlinModules } from './packages/compiler/src/kotlin/app-modules.ts';
+          if (!existsSync(join(KIT_ANDROID, 'gradlew.bat'))) throw new Error('missing gradlew.bat');
+          const cmd = gradleWrapper(['--version'], KIT_ANDROID);
+          if (!/cmd\.exe$/i.test(cmd.command) || !cmd.args.some((a) => a.endsWith('gradlew.bat'))) {
+            throw new Error('unexpected gradleWrapper on win32: ' + JSON.stringify(cmd));
+          }
+          const dir = mkdtempSync(join(tmpdir(), 'ns-win-smoke-'));
+          try {
+            const root = join(dir, 'win.release.ts');
+            const iface = join(dir, 'types.ts');
+            writeFileSync(iface, 'export interface WinConfig { host: string; port: number; }\n');
+            const virtual = new Map([[root, "import type { WinConfig } from './types';\nexport const cfg: WinConfig = { host: 'localhost', port: 8080 };\n"]]);
+            const prog = createProgram([root, iface], virtual, 'android', join(process.cwd(), 'packages/compiler/tests/node_modules'));
+            const sf = prog.program.getSourceFile(root);
+            const diags = ts.getPreEmitDiagnostics(prog.program, sf);
+            if (!sf || diags.length) throw new Error('Windows virtual .release.ts failed: ' + diags.map((d) => d.messageText).join('; '));
+            const kt = new KotlinTranslator(prog.checker, new Map(), prog.files, { errors: [] });
+            const mods = translateKotlinModules(kt, prog.program, [root, iface]);
+            addKotlinInterfaces(kt, mods);
+            const ifaceMod = mods.find((m) => m.file.replace(/\\/g, '/') === iface.replace(/\\/g, '/'));
+            if (!ifaceMod || !ifaceMod.code.includes('class WinConfig')) throw new Error('Windows interfacesOf dropped WinConfig: ' + ifaceMod?.code);
+            console.log('Windows smoke passed:', cmd.command, cmd.args.join(' '));
+          } finally {
+            rmSync(dir, { recursive: true, force: true });
+          }
+          '@ | node --input-type=module
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & .\packages\compiler\kit-android\gradlew.bat --version
