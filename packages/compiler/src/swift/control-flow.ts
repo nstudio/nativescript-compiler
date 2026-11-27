@@ -146,7 +146,7 @@ export const controlFlowMethods = {
 		let code: string;
 		const block = s.catchClause ? this.block(s.tryBlock) : '';
 		// A catch whose try block cannot throw never runs: the block alone.
-		if (s.catchClause && !this.throwsInfo.statements([s.tryBlock])) {
+		if (s.catchClause && !this.throwsInfo.statements([s.tryBlock]) && !/\btry\s/.test(block)) {
 			this.catchless.add(s.tryBlock);
 			code = this.scope(s.tryBlock);
 		} else if (s.catchClause) {

@@ -1,11 +1,6 @@
 {
 	"$comment": "Cases that do not match Node yet, by target (tests/README.md): each with its owner, its cause, and its signature, text the failure's one-line description holds. The diff run reports them without failing; it fails when one fails otherwise, or matches Node so it is removed here.",
 	"swift": {
-		"1046-library-symbol-converts": {
-			"owner": "Swift translator",
-			"cause": "Core's own code reads an untyped value where it declares a number with the lenient cell (`jsLenientNumber`), which gives NaN for a Symbol, unless the function around it already throws by the throws analysis's count; the analysis does not count library conversions (no kit signature changes), so a `try` around such a call is dropped. Swift failed-read decision O3 (VM3).",
-			"signature": "line 3: node \"size threw true Cannot convert a Symbol value to a number\" native \"size: NaN\""
-		},
 		"1836-detached-method-receiver": {
 			"owner": "Swift translator",
 			"cause": "A method value is bound to an object (a class's method value to the object it is read from, a literal's method to the literal it is made in): called alone it still reads that object, not undefined. Needs function values that take their receiver at the call.",

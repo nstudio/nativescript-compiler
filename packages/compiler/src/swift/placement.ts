@@ -229,7 +229,7 @@ export const placementMethods = {
 		if (this.lenient && ts.isIdentifier(e) && !isWriteTarget(e) && !isUntyped(spelledType(target))) {
 			const d = this.resolve(e)?.valueDeclaration;
 			if (d && ts.isVariableDeclaration(d) && !d.type && !d.initializer && isUntyped(spelledType(this.declaredTypeOf(e))) && this.typeOf(e) !== target) {
-				const read = this.fromAny(this.refName(e), target);
+				const read = this.throwingConverts(() => this.fromAny(this.refName(e), target), this.libraryThrowsHere(e), e);
 				return this.nullableRef(target) !== target && !this.looseTolerated(e) ? this.presentCode(read, target) : read;
 			}
 		}

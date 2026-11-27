@@ -85,7 +85,7 @@ every commit where CI's differential steps pass. It is generated from the cases'
 
 | Backend | Runs | Of them on this backend only | Refused, as the case declares | Known failures | Match Node |
 |---|---:|---:|---:|---:|---:|
-| Swift | 980 | 65 | 44 | 5 | 931 |
+| Swift | 980 | 65 | 44 | 4 | 932 |
 | Kotlin | 925 | 10 | 39 | 2 | 884 |
 <!-- /generated -->
 

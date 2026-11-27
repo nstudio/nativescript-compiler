@@ -81,7 +81,7 @@ export interface PlacementBackend {
 	/** The carrier a read's emitted code holds (`readHeld`): what `placement` converts from. */
 	readHeld(e: ts.Expression): Held;
 	/** `code`, a read held untyped where the checker types it, converted into `target` (`placement`'s `untyped` rule). */
-	untypedRead(code: string, target: string): string;
+	untypedRead(code: string, target: string, e: ts.Expression): string;
 	/** The placement past the shared front: the type step, and the cells not decided here yet. */
 	coerce(e: ts.Expression, target: string): string;
 	coerceTyped(e: ts.Expression, target: string): string;
@@ -186,7 +186,7 @@ function placed(b: PlacementBackend, e: ts.Expression, target: string, slot?: Pa
 	if ('refuse' in rule) throw b.error(e, rule.refuse);
 	// `readHeld` derives the carrier of a name or member read only; any other read's code converts itself.
 	const read = ts.skipOuterExpressions(e, ts.OuterExpressionKinds.Parentheses);
-	const code = rule.rule === 'untyped' && (ts.isIdentifier(read) || ts.isPropertyAccessExpression(read)) ? b.untypedRead(b.expr(e), target) : b.coerceTyped(e, target);
+	const code = rule.rule === 'untyped' && (ts.isIdentifier(read) || ts.isPropertyAccessExpression(read)) ? b.untypedRead(b.expr(e), target, e) : b.coerceTyped(e, target);
 	// A slot taking a string, number or boolean's undefined, or any value, takes it as it is, not converted.
 	if (takesUndefined(to)) {
 		const held = b.undefinedConverted(code) ?? (choice !== e && !b.library ? b.undefinedConverted(b.coerceTyped(choice, target)) : null);

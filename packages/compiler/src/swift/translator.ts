@@ -657,7 +657,7 @@ export class Translator implements AsyncTranslator {
 				return t.states;
 			},
 			readHeld: (e) => this.readHeld(e),
-			untypedRead: (code, target) => this.convert(code, 'Any?', target),
+			untypedRead: (code, target, e) => this.throwingConverts(() => this.convert(code, 'Any?', target), this.libraryThrowsHere(e), e),
 			cells: {
 				jsAny: (name) => `${name}.jsAny`,
 				present: (name, key) => this.marks.ownTried(`${name}.present(${swiftString(key)})`),
