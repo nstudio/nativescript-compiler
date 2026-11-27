@@ -105,6 +105,7 @@ export const classDeclMethods = {
 		this.cssTypeMemberCode(k);
 		this.classDecoratorsCode(k);
 		this.staticsByNameCode(k);
+		this.prototypeMethodsCode(k);
 		this.computedMethodsCode(k);
 		this.methodMembersCode(k);
 		this.ownPropertiesCode(k);
@@ -258,6 +259,23 @@ export const classDeclMethods = {
 				return ts.isPropertyDeclaration(m) || ts.isGetAccessorDeclaration(m) ? [`${kotlinString(n)} to { ${ref} }`] : [];
 			});
 			if (entries.length) this.staticInits.push(`    JSPrototypes.declareStatics(${owner}::class.java, listOf(${entries.join(', ')}))`);
+		}
+	},
+
+	prototypeMethodsCode(this: Translator, k: ClassParts): void {
+		const { cls, name } = k;
+		if (this.library || !this.staticInits || !ts.isClassDeclaration(cls) || !this.facts.prototypeClasses().has(cls) || cls.typeParameters?.length) return;
+		const owner = name.replace(/<.*$/, '');
+		const seen = new Set<string>();
+		for (const m of cls.members) {
+			if (!ts.isMethodDeclaration(m) || !m.body || isStatic(m) || ts.isPrivateIdentifier(m.name) || ts.isComputedPropertyName(m.name) || m.typeParameters?.length || m.asteriskToken || m.parameters.some((p) => p.dotDotDotToken || (ts.isIdentifier(p.name) && p.name.text === 'this')) || this.readsArguments(m)) continue;
+			const key = m.name.getText().replace(/^['"]|['"]$/g, '');
+			if (seen.has(key)) continue;
+			seen.add(key);
+			const args = m.parameters.map((p, idx) => this.fromAnyCode(this.marks.pureCode(`__a.getOrNull(${idx})`), this.paramType(p), true));
+			const call = `__o.${this.methodIdent(key)}(${args.join(', ')})`;
+			const body = this.returnTypeOf(m) === 'Unit' ? `${call}; null` : call;
+			this.staticInits.push(`    JSPrototypes.of(${owner}::class.java).defineProperty(${kotlinString(key)}, JSPropertyDescriptor(value = JSMethod(${m.parameters.length}) { __this, __a -> val __o = ${RT.jsBox}(__this) as? ${owner} ?: throw JSException(JSTypeError("Illegal invocation")); ${body} }, hasValue = true, enumerable = false, writable = true, configurable = true))`);
 		}
 	},
 

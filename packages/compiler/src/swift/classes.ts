@@ -328,6 +328,27 @@ export const classesMethods = {
 			.join('\n');
 	},
 
+	/** A class's instance methods registered non-enumerably on `JSPrototypes.of(Cls.self)` when its prototype is observed. */
+	prototypeMethods(this: Translator, cls: ts.ClassDeclaration): string {
+		if (this.library || this.native.classDecl(cls) || cls.typeParameters?.some((p) => !this.erasesTypeParameter(p))) return '';
+		const i = this.indent;
+		const name = this.className(cls);
+		const seen = new Set<string>();
+		const entries: string[] = [];
+		for (const m of cls.members) {
+			if (!ts.isMethodDeclaration(m) || !m.body || isStatic(m) || ts.isPrivateIdentifier(m.name) || ts.isComputedPropertyName(m.name) || m.typeParameters?.length || m.asteriskToken || isAsync(m) || m.parameters.some((p) => p.dotDotDotToken) || this.readsArguments(m)) continue;
+			const key = m.name.getText().replace(/^['"]|['"]$/g, '');
+			if (seen.has(key)) continue;
+			seen.add(key);
+			const sig = this.emittedSignature(m);
+			const args = sig.params.map((p, k) => this.throwingConverts(() => this.presentFromAny(`${RT.jsArg}(__a, ${k})`, p.type, true, true)));
+			const call = this.marks.tryIf(this.throwsInfo.fn(m), `__o.${ident(key)}(${args.join(', ')})`);
+			const body = sig.ret === 'Void' ? `${call}; return nil` : `return ${this.convert(call, sig.ret, 'Any?')}`;
+			entries.push(`${i}try? JSPrototypes.of(${name}.self).defineProperty(${swiftString(key)}, JSPropertyDescriptor(value: { (__this: Any?, __a: [Any?]) throws -> Any? in guard let __o = __this as? ${name} else { throw JSException(JSTypeError("Illegal invocation")) }; ${body} } as JSMethod, enumerable: false, writable: true, configurable: true))`);
+		}
+		return entries.join('\n');
+	},
+
 	/** What defining a class does after its static initializers (library mode): its statics when held as a value, then its decorators, the last first. */
 	classDefinition(this: Translator, cls: ts.ClassDeclaration): string {
 		const i = this.indent;

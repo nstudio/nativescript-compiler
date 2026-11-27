@@ -423,7 +423,12 @@ export const callsMethods = {
 			return `${maybe ? `${RT.jsCallee}(${maybe})` : this.expr(callee)}(${this.args(e).join(', ')})`;
 		}
 		// `handler!(…)`: the function, where undefined is not a function.
-		if (ts.isNonNullExpression(callee)) return /[?!]$/.test(this.typeOf(callee.expression)) ? `${RT.jsCallee}(${this.expr(callee.expression)})(${this.args(e).join(', ')})` : this.call(ts.factory.updateCallExpression(e, callee.expression, e.typeArguments, e.arguments));
+		if (ts.isNonNullExpression(callee)) {
+			if (!/[?!]$/.test(this.typeOf(callee.expression))) return this.call(ts.factory.updateCallExpression(e, callee.expression, e.typeArguments, e.arguments));
+			const label = ts.isPropertyAccessExpression(callee.expression) || ts.isIdentifier(callee.expression) ? callee.expression.getText() : null;
+			const fnType = this.typeOf(callee.expression).replace(/^\((.*)\)[?!]$/, '$1').replace(/[?!]$/, '');
+			return label ? `({ () throws -> ${fnType} in guard let __fn = ${this.tryPrefix(callee.expression)}${this.expr(callee.expression)} else { throw JSException(JSTypeError(${swiftString(`${label} is not a function`)})) }; return __fn }())(${this.args(e).join(', ')})` : `${RT.jsCallee}(${this.expr(callee.expression)})(${this.args(e).join(', ')})`;
+		}
 		throw this.error(e, 'call');
 	},
 

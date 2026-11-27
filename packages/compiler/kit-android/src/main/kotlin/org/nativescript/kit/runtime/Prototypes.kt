@@ -105,6 +105,14 @@ object JSPrototypes {
         return objectPrototype
     }
 
+    /** `Object.getPrototypeOf` of a class constructor: its superclass, else `Function.prototype`. */
+    fun prototypeOfClass(cls: Class<*>): Any? {
+        if (customPrototypes.containsKey(cls)) return customPrototypes[cls]
+        val superclass = cls.superclass
+        if (superclass != null && superclass != Any::class.java) return superclass
+        return builtin("Function")
+    }
+
     /** The nearest prototype in a class's chain that has the key. */
     fun holder(cls: Class<*>, key: String): JSObject? {
         if (table.isEmpty() && declared.isEmpty()) return null
@@ -176,7 +184,7 @@ fun jsGetPrototypeOf(value: Any?): Any? = when (val v = jsBox(value)) {
     null, JSNull -> throw JSException(JSTypeError("Cannot convert undefined or null to object"))
     is JSObject -> JSPrototypes.prototypeOf(v)
     is JSRecord<*> -> JSPrototypes.prototypeOf(v.obj)
-    is Class<*> -> JSPrototypes.builtin("Function")
+    is Class<*> -> JSPrototypes.prototypeOfClass(v)
     is JSArray<*>, is Pair<*, *>, is Triple<*, *, *> -> JSPrototypes.builtin("Array")
     is String -> JSPrototypes.builtin("String")
     is Boolean -> JSPrototypes.builtin("Boolean")

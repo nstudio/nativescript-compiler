@@ -448,12 +448,51 @@ private enum JSJSONClassKind {
     case dynamic, error
 }
 
-/// SerializeJSONProperty over one output buffer of UTF-8.
+/// SerializeJSONProperty over one output buffer of UTF-8, using an explicit heap stack so deep nesting never overflows the call stack.
 private struct JSJSONWriter {
+    private enum ArraySource {
+        case numbers(JSArray<Double>)
+        case strings(JSArray<String>)
+        case values(JSArray<Any?>)
+        case boxed([Any?])
+
+        func element(at i: Int) -> Any? {
+            switch self {
+            case .numbers(let array):
+                let d = array.storage[i]
+                return d.isNaN ? JSArray<Double>.untyped(d) : d
+            case .strings(let array):
+                return jsIsHoleString(array.storage[i]) ? nil : array.storage[i]
+            case .values(let array):
+                return array.storage[i]
+            case .boxed(let list):
+                return list[i]
+            }
+        }
+    }
+
+    private enum ObjectSource {
+        case plain(JSObject)
+        case dynamic(JSDynamic)
+
+        func value(for key: String) -> Any? {
+            switch self {
+            case .plain(let o): return o[key]
+            case .dynamic(let d): return d[jsKey: key]
+            }
+        }
+    }
+
+    private enum Frame {
+        case array(object: AnyObject?, source: ArraySource, count: Int, index: Int)
+        case object(object: AnyObject, source: ObjectSource, keys: [String], sourceKeys: [String]?, index: Int, empty: Bool)
+    }
+
     private let gap: [UInt8]
     private let output = JSUTF8Buffer()
     private var depth = 0
     private var stack: [AnyObject] = []
+    private var frames: [Frame] = []
     private var kinds: [ObjectIdentifier: JSJSONClassKind] = [:]
     var replacer: Any?
     var allowed: [String]?
@@ -462,38 +501,93 @@ private struct JSJSONWriter {
 
     var text: String { output.string }
 
-    /// `value`, the property `key` of `holder`, after its `toJSON` and the replacer; false, writing nothing, when
-    /// it serializes to undefined.
+    /// `value`, the root property `""` of `holder`, serialized iteratively.
     mutating func property(_ holder: AnyObject?, _ key: @autoclosure () -> String, _ value: Any?) throws -> Bool {
+        guard let resolved = try resolve(holder, key(), value) else { return false }
+        guard try emitOrPush(resolved) else { return false }
+        try drain()
+        return true
+    }
+
+    /// Runs `toJSON` and `replacer`, returning `nil` if the property is omitted (undefined or function).
+    private mutating func resolve(_ holder: AnyObject?, _ key: @autoclosure () -> String, _ value: Any?) throws -> Any? {
         var v = jsFlat(value)
         if let value = v, jsIsClassInstance(value) {
             let object = jsObjectReference(value)
-            let kind = kind(of: object)
-            switch kind {
+            switch kind(of: object) {
             case .plainObject:
                 let plain = unsafeDowncast(object, to: JSObject.self)
-                if let f = jsFlat(plain["toJSON"]), jsIsFunction(f) {
-                    v = try jsInvoke(f, plain, [key()])
-                } else if replacer == nil {
-                    try members(plain, plain.keys) { plain[$0] }
-                    return true
-                }
+                if let f = jsFlat(plain["toJSON"]), jsIsFunction(f) { v = try jsInvoke(f, plain, [key()]) }
             case .dynamic:
                 let dynamic = object as! JSDynamic
-                if let f = jsFlat(dynamic[jsKey: "toJSON"]), jsIsFunction(f) {
-                    v = try jsInvoke(f, dynamic, [key()])
-                } else if replacer == nil {
-                    try members(dynamic, dynamic.jsKeys) { dynamic[jsKey: $0] }
-                    return true
-                }
+                if let f = jsFlat(dynamic[jsKey: "toJSON"]), jsIsFunction(f) { v = try jsInvoke(f, dynamic, [key()]) }
             case .toJSON: v = try (object as! JSToJSONConvertible).jsToJSON(key())
             case .date: v = unsafeDowncast(object, to: JSDate.self).toJSON() ?? jsNull
-            default: if replacer == nil { return try write(object: object, kind) }
+            default: break
             }
         }
         if let replacer { v = try jsFlat(jsInvoke(replacer, holder, [key(), v])) }
-        guard let v else { return false }
-        return try write(v)
+        guard let v else { return nil }
+        if jsIsClassInstance(v) {
+            if kind(of: jsObjectReference(v)) == .function { return nil }
+            return v
+        }
+        if jsIsFunction(v) { return nil }
+        return v
+    }
+
+    private mutating func drain() throws {
+        while !frames.isEmpty {
+            let top = frames.count - 1
+            switch frames[top] {
+            case .array(let object, let source, let count, let index):
+                if index < count {
+                    frames[top] = .array(object: object, source: source, count: count, index: index + 1)
+                    if index > 0 { output.append(0x2C) }
+                    newline()
+                    if let resolved = try resolve(object, String(index), source.element(at: index)) {
+                        if try !emitOrPush(resolved) { output.append("null") }
+                    } else {
+                        output.append("null")
+                    }
+                } else {
+                    frames.removeLast()
+                    leave(object)
+                    depth -= 1
+                    newline()
+                    output.append(0x5D)
+                }
+            case .object(let object, let source, let keys, let sourceKeys, var index, let empty):
+                var pushed = false
+                var nowEmpty = empty
+                while index < keys.count {
+                    let key = keys[index]
+                    index += 1
+                    if let sourceKeys, !sourceKeys.contains(key) { continue }
+                    guard let resolved = try resolve(object, key, source.value(for: key)) else { continue }
+                    if !nowEmpty { output.append(0x2C) }
+                    newline()
+                    output.appendJSONString(key)
+                    output.append(0x3A)
+                    if !gap.isEmpty { output.append(0x20) }
+                    nowEmpty = false
+                    frames[top] = .object(object: object, source: source, keys: keys, sourceKeys: sourceKeys, index: index, empty: false)
+                    let before = frames.count
+                    _ = try emitOrPush(resolved)
+                    if frames.count > before {
+                        pushed = true
+                        break
+                    }
+                }
+                if !pushed {
+                    frames.removeLast()
+                    leave(object)
+                    depth -= 1
+                    if !nowEmpty { newline() }
+                    output.append(0x7D)
+                }
+            }
+        }
     }
 
     private mutating func kind(of object: AnyObject) -> JSJSONClassKind {
@@ -519,11 +613,11 @@ private struct JSJSONWriter {
         return kind
     }
 
-    /// A value after `toJSON` and the replacer; false, writing nothing, when it serializes to undefined.
-    private mutating func write(_ value: Any) throws -> Bool {
+    /// Writes a scalar immediately or pushes a container frame onto `frames`.
+    private mutating func emitOrPush(_ value: Any) throws -> Bool {
         if jsIsClassInstance(value) {
             let object = jsObjectReference(value)
-            return try write(object: object, kind(of: object))
+            return try emitOrPush(object: object, kind(of: object))
         }
         let output = self.output
         /// The value opened: its type tested against String's and Double's is a comparison of metadata,
@@ -542,47 +636,45 @@ private struct JSJSONWriter {
         } else if jsIsFunction(value) {
             return false
         } else if jsIsTuple(value) {
-            try array(nil, Mirror(reflecting: value).children.map { jsFlat($0.value) })
+            let list = Mirror(reflecting: value).children.map { jsFlat($0.value) }
+            try pushArray(nil, .boxed(list), list.count)
         } else {
             return try writeBridged(value)
         }
         return true
     }
 
-    private mutating func write(object: AnyObject, _ kind: JSJSONClassKind) throws -> Bool {
+    private mutating func emitOrPush(object: AnyObject, _ kind: JSJSONClassKind) throws -> Bool {
         switch kind {
         case .null:
             output.append("null")
         case .plainObject:
             let plain = unsafeDowncast(object, to: JSObject.self)
-            try members(plain, plain.keys) { plain[$0] }
+            try pushObject(plain, .plain(plain), plain.keys)
         case .dynamic, .error:
             let dynamic = object as! JSDynamic
-            try members(dynamic, dynamic.jsKeys) { dynamic[jsKey: $0] }
+            try pushObject(dynamic, .dynamic(dynamic), dynamic.jsKeys)
         case .numbers:
             let array = unsafeDowncast(object, to: JSArray<Double>.self)
             array.track()
-            try elements(array, array.storage.count) {
-                let d = array.storage[$0]
-                return d.isNaN ? JSArray<Double>.untyped(d) : d
-            }
+            try pushArray(array, .numbers(array), array.storage.count)
         case .strings:
             let array = unsafeDowncast(object, to: JSArray<String>.self)
             array.track()
-            try elements(array, array.storage.count) { jsIsHoleString(array.storage[$0]) ? nil : array.storage[$0] }
+            try pushArray(array, .strings(array), array.storage.count)
         case .values where unsafeDowncast(object, to: JSArray<Any?>.self).jsTracker == nil && unsafeDowncast(object, to: JSArray<Any?>.self).shared == nil:
             let array = unsafeDowncast(object, to: JSArray<Any?>.self)
-            try elements(array, array.storage.count) { array.storage[$0] }
+            try pushArray(array, .values(array), array.storage.count)
         case .match:
             let values = unsafeDowncast(object, to: JSMatch.self).values
-            try elements(values, values.storage.count) { values.storage[$0] }
+            try pushArray(values, .boxed(values.storage.map { $0 }), values.storage.count)
         case .matchIndices:
             let values = unsafeDowncast(object, to: JSMatchIndices.self).values
-            try elements(values, values.storage.count) { values.storage[$0] }
+            try pushArray(values, .boxed(values.storage.map { $0 }), values.storage.count)
         case .values, .array:
             let array = object as! JSArrayProtocol
             let values = array.jsAnyElements
-            try elements(array, values.count) { values[$0] }
+            try pushArray(array, .boxed(values), values.count)
         case .date:
             guard let iso = unsafeDowncast(object, to: JSDate.self).toJSON() else { output.append("null"); break }
             output.appendJSONString(iso)
@@ -603,17 +695,37 @@ private struct JSJSONWriter {
         case let n where jsNumeric(n) != nil: output.appendJSONNumber(jsNumeric(n)!)
         case let array as JSArrayProtocol:
             let values = array.jsAnyElements
-            try elements(array, values.count) { values[$0] }
+            try pushArray(array, .boxed(values), values.count)
         case let dynamic as JSDynamic:
-            try members(dynamic, dynamic.jsKeys) { dynamic[jsKey: $0] }
+            try pushObject(dynamic, .dynamic(dynamic), dynamic.jsKeys)
         default: output.append("{}")
         }
         return true
     }
 
+    private mutating func pushArray(_ object: AnyObject?, _ source: ArraySource, _ count: Int) throws {
+        try enter(object)
+        guard count > 0 else {
+            leave(object)
+            output.append("[]")
+            return
+        }
+        output.append(0x5B)
+        depth += 1
+        frames.append(.array(object: object, source: source, count: count, index: 0))
+    }
+
+    private mutating func pushObject(_ object: AnyObject, _ source: ObjectSource, _ ownKeys: [String]) throws {
+        try enter(object)
+        output.append(0x7B)
+        depth += 1
+        let iterKeys = allowed ?? ownKeys
+        let filterKeys: [String]? = allowed != nil ? ownKeys : nil
+        frames.append(.object(object: object, source: source, keys: iterKeys, sourceKeys: filterKeys, index: 0, empty: true))
+    }
+
     private mutating func enter(_ object: AnyObject?) throws {
         guard let object else { return }
-        try jsCheckStack()
         if let start = stack.firstIndex(where: { $0 === object }) { throw JSException(JSTypeError(circularMessage(start))) }
         stack.append(object)
     }
@@ -649,49 +761,6 @@ private struct JSJSONWriter {
         k = max(k, stack.count - 1)
         while k < stack.count { text += line(k); k += 1 }
         return text + "\n    --- \(link(stack.count - 1, to: stack[start])) closes the circle"
-    }
-
-    private mutating func array(_ object: AnyObject?, _ values: [Any?]) throws {
-        try elements(object, values.count) { values[$0] }
-    }
-
-    /// SerializeJSONArray: an element that serializes to undefined is `null`.
-    private mutating func elements(_ object: AnyObject?, _ count: Int, _ element: (Int) -> Any?) throws {
-        try enter(object)
-        defer { leave(object) }
-        guard count > 0 else { return output.append("[]") }
-        output.append(0x5B)
-        depth += 1
-        for i in 0..<count {
-            if i > 0 { output.append(0x2C) }
-            newline()
-            if try !property(object, String(i), element(i)) { output.append("null") }
-        }
-        depth -= 1
-        newline()
-        output.append(0x5D)
-    }
-
-    /// SerializeJSONObject: each key's value read as it is serialized; one that serializes to undefined is left out.
-    private mutating func members(_ object: AnyObject, _ keys: [String], _ member: (String) -> Any?) throws {
-        try enter(object)
-        defer { leave(object) }
-        output.append(0x7B)
-        depth += 1
-        var empty = true
-        for key in allowed ?? keys {
-            if allowed != nil, !keys.contains(key) { continue }
-            let start = output.count
-            if !empty { output.append(0x2C) }
-            newline()
-            output.appendJSONString(key)
-            output.append(0x3A)
-            if !gap.isEmpty { output.append(0x20) }
-            if try property(object, key, member(key)) { empty = false } else { output.truncate(to: start) }
-        }
-        depth -= 1
-        if !empty { newline() }
-        output.append(0x7D)
     }
 
     @inline(__always) private func newline() {

@@ -164,11 +164,19 @@ export const assignmentMethods = {
 		const fnObject = ts.isPropertyAccessExpression(left) ? this.functionObjectOf(left) : null;
 		if (fnObject && e.operatorToken.kind === ts.SyntaxKind.EqualsToken) return `${fnObject}[jsKey: ${swiftString((left as ts.PropertyAccessExpression).name.text)}] = ${this.stored(right, left, 'Any?', checks)}`;
 		if (fnObject) throw this.error(e, `${ts.tokenToString(e.operatorToken.kind)} on a function's property`);
-		if (e.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isIdentifier(left)) {
+		if (ts.isIdentifier(left)) {
 			const decl = this.resolve(left)?.valueDeclaration;
 			if (decl && ts.isVariableDeclaration(decl) && this.facts.tdzBindings().has(decl) && !(decl.parent.flags & ts.NodeFlags.Const)) {
 				const raw = this.refName(left).replace(/`/g, '');
-				return `__tdz_set_${raw}(${this.stored(right, left, this.declaredTypeOf(left) ?? this.typeOf(left), checks)})`;
+				const lt = this.declaredTypeOf(left) ?? this.typeOf(left);
+				if (e.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+					return `__tdz_set_${raw}(${this.stored(right, left, lt, checks)})`;
+				}
+				const op = ({ [ts.SyntaxKind.PlusEqualsToken]: '+', [ts.SyntaxKind.MinusEqualsToken]: '-', [ts.SyntaxKind.AsteriskEqualsToken]: '*', [ts.SyntaxKind.SlashEqualsToken]: '/' } as Partial<Record<ts.SyntaxKind, string>>)[e.operatorToken.kind];
+				if (op) {
+					const rhs = op === '+' && lt === 'String' ? this.str(right) : this.coerce(right, lt);
+					return this.marks.ownTried(`{ () throws -> ${lt} in let __v = try __tdz_get_${raw}() ${op} ${this.tryPrefix(right)}${rhs}; try __tdz_set_${raw}(__v); return __v }()`);
+				}
 			}
 		}
 		const nullish = e.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isIdentifier(left) ? this.states.nullishRead(left) : null;

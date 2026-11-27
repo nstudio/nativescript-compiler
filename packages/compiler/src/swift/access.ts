@@ -385,11 +385,13 @@ export const accessMethods = {
 	receiver(this: Translator, target: ts.Expression, key: string): string | null {
 		const x = ts.skipOuterExpressions(target, ts.OuterExpressionKinds.Parentheses);
 		if (nullishField(this, x) && !this.subst.has(x) && !receiverSlot(target, key).chained) return this.marks.ownTried(`${this.nullishCode(x)}.present(${this.states.nullishMemberKey(x).set ? 'setting: ' : ''}${swiftString(key)})`);
-		return this.receiverCode(receiverCell(this.receivers, receiverSlot(target, key)), key);
+		const p = target.parent;
+		const set = ts.isPropertyAccessExpression(p) && ts.isBinaryExpression(p.parent) && p.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken && p.parent.left === p;
+		return this.receiverCode(receiverCell(this.receivers, receiverSlot(target, key)), key, set);
 	},
 
 	/** A receiver cell as Swift writes it: null where the access reads it as it is. */
-	receiverCode(this: Translator, c: ReceiverCell, key: string): string | null {
+	receiverCode(this: Translator, c: ReceiverCell, key: string, set = false): string | null {
 		if (c.cell === 'chained') {
 			// Swift's `?.` carries the chain on through the receiver's own check.
 			const code = this.maybeUndefined(c.receiver) ?? this.expr(c.receiver);
@@ -398,7 +400,7 @@ export const accessMethods = {
 			if (!openSwiftChain(open)) throw this.error(c.receiver, `an optional chain's link read past it as \`${open}\``);
 			return `${open}.${RT.jsUnwrap}(${swiftString(key)}${c.isNull ? ', null: true' : ''})`;
 		}
-		return c.cell === 'asIs' ? null : `${RT.jsUnwrap}(${c.code}, ${swiftString(key)}${c.isNull ? ', null: true' : ''})`;
+		return c.cell === 'asIs' ? null : set && !c.isNull ? `${RT.jsUnwrap}(${c.code}, setting: ${swiftString(key)})` : `${RT.jsUnwrap}(${c.code}, ${swiftString(key)}${c.isNull ? ', null: true' : ''})`;
 	},
 
 	elementAccess(this: Translator, e: ts.ElementAccessExpression): string {

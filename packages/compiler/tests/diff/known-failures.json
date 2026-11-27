@@ -6,11 +6,6 @@
 			"cause": "Core's own code reads an untyped value where it declares a number with the lenient cell (`jsLenientNumber`), which gives NaN for a Symbol, unless the function around it already throws by the throws analysis's count; the analysis does not count library conversions (no kit signature changes), so a `try` around such a call is dropped. Swift failed-read decision O3 (VM3).",
 			"signature": "line 3: node \"size threw true Cannot convert a Symbol value to a number\" native \"size: NaN\""
 		},
-		"1528-class-prototype-object": {
-			"owner": "Swift translator",
-			"cause": "A class's `prototype` read does not compile.",
-			"signature": "type 'Derived' has no member 'prototype'"
-		},
 		"1836-detached-method-receiver": {
 			"owner": "Swift translator",
 			"cause": "A method value is bound to an object (a class's method value to the object it is read from, a literal's method to the literal it is made in): called alone it still reads that object, not undefined. Needs function values that take their receiver at the call.",
@@ -21,14 +16,9 @@
 			"cause": "A typed object's declared field is a stored property: `delete` through an untyped value returns true and keeps the field and its key, and Object.defineProperty cannot make it read-only, hidden or non-configurable (TypeError \"Cannot restrict a typed object's field\").",
 			"signature": "line 1: node \"true false undefined a\" native \"true true 2 a,b\""
 		},
-		"247-missing-values-throw": {
-			"owner": "Swift translator",
-			"cause": "A module const read before its declaration runs, and a member of undefined or null read, set or called, trap instead of throwing ReferenceError or TypeError.",
-			"signature": "line 1: node \"early ReferenceError Cannot access 'settings' before initialization\" native \"\""
-		},
 		"862-json-unrepresentable": {
 			"owner": "Swift runtime",
-			"cause": "Limit: a lone surrogate JSON.parse reads becomes U+FFFD (a Swift string holds whole characters), and JSON.stringify recurses per nesting level, so 5000 nested arrays overflow the stack where V8 writes them iteratively.",
+			"cause": "Limit: a lone surrogate JSON.parse reads becomes U+FFFD (a Swift string holds whole characters). Deep nesting (5000 nested arrays) is serialized iteratively.",
 			"signature": "line 1: node \"1 55357 \\\"\\\\ud83d\\\" [\\\"\\\\ude00x\\\"]\" native \"1 65533 \\\"�\\\" [\\\"�x\\\"]\""
 		},
 		"945-regexp-lone-surrogates": {
@@ -38,11 +28,6 @@
 		}
 	},
 	"kotlin": {
-		"1528-class-prototype-object": {
-			"owner": "Kotlin runtime",
-			"cause": "Object.getPrototypeOf of a derived class is not its base, and a method read from a class's prototype is undefined.",
-			"signature": "line 1: node \"prototype chain derived:base true true true Derived\" native \"prototype chain derived:base false true true Derived\""
-		},
 		"1836-detached-method-receiver": {
 			"owner": "Kotlin translator",
 			"cause": "A method value is bound to an object (a class's method value to the object it is read from, a literal's method to the literal it is made in): called alone it still reads that object, not undefined. Needs function values that take their receiver at the call.",

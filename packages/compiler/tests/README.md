@@ -85,8 +85,8 @@ every commit where CI's differential steps pass. It is generated from the cases'
 
 | Backend | Runs | Of them on this backend only | Refused, as the case declares | Known failures | Match Node |
 |---|---:|---:|---:|---:|---:|
-| Swift | 979 | 65 | 44 | 7 | 928 |
-| Kotlin | 925 | 11 | 39 | 3 | 883 |
+| Swift | 980 | 65 | 44 | 5 | 931 |
+| Kotlin | 925 | 10 | 39 | 2 | 884 |
 <!-- /generated -->
 
 `diff/known-failures.json` lists, per backend, the cases that do not match Node yet. Each entry has its `owner` (Swift

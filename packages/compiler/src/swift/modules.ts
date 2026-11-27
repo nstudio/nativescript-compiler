@@ -144,6 +144,7 @@ export const modulesMethods = {
 							this.staticInits = null;
 						}
 						if ((library || this.appMembersByName) && st.members.some((m) => ts.isAccessor(m) && !isStatic(m))) later(() => this.prototypeAccessors(st));
+						if (!library && this.facts.prototypeClasses().has(st)) later(() => this.prototypeMethods(st));
 						for (const line of inits) later(() => line);
 						// Library mode: its statics and decorators run once it is defined.
 						if ((library || this.appMembersByName) && (ts.getDecorators(st)?.length || this.heldAsValue(st))) later(() => this.classDefinition(st));

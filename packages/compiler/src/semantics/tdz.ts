@@ -1,16 +1,99 @@
-// Module-level `let`/`const` bindings belonging to an import cycle, which may be read or written before their
-// initializer runs (JavaScript's TDZ ReferenceError). Only cyclic app modules carry TDZ guards so acyclic modules
-// and library kits emit zero extra overhead.
+// Module-level `let`/`const` bindings that may be read or written before their initializer runs (JavaScript's TDZ
+// ReferenceError): either belonging to an import cycle or read by a function / earlier statement in the same module
+// when executable code runs before the declaration. Other module bindings and library kits emit zero extra overhead.
 import ts from 'typescript';
-import { hasModifier } from './ast.ts';
+import { hasModifier, resolveSymbol } from './ast.ts';
+
+/** Whether a top-level statement before a declaration can run user code (and thus invoke a hoisted function or closure). */
+function canRunCode(st: ts.Statement): boolean {
+	if (ts.isImportDeclaration(st) || ts.isExportDeclaration(st) || ts.isFunctionDeclaration(st) || ts.isInterfaceDeclaration(st) || ts.isTypeAliasDeclaration(st) || ts.isEmptyStatement(st)) return false;
+	if (hasModifier(st, ts.SyntaxKind.DeclareKeyword)) return false;
+	if (ts.isVariableStatement(st)) return st.declarationList.declarations.some((d) => !!d.initializer && exprCanRunCode(d.initializer));
+	if (ts.isClassDeclaration(st)) return st.members.some((m) => ts.isClassStaticBlockDeclaration(m) || (ts.isPropertyDeclaration(m) && !!(ts.getCombinedModifierFlags(m) & ts.ModifierFlags.Static) && !!m.initializer && exprCanRunCode(m.initializer)));
+	return true;
+}
+
+/** Whether an expression may invoke a function, getter, constructor, or other non-literal code at evaluation time. */
+function exprCanRunCode(e: ts.Expression): boolean {
+	if (ts.isLiteralExpression(e) || e.kind === ts.SyntaxKind.TrueKeyword || e.kind === ts.SyntaxKind.FalseKeyword || e.kind === ts.SyntaxKind.NullKeyword || ts.isArrowFunction(e) || ts.isFunctionExpression(e) || ts.isIdentifier(e)) return false;
+	if (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isTypeAssertionExpression(e) || ts.isSatisfiesExpression(e) || ts.isNonNullExpression(e)) return exprCanRunCode(e.expression);
+	if (ts.isPrefixUnaryExpression(e)) return exprCanRunCode(e.operand);
+	if (ts.isBinaryExpression(e)) return exprCanRunCode(e.left) || exprCanRunCode(e.right);
+	if (ts.isArrayLiteralExpression(e)) return e.elements.some((x) => !ts.isOmittedExpression(x) && exprCanRunCode(ts.isSpreadElement(x) ? x.expression : x));
+	if (ts.isObjectLiteralExpression(e)) return e.properties.some((p) => (ts.isPropertyAssignment(p) && exprCanRunCode(p.initializer)) || (ts.isSpreadAssignment(p) && exprCanRunCode(p.expression)));
+	return true;
+}
+
+/** Collects same-module `let`/`const` declarations that may be observed before their initializer executes. */
+function addSameModuleTdz(checker: ts.TypeChecker, sf: ts.SourceFile, out: Set<ts.VariableDeclaration>): void {
+	const decls = new Map<ts.Symbol, { decl: ts.VariableDeclaration; stmtIndex: number; declIndex: number }>();
+	for (let i = 0; i < sf.statements.length; i++) {
+		const st = sf.statements[i];
+		if (!ts.isVariableStatement(st) || hasModifier(st, ts.SyntaxKind.DeclareKeyword)) continue;
+		if (!(st.declarationList.flags & ts.NodeFlags.BlockScoped)) continue;
+		for (let j = 0; j < st.declarationList.declarations.length; j++) {
+			const d = st.declarationList.declarations[j];
+			if (!ts.isIdentifier(d.name) || !d.initializer || out.has(d)) continue;
+			const sym = checker.getSymbolAtLocation(d.name);
+			if (sym) decls.set(sym, { decl: d, stmtIndex: i, declIndex: j });
+		}
+	}
+	if (!decls.size) return;
+
+	// Track which statement indices have executable code before them.
+	const runnableBefore = new Array<boolean>(sf.statements.length).fill(false);
+	let ran = false;
+	for (let i = 0; i < sf.statements.length; i++) {
+		runnableBefore[i] = ran;
+		if (canRunCode(sf.statements[i])) ran = true;
+	}
+
+	const isRef = (n: ts.Identifier): boolean => {
+		const p = n.parent;
+		if (ts.isImportSpecifier(p) || ts.isExportSpecifier(p) || ts.isImportClause(p) || ts.isTypeReferenceNode(p)) return false;
+		if (ts.isVariableDeclaration(p) && p.name === n) return false;
+		if (ts.isPropertyAccessExpression(p) && p.name === n) return false;
+		if ((ts.isPropertyAssignment(p) || ts.isMethodDeclaration(p) || ts.isPropertyDeclaration(p)) && p.name === n) return false;
+		return true;
+	};
+
+	const walk = (node: ts.Node, stmtIndex: number, inHoistedFn: boolean, inDeferredScope: boolean) => {
+		if (ts.isIdentifier(node) && isRef(node)) {
+			const sym = resolveSymbol(node, checker);
+			const entry = sym ? decls.get(sym) : undefined;
+			if (entry) {
+				const priorExecutable =
+					runnableBefore[entry.stmtIndex] ||
+					(stmtIndex === entry.stmtIndex &&
+						ts.isVariableStatement(sf.statements[stmtIndex]) &&
+						sf.statements[stmtIndex].declarationList.declarations.slice(0, entry.declIndex).some((prev) => !!prev.initializer && exprCanRunCode(prev.initializer)));
+				const beforeDecl = stmtIndex < entry.stmtIndex;
+				const inOwnInit = !inDeferredScope && stmtIndex === entry.stmtIndex && node.pos >= entry.decl.initializer!.pos && node.end <= entry.decl.initializer!.end;
+				if ((beforeDecl && (!inDeferredScope || priorExecutable)) || (inHoistedFn && priorExecutable) || inOwnInit) {
+					out.add(entry.decl);
+				}
+			}
+		}
+		const entersDeferred = ts.isFunctionLike(node) || ts.isClassStaticBlockDeclaration(node);
+		ts.forEachChild(node, (child) => walk(child, stmtIndex, inHoistedFn, inDeferredScope || entersDeferred));
+	};
+
+	for (let i = 0; i < sf.statements.length; i++) {
+		const st = sf.statements[i];
+		walk(st, i, ts.isFunctionDeclaration(st), false);
+	}
+}
 
 /**
- * The module-level `let` and `const` declarations (with initializers) in `files` that belong to an import cycle
- * (SCC of size > 1 or self-import in the value-import graph).
+ * The module-level `let` and `const` declarations (with initializers) in `files` that may be read or written before
+ * their initializer runs: either in an import cycle (SCC of size > 1 or self-import) or reachable before initialization
+ * within the same module.
  */
 export function cyclicModuleBindings(checker: ts.TypeChecker, files: readonly ts.SourceFile[]): Set<ts.VariableDeclaration> {
 	const sources = files.filter((f) => !f.isDeclarationFile);
-	if (sources.length < 2) return new Set();
+	const out = new Set<ts.VariableDeclaration>();
+	for (const sf of sources) addSameModuleTdz(checker, sf, out);
+	if (sources.length < 2) return out;
 	const fileSet = new Set(sources);
 	const edges = new Map<ts.SourceFile, Set<ts.SourceFile>>();
 	const resolveTargets = (sf: ts.SourceFile, seen: Set<ts.SourceFile>): Set<ts.SourceFile> => {
@@ -76,7 +159,6 @@ export function cyclicModuleBindings(checker: ts.TypeChecker, files: readonly ts
 	};
 	for (const sf of sources) if (!index.has(sf)) strongConnect(sf);
 
-	const out = new Set<ts.VariableDeclaration>();
 	for (const sf of cyclic) {
 		for (const st of sf.statements) {
 			if (!ts.isVariableStatement(st) || hasModifier(st, ts.SyntaxKind.DeclareKeyword)) continue;

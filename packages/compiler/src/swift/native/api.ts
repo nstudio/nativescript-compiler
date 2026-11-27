@@ -31,7 +31,8 @@ export class NativeAPI {
 		const known = moduleOfDeclaration(decl.getSourceFile().fileName);
 		if (known) return /[\\/]objc![^\\/]*\.d\.ts$/.test(decl.getSourceFile().fileName) || tableDeclares(known, decl) ? known : null;
 		// An app's own declaration of an SDK type newer than the published typings (`declare class UIArrangementViewController`
-		// in a .d.ts of its own): the SDK module whose table has a type of that name.
+		// in a .d.ts of its own): the SDK module whose table has a type of that name (only when the Apple SDK is present).
+		if (process.platform !== 'darwin') return null;
 		const file = decl.getSourceFile();
 		if (!file.isDeclarationFile || /[\\/]node_modules[\\/]/.test(file.fileName)) return null;
 		const named = (ts.isClassDeclaration(decl) || ts.isInterfaceDeclaration(decl) || ts.isEnumDeclaration(decl)) && decl.name ? decl.name.text : null;

@@ -47,6 +47,7 @@ export class ProgramFacts {
 	private overrideMap: Map<ts.MethodDeclaration, ts.MethodDeclaration[]> | null = null;
 	private familyMap: Map<ts.MethodDeclaration, ts.MethodDeclaration[]> | null = null;
 	private protoKeys: { data: Set<string>; accessors: Set<string> } | null = null;
+	private protoClasses: Set<ts.ClassDeclaration> | null = null;
 	private tdzSet: ReadonlySet<ts.VariableDeclaration> | null = null;
 	private ifaceDecls: (ts.InterfaceDeclaration | ts.TypeAliasDeclaration)[] | null = null;
 	private readonly ifaceNamesByTop = new WeakMap<object, Set<string>>();
@@ -419,7 +420,34 @@ export class ProgramFacts {
 		return (this.protoKeys = { data, accessors });
 	}
 
-	/** App-mode module `let`/`const` bindings in an import cycle that may be read before their module initializes. */
+	/** Program classes whose `.prototype` object is read or observed via `Object.getPrototypeOf` in app mode. */
+	prototypeClasses(): ReadonlySet<ts.ClassDeclaration> {
+		if (this.protoClasses) return this.protoClasses;
+		const out = new Set<ts.ClassDeclaration>();
+		if (this.scope.library) return (this.protoClasses = out);
+		let anyGetProto = false;
+		const addChain = (cls: ts.ClassLikeDeclaration | undefined) => {
+			for (let c = cls; c; c = programBase(c, this.checker)) {
+				if (ts.isClassDeclaration(c) && !c.getSourceFile().isDeclarationFile) out.add(c);
+			}
+		};
+		const visit = (n: ts.Node): void => {
+			if (ts.isPropertyAccessExpression(n) && n.name.text === 'prototype') {
+				const sym = resolveSymbol(n.expression, this.checker);
+				if (sym && sym.flags & ts.SymbolFlags.Class && sym.valueDeclaration && ts.isClassLike(sym.valueDeclaration)) addChain(sym.valueDeclaration);
+			} else if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression) && ts.isIdentifier(n.expression.expression) && n.expression.expression.text === 'Object' && n.expression.name.text === 'getPrototypeOf') {
+				anyGetProto = true;
+			}
+			ts.forEachChild(n, visit);
+		};
+		for (const sf of this.files) if (!sf.isDeclarationFile) visit(sf);
+		if (anyGetProto) {
+			for (const c of this.classes()) if (ts.isClassDeclaration(c)) out.add(c);
+		}
+		return (this.protoClasses = out);
+	}
+
+	/** App-mode module `let`/`const` bindings that may be read before their initializer runs. */
 	tdzBindings(): ReadonlySet<ts.VariableDeclaration> {
 		return (this.tdzSet ??= this.scope.library ? new Set() : cyclicModuleBindings(this.checker, this.files));
 	}

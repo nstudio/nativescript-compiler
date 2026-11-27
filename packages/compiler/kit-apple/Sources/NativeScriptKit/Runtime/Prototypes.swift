@@ -136,6 +136,18 @@ public enum JSPrototypes {
         return objectPrototype
     }
 
+    /// `Object.getPrototypeOf` of a class constructor: its superclass, else `Function.prototype`.
+    static func prototypeOf(class cls: AnyClass) -> Any? {
+        tableLock.lock()
+        if let custom = customPrototypes[ObjectIdentifier(cls)] {
+            tableLock.unlock()
+            return custom
+        }
+        tableLock.unlock()
+        if let superclass = class_getSuperclass(cls), !isRoot(superclass) { return superclass }
+        return builtin("Function")
+    }
+
     /// The class Swift's own root classes extend, which no script class corresponds to.
     private static func isRoot(_ cls: AnyClass) -> Bool { NSStringFromClass(cls) == "_TtCs12_SwiftObject" }
 
@@ -307,7 +319,7 @@ public func jsGetPrototypeOf(_ value: Any?) throws -> Any? {
     guard let v = jsFlat(value), !(v is JSNull) else { throw JSException(JSTypeError("Cannot convert undefined or null to object")) }
     switch v {
     case let o as JSObject: return JSPrototypes.prototypeOf(object: o)
-    case is AnyClass: return JSPrototypes.builtin("Function")
+    case let cls as AnyClass: return JSPrototypes.prototypeOf(class: cls)
     case is JSArrayProtocol: return JSPrototypes.builtin("Array")
     case is String: return JSPrototypes.builtin("String")
     case is Double: return JSPrototypes.builtin("Number")
