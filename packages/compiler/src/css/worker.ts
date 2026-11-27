@@ -11,7 +11,7 @@
 // rewrite, Vite's preprocessCSS, rework-css's parse).
 import fs, { readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, join, relative } from 'node:path';
+import { dirname, isAbsolute, join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const [outFile, cliLib, platform, ...stylesheets] = process.argv.slice(2);
@@ -92,7 +92,7 @@ async function webpackSheets(configPath: string): Promise<Sheet[]> {
 	const resolveLoader = (name: string) => {
 		for (const dir of loaderDirs) {
 			try {
-				return dir.startsWith('/') ? createRequire(join(dir, 'index.js')).resolve(join(dir, name)) : appRequire.resolve(name);
+				return isAbsolute(dir) ? createRequire(join(dir, 'index.js')).resolve(join(dir, name)) : appRequire.resolve(name);
 			} catch {}
 		}
 		throw new Error(`loader ${name} not found in ${loaderDirs.join(', ')}`);

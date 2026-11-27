@@ -109,9 +109,12 @@ export const argumentsMethods = {
 		for (let k = 0; k < list.length; k++) {
 			const a = list[k];
 			if (restAt >= 0 && k >= restAt && appDeclared) {
-				const calleeParam = ts.isCallExpression(e) ? functionTypeParts(this.typeOf(e.expression).replace(/^\((.*)\)\?$/, '$1'))?.params[restAt] : undefined;
+				const restDecl = params[restAt].valueDeclaration;
+				const erasedRest = this.library && !!restDecl && ts.isParameter(restDecl) && (!!(restDecl.parent as ts.SignatureDeclaration).typeParameters?.length || (ts.isClassLike(restDecl.parent.parent) && !!restDecl.parent.parent.typeParameters?.length));
+				const overloadedRest = !!impl && impl !== sig?.getDeclaration();
+				const calleeParam = ts.isCallExpression(e) && !erasedRest && !overloadedRest ? functionTypeParts(this.typeOf(e.expression).replace(/^\((.*)\)\?$/, '$1'))?.params[restAt] : undefined;
 				const rest = calleeParam?.startsWith('JSArray<') && calleeParam.endsWith('>') ? calleeParam : this.restType(params[restAt]);
-				out.push(this.packed(list.slice(k), rest, this.restSlot(e, rest.replace(/^JSArray<(.*)>$/, '$1'), params[restAt].valueDeclaration)));
+				out.push(this.packed(list.slice(k), rest, this.restSlot(e, rest.replace(/^JSArray<(.*)>$/, '$1'), restDecl)));
 				break;
 			}
 			if (ts.isSpreadElement(a)) {

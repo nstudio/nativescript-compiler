@@ -205,6 +205,7 @@ fun <T> jsAsyncIterable(value: JSAsyncIterableValue): JSAsyncIterable<T> = JSAsy
 /** GetIterator for an untyped value. */
 fun jsIteratorOf(value: Any?, message: String? = null): JSIterator<Any?> = when (val v = jsBox(value)) {
     is JSIterableValue -> JSIteratorAdapter(v.jsAnyIterator())
+    is JSTypedArray<*, *> -> { val values = v.jsAnyValues.iterator(); JSIterator { if (values.hasNext()) values.next() else JSIterator.END } }
     is JSArray<*> -> { var i = 0; JSIterator { if (i < v.storage.size) v.storage[i++] else JSIterator.END } }
     is String -> JSIteratorAdapter(jsIterator(v))
     is JSMatch -> jsIteratorOf(v.values)

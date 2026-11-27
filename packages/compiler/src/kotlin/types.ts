@@ -157,9 +157,10 @@ export const typesMethods = {
 			const a = args()[k];
 			return a ? this.type(a, where) : 'Any?';
 		};
-		if (name && sym?.declarations?.[0]?.getSourceFile().fileName === '/__shims__/globals.d.ts') {
+		if (name && sym?.declarations?.length && sym.declarations.every((d) => d.getSourceFile().isDeclarationFile)) {
 			if (isWebClass(this.ledger, name)) return `JS${name}`;
-			if (WEB_DICTIONARIES.includes(name)) return 'Any?';
+			if (name === 'DedicatedWorkerGlobalScope' && this.ledger.workerGlobals) return 'JSWorker';
+			if (WEB_DICTIONARIES.includes(name) && (sym.declarations[0].getSourceFile().fileName === '/__shims__/globals.d.ts' || isLibDeclaration(sym.declarations[0]))) return 'Any?';
 		}
 		// Library mode: a Java class named as a library type (`java.util.Map`, `java.util.Iterator`) is the Java class.
 		const javaClass = this.library && !!sym?.declarations?.length && sym.declarations.every((d) => this.native?.isNativeDeclaration(d)) ? this.native?.type(t) : null;

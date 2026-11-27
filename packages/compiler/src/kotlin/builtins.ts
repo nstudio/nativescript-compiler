@@ -473,7 +473,7 @@ export const builtinMethods = {
 
 	/** A rejection handler: it takes the reason untyped, whatever its parameter declares. */
 	rejectionHandler(this: Translator, e: ts.Expression, ret?: string): string {
-		if (!(ts.isArrowFunction(e) || ts.isFunctionExpression(e))) return this.isAny(e) ? this.fn(e, `(Any?) -> ${ret ?? 'Any?'}`) : this.fn(e);
+		if (!(ts.isArrowFunction(e) || ts.isFunctionExpression(e))) return this.fn(e, `(Any?) -> ${ret ?? 'Any?'}`);
 		if (!e.parameters.length) return this.closure(e, `(Any?) -> ${ret ?? this.returnTypeOf(e)}`);
 		const p = e.parameters[0];
 		const r = ret ?? this.returnTypeOf(e);

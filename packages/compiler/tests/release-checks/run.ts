@@ -2138,4 +2138,258 @@ ${mods.map((m) => (m.init ? `    ${m.init}()\n` : '')).join('')}    Microtasks.c
   }
 })();
 
+// ---- Issues #15-#21 regression checks (Windows paths/gradlew.bat, kit-android push, instanceof TypedArray + Array.from, JSNullish defaults, Worker types, Promise.then + returnPromise, unviewable jsSet + destructuring filters[f] + bound core default param) ----
+(() => {
+  // #15: Windows css/worker.ts isAbsolute, gradlew.bat classpath invocation, backslash-safe interfacesOf
+  const cssWorkerSrc = readFileSync(join(here, '../../src/css/worker.ts'), 'utf8');
+  check(cssWorkerSrc.includes('isAbsolute(dir)') && !cssWorkerSrc.includes("dir.startsWith('/')"), 'Issue #15: css/worker.ts uses path.isAbsolute(dir) instead of dir.startsWith("/")');
+  const gradlewBat = readFileSync(join(KIT_ANDROID, 'gradlew.bat'), 'utf8');
+  check(gradlewBat.includes('org.gradle.wrapper.GradleWrapperMain') && !gradlewBat.includes('-jar "%APP_HOME%\\gradle\\wrapper\\gradle-wrapper.jar"'), 'Issue #15: kit-android/gradlew.bat invokes GradleWrapperMain via -classpath');
+
+  const dir = mkdtempSync(join(tmpdir(), 'ns-issues-15-21-'));
+  try {
+    const typesFile = join(dir, 'types.ts');
+    const mainFile = join(dir, 'consumer.ts');
+    const domShim = join(dir, 'dom.d.ts');
+    // Minimal lib.dom-shaped Worker/Event declarations (in a .d.ts, NOT /__shims__/globals.d.ts) to test #19
+    writeFileSync(
+      domShim,
+      `interface Event { readonly type: string; }
+interface EventTarget { dispatchEvent(event: Event): boolean; }
+interface AbstractWorker { onerror: ((this: AbstractWorker, ev: ErrorEvent) => any) | null; }
+interface MessageEvent<T = any> extends Event { readonly data: T; }
+interface ErrorEvent extends Event { readonly message: string; }
+interface Worker extends EventTarget, AbstractWorker {
+  onmessage: ((this: Worker, ev: MessageEvent) => any) | null;
+  postMessage(message: any, transfer?: any[]): void;
+  terminate(): void;
+}
+`,
+    );
+    // File translated AFTER main.ts: defines method-bearing protocol interface (#21.1) and Biquad (#21.2)
+    writeFileSync(
+      typesFile,
+      `export interface NativeEQ {
+  id: string;
+  getBands(): number[];
+}
+export class NativeEQImpl implements NativeEQ {
+  id = 'eq1';
+  getBands(): number[] { return [1, 2, 3]; }
+}
+export interface Biquad {
+  b0: number;
+  b1: number;
+}
+export interface GameModeResult {
+  enabled: boolean;
+  timeout: number;
+  clamped: number;
+  bands: number;
+}
+export interface WorkerResponse {
+  ok: boolean;
+  value: number;
+}
+`,
+    );
+    writeFileSync(
+      mainFile,
+      `import { NativeEQ, NativeEQImpl, Biquad, GameModeResult, WorkerResponse } from './types';
+
+// #17: instanceof Uint8Array / TypedArrays / ArrayBuffer / DataView / RegExp + Array.from(narrowed)
+function decodeBytes(value: unknown): number[] {
+  if (value instanceof Uint8Array) return Array.from(value);
+  if (value instanceof Float32Array) return Array.from(value, (v: number) => v * 2);
+  if (value instanceof ArrayBuffer) return [value.byteLength];
+  if (value instanceof DataView) return [value.byteLength];
+  if (value instanceof RegExp) return [value.source.length];
+  return [];
+}
+
+// #18: default-initialized parameters held as JSNullish<T> (null vs undefined observed apart)
+const DEFAULT_TIMEOUT = 500;
+function configureGameMode(force: boolean | null = true, timeoutMs: number | null = DEFAULT_TIMEOUT, mode: number | null = 0xff, bandCount: number | null = 8): GameModeResult {
+  const wasNull = force === null || timeoutMs === null || mode === null || bandCount === null;
+  const enabled = force ? true : false;
+  const timeout = (timeoutMs ?? 0) > 0 ? (timeoutMs ?? 0) : 0;
+  const clamped = Math.max(0, Math.min(255, Math.round(mode ?? 0)));
+  const bands = (bandCount ?? 0) > 0 ? (bandCount ?? 0) : (wasNull ? 0 : 1);
+  return { enabled, timeout, clamped, bands };
+}
+// Also test non-null TS-typed default parameters that become JSNullish<T> via a caller passing null
+function configureStrictDefaults(force = true, timeoutMs = DEFAULT_TIMEOUT, mode = 0xff, bandCount = 8): GameModeResult {
+  const isNull = (force as unknown) === null;
+  const enabled = force ? true : false;
+  const timeout = timeoutMs > 0 ? timeoutMs : 0;
+  const clamped = Math.max(0, Math.min(255, Math.round(mode)));
+  const bands = bandCount > 0 ? bandCount : (isNull ? 0 : 1);
+  return { enabled, timeout, clamped, bands };
+}
+const nullProbe = (x: boolean | null, y: number | null) => configureGameMode(x, y, y, y);
+const strictProbe = (x: boolean | null, y: number | null) => configureStrictDefaults(x as any, y as any, y as any, y as any);
+
+// #20: Promise.then(run, run) with 0-arg handler + async (): Promise<unknown> returning Promise<Concrete>
+let tail: Promise<unknown> = Promise.resolve();
+let ranCount = 0;
+function enqueue<T>(work: () => Promise<T>): Promise<T> {
+  const run = (): Promise<T> => work();
+  const next = tail.then(run, run);
+  tail = next.then(() => undefined, () => undefined);
+  return next;
+}
+async function setGameModeSettled(): Promise<GameModeResult> {
+  ranCount++;
+  return configureGameMode();
+}
+async function handleRpc(): Promise<unknown> {
+  return setGameModeSettled();
+}
+
+// #21.1: cross-file method-bearing protocol interface in a class field (jsSet uses fromAny)
+class EqHolder {
+  eq: NativeEQ | null = null;
+}
+
+// #21.2: destructuring an indexed JSArray element
+function sumBiquads(filters: Biquad[]): number {
+  let acc = 0;
+  for (let f = 0; f < filters.length; f++) {
+    const { b0, b1 } = filters[f];
+    acc += b0 + b1;
+  }
+  return acc;
+}
+
+async function runAll() {
+  const bytes = decodeBytes(new Uint8Array([4, 5, 6]));
+  const floats = decodeBytes(new Float32Array([1.5, 2.5]));
+  const buf = decodeBytes(new ArrayBuffer(8));
+  const dv = decodeBytes(new DataView(new ArrayBuffer(12)));
+  const re = decodeBytes(/abc/);
+  const def = configureGameMode();
+  const nul = nullProbe(null, null);
+  const sdef = configureStrictDefaults();
+  const snul = strictProbe(null, null);
+  // Queue a rejection first so the onRejected branch of tail.then(run, run) actually runs!
+  tail = Promise.reject(new Error('boom'));
+  const r1 = await enqueue(() => setGameModeSettled());
+  const r2 = (await handleRpc()) as GameModeResult;
+  const holder = new EqHolder();
+  (holder as any).eq = new NativeEQImpl();
+  const bands = holder.eq ? holder.eq.getBands().length : 0;
+  const bqSum = sumBiquads([{ b0: 1, b1: 2 }, { b0: 3, b1: 4 }]);
+  console.log([
+    bytes.join(','),
+    floats.join(','),
+    [buf[0], dv[0], re[0]].join(','),
+    [def.enabled, def.timeout, def.clamped, def.bands].join(':'),
+    [nul.enabled, nul.timeout, nul.clamped, nul.bands].join(':'),
+    [sdef.enabled, sdef.timeout, sdef.clamped, sdef.bands, snul.enabled].join(':'),
+    [r1.clamped, r2.bands, ranCount].join(':'),
+    String(bands),
+    String(bqSum),
+  ].join('|'));
+}
+runAll();
+`,
+    );
+    const expected = '4,5,6|3,5|8,12,3|true:500:255:8|false:0:0:0|true:500:255:8:true|255:8:2|3|10';
+    // Native Swift verification (#17, #18, #20, #21)
+    {
+      let swGot = '';
+      try {
+        buildSwiftRuntime(nativeBuild, '-Onone');
+        const out = join(dir, 'swift-15-21');
+        const mods = translateSwift([mainFile, typesFile], out);
+        writeFileSync(join(out, 'main.swift'), swiftMain(mods));
+        const errors = swiftc(readdirSync(out).map((f) => join(out, f)), join(dir, 'main-15-21'), nativeBuild, '-Onone');
+        swGot = errors ? errors.slice(0, 3).join(' ; ') : spawnSync(join(dir, 'main-15-21'), { encoding: 'utf8' }).stdout.trim().split('\n').join('|');
+      } catch (e) { swGot = String(e); }
+      check(swGot === expected, `Issues #17, #18, #20, #21 run natively (Swift${swGot === expected ? '' : `: ${swGot.slice(0, 300)}`})`);
+    }
+    // Native Kotlin verification (#15 interfacesOf backslashes, #17, #18, #19 Worker/globalThis as Worker, #20, #21)
+    {
+      const workerFile = join(dir, 'worker_usage.ts');
+      writeFileSync(
+        workerFile,
+        `import { WorkerResponse } from './types';
+export function wireWorker(w: Worker | null): Worker | null {
+  if (!w) return null;
+  w.onmessage = (event: { data: WorkerResponse }) => {
+    if (event.data.ok) console.log(event.data.value);
+  };
+  w.onerror = (err: { message?: string }) => {
+    console.log(err.message ?? 'err');
+  };
+  w.postMessage({ ping: true });
+  w.terminate();
+  return w;
+}
+export function postFromScope(): string {
+  const workerScope = globalThis as unknown as Worker;
+  let captured = '';
+  (globalThis as any).postMessage = (msg: any) => { captured = String(msg.tag); };
+  workerScope.postMessage({ tag: 'ok-scope' });
+  return captured;
+}
+`,
+      );
+      let ktGot = '';
+      try {
+        const out = join(dir, 'kotlin-15-21');
+        const prog = createProgram([mainFile, workerFile, typesFile, domShim], new Map(), 'android', modulesDir);
+        const kt = new Translator(prog.checker, new Map(), prog.files, { errors: [] });
+        const mods = translateKotlinModules(kt, prog.program, [mainFile, workerFile, typesFile]);
+        // #15: simulate Windows backslash path on one module file before addKotlinInterfaces
+        const winMods = mods.map((m) => (m.file === typesFile ? { ...m, file: m.file.replace(/\//g, '\\') } : m));
+        addKotlinInterfaces(kt, winMods);
+        const typesMod = winMods.find((m) => m.file.replace(/\\/g, '/') === typesFile)!;
+        check(typesMod.code.includes('interface NativeEQ'), 'Issue #15: interfacesOf matches TS forward-slash paths against Windows backslash paths');
+        // #19: verify generated Kotlin uses JSWorker and does not leak raw DOM Worker or Event
+        const workerMod = winMods.find((m) => m.file === workerFile)!;
+        const shapes = kt.shapesCode();
+        check(workerMod.code.includes('JSWorker') && !/\bWorker\b/.test(workerMod.code) && !/\bEvent\b/.test(shapes), 'Issue #19: DOM Worker maps to JSWorker without leaking unresolved Worker/Event');
+        // #21.1: verify NativeEQObject uses .fromJS, never .jsView
+        const mainMod = winMods.find((m) => m.file === mainFile)!;
+        check(!mainMod.code.includes('NativeEQObject.jsView'), 'Issue #21: cross-file method-bearing protocol uses fromJS, never jsView');
+        mkdirSync(out, { recursive: true });
+        for (const m of winMods) writeFileSync(join(out, `${m.name}.kt`), `package org.example.issues1521\nimport org.nativescript.kit.*\n${m.code}\n`);
+        if (shapes) writeFileSync(join(out, '__Objects.kt'), `package org.example.issues1521\nimport org.nativescript.kit.*\n${shapes}\n`);
+        writeFileSync(
+          join(out, '__Main.kt'),
+          `package org.example.issues1521
+import org.nativescript.kit.*
+fun main() {
+${winMods.map((m) => (m.init ? `    ${m.init}()\n` : '')).join('')}    Microtasks.checkpoint()
+    println("scope:" + postFromScope())
+}
+`,
+        );
+        const runtime = buildKotlinRuntime(nativeBuild);
+        const errors = kotlinc(readdirSync(out).filter((f) => f.endsWith('.kt')).map((f) => join(out, f)), join(dir, 'classes-15-21'), [runtime]);
+        const runRes = errors ? null : spawnSync('java', ['-cp', [join(dir, 'classes-15-21'), runtime, kotlinStdlib()].join(':'), 'org.example.issues1521.__MainKt'], { encoding: 'utf8' });
+        ktGot = errors ? errors.slice(0, 3).join(' ; ') : runRes!.status ? `exit ${runRes!.status}: ${(runRes!.stderr || runRes!.stdout).trim()}` : runRes!.stdout.trim().split('\n').join('|');
+      } catch (e) { ktGot = String(e); }
+      check(ktGot === `${expected}|scope:ok-scope`, `Issues #17, #18, #19, #20, #21 run natively (Kotlin${ktGot === `${expected}|scope:ok-scope` ? '' : `: ${ktGot.slice(0, 300)}`})`);
+    }
+    // #21.3: .bind() on a core method with a non-null Double default parameter (`flags: Double = 2.0`)
+    {
+      const bindFile = join(dir, 'bind_core.ts');
+      writeFileSync(
+        bindFile,
+        `import { Application } from '@nativescript/core';
+export const boundRegister = Application.android.registerBroadcastReceiver.bind(Application.android);
+`,
+      );
+      const prog = createProgram([bindFile], new Map(), 'android', modulesDir);
+      const kt = new Translator(prog.checker, new Map(), prog.files, { core: (t) => new CoreKotlin(t), errors: [] });
+      const mod = translateKotlinModules(kt, prog.program, [bindFile])[0];
+      check(mod.code.includes('?: 2.0') && !mod.code.includes('::registerBroadcastReceiver'), `Issue #21: .bind() on core method with non-null Double default forwards default value (${mod.code.slice(0, 200)})`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+})();
+
 finish();

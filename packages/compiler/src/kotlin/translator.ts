@@ -203,6 +203,17 @@ export class Translator implements AsyncTranslator {
 			};
 			visit(f);
 		}
+		// Mark unviewable interface object classes upfront before any module translates, so cross-file `fromAny` never emits `.jsView(...)` for one.
+		for (const f of this.sourceFiles) {
+			if (f.isDeclarationFile) continue;
+			for (const st of f.statements) {
+				if (!ts.isInterfaceDeclaration(st)) continue;
+				const name = this.topName(st, st.name.text);
+				const all = this.withInherited(st, st.members);
+				if (this.protocols.has(name) && all.some(ts.isMethodSignature)) this.unviewable.add(`${name}Object`);
+				else if (!this.protocols.has(name) && all.some((m) => !!m.name && ts.isComputedPropertyName(m.name))) this.unviewable.add(name);
+			}
+		}
 	}
 
 	/** A class whose methods and accessors are read by name: a substitution's, which untyped code reads as often as typed code does, or a `ValueStates.viewedClass`. */

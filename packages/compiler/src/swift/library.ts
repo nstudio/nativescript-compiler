@@ -18,7 +18,7 @@ export const DESCRIPTORS = new Set(['PropertyDescriptor', 'TypedPropertyDescript
 export const ARRAY_CALLBACK_METHODS = new Set(['forEach', 'map', 'filter', 'some', 'every', 'find', 'findIndex', 'findLast', 'findLastIndex', 'flatMap']);
 export const isTypedArrayType = (t: string) => /^JS(Int8|Uint8|Uint8Clamped|Int16|Uint16|Int32|Uint32|Float32|Float64|BigInt64|BigUint64)Array$/.test(t);
 // No prototype: a name like `toString` is no error class.
-export const BUILTIN_CLASSES: Record<string, string> = Object.assign(Object.create(null), { Promise: 'JSThenable', Array: 'JSArrayProtocol', Map: 'JSMapProtocol', Set: 'JSSetProtocol', Date: 'JSDate' }, Object.fromEntries([...BUFFER_TYPES].map((n) => [n, `JS${n}`])));
+export const BUILTIN_CLASSES: Record<string, string> = Object.assign(Object.create(null), { Promise: 'JSThenable', Array: 'JSArrayProtocol', Map: 'JSMapProtocol', Set: 'JSSetProtocol', Date: 'JSDate', RegExp: 'JSRegExp' }, Object.fromEntries([...BUFFER_TYPES].map((n) => [n, `JS${n}`])));
 
 /** Library functions read as values, with their Swift function types. */
 export const LIB_FUNCTION_VALUES: Record<string, { code: string; type: string }> = {

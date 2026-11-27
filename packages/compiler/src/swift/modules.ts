@@ -661,11 +661,12 @@ export const modulesMethods = {
 	interfacesOf(this: Translator, file: string): string {
 		let out = '';
 		const emitted = new Set<string>();
+		const norm = file.replace(/\\/g, '/');
 		// An interface's own fields can use another one.
 		for (let more = true; more;) {
 			more = false;
 			for (const [name, decl] of this.interfaces) {
-				if (decl.file !== file || emitted.has(name) || !this.used.has(name)) continue;
+				if (decl.file.replace(/\\/g, '/') !== norm || emitted.has(name) || !this.used.has(name)) continue;
 				out = decl.code() + '\n\n' + out;
 				emitted.add(name);
 				more = true;

@@ -150,7 +150,7 @@ export async function writeIos(b: IosBuild): Promise<void> {
 	const translator = new Translator(checker, infos, sourceFiles, {
 		...context.translation(),
 		pluginFiles,
-		pluginRoots: plugins.all().map((p) => p.root + '/'),
+		pluginRoots: plugins.all().map((p) => p.root.replace(/\\/g, '/') + '/'),
 		lenientFiles,
 		reach,
 		properties,

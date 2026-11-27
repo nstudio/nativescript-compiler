@@ -38,7 +38,8 @@ export const narrowingMethods = {
 			if (field) return (code) => `${RT.jsRequired}(${code}, ${kotlinString(field.name)})`;
 			const keyed = (actual === 'Double' || actual === 'String') && this.states.unsetNullField(e) ? this.states.nullableEntry(e, () => this.expr(e)) : null;
 			if (keyed) return () => `${actual === 'Double' ? RT.jsToNumber : RT.jsToString}(${keyed})`;
-			if (['String', 'Double', 'Boolean'].includes(actual) && this.states.nilIsNull(e)) return (code) => nullAs(code, actual);
+			const nullishDefault = !!sym?.valueDeclaration && ts.isParameter(sym.valueDeclaration) && !!sym.valueDeclaration.initializer && this.states.nullishHeld(sym.valueDeclaration);
+			if (['String', 'Double', 'Boolean'].includes(actual) && (this.states.nilIsNull(e) || nullishDefault)) return (code) => nullAs(code, actual);
 			if (this.lenient || ['String', 'Double', 'Boolean'].includes(actual)) return (code) => this.undefinedAs(code, actual);
 			return ts.isIdentifier(e) && this.smartCast(e) ? null : (code) => this.asserted(code);
 		}

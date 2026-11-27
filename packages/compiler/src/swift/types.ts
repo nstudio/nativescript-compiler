@@ -155,10 +155,10 @@ export const typesMethods = {
 			const a = args()[k];
 			return a ? this.type(a, where) : 'Any?';
 		};
-		// Core's own code (library mode) is typed by the DOM's library, whose web classes are the runtime's too.
-		if (name && (sym?.declarations?.[0]?.getSourceFile().fileName === '/__shims__/globals.d.ts' || (this.library && isLibDeclaration(sym?.declarations?.[0])))) {
+		// Core's own code and apps using DOM/core global typings: web classes declared in .d.ts map to the runtime's.
+		if (name && sym?.declarations?.length && sym.declarations.every((d) => d.getSourceFile().isDeclarationFile)) {
 			if (isWebClass(this.ledger, name)) return `JS${name}`;
-			if (WEB_DICTIONARIES.includes(name)) return 'Any?';
+			if (WEB_DICTIONARIES.includes(name) && (sym.declarations[0].getSourceFile().fileName === '/__shims__/globals.d.ts' || isLibDeclaration(sym.declarations[0]))) return 'Any?';
 		}
 		const kind = name === undefined ? undefined : this.framework.signalKind(name);
 		if (kind === 'writable' || kind === 'input' || kind === 'model') {

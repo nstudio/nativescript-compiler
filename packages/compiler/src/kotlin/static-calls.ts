@@ -2,7 +2,7 @@
 import { heldLoss } from '../semantics/losses.ts';
 import ts from 'typescript';
 import { TYPED_ARRAYS } from '../semantics/globals.ts';
-import { ident, isThisParameter, kotlinString, optionalType, RT } from './syntax.ts';
+import { functionTypeParts, ident, isThisParameter, kotlinString, optionalType, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { undefinedLiteral } from '../semantics/lang.ts';
 import { arrayFromLengthInit } from '../semantics/ast.ts';
@@ -107,7 +107,14 @@ export const staticCallsMethods = {
 					const guard = !this.library ? shapeArrayGuardAccess(arg(0), (t) => this.isShapeType(t), (x) => this.typeOf(x)) : null;
 					return guard ? `JSArray.isArray(${this.expr(guard.prop.expression)}${guard.optional ? '?' : ''}.jsGet(${kotlinString(guard.prop.name.text)}))` : `JSArray.isArray(${this.restArgument(e, arg(0), 'Any?')})`;
 				}
-				if (method === 'from' && e.arguments.length === 1) return `JSArray(${this.iterable(arg(0))}.toList())`;
+				if (method === 'from' && e.arguments.length === 1) {
+					const seq = this.iterable(arg(0));
+					const el = T().replace(/^JSArray<(.*)>$/, '$1');
+					if (el !== T() && !isUntyped(spelledType(el)) && (this.isAny(arg(0)) || !!this.jsIteration(arg(0)) || /^(Pair|Triple)</.test(this.typeOf(arg(0)).replace(/\?$/, '')))) {
+						return `JSArray<${el}>(${seq}.map { ${this.fromAny('it', el)} })`;
+					}
+					return `JSArray(${seq}.toList())`;
+				}
 				if (method === 'from' && (e.arguments.length === 2 || e.arguments.length === 3) && ts.isObjectLiteralExpression(arg(0))) {
 					const lenExpr = arrayFromLengthInit(arg(0) as ts.ObjectLiteralExpression);
 					const fn = arg(1);
@@ -121,7 +128,14 @@ export const staticCallsMethods = {
 						return `JSArray.fromLength<${el}>(${this.toNumber(lenExpr)}, fun(${index}: Double): ${el} { ${value}${body.slice(1, -1)} })`;
 					});
 				}
-				if (method === 'from' && (e.arguments.length === 2 || e.arguments.length === 3)) return this.ignoringThisArg(e, arg(0), () => `JSArray(${this.iterable(arg(0))}.toList()).map(${this.fn(arg(1))})`);
+				if (method === 'from' && (e.arguments.length === 2 || e.arguments.length === 3)) {
+					return this.ignoringThisArg(e, arg(0), () => {
+						const seq = this.iterable(arg(0));
+						const p0 = functionTypeParts(this.typeOf(arg(1)).replace(/^\((.*)\)\?$/, '$1'))?.params[0];
+						const arr = p0 && !isUntyped(spelledType(p0)) && (this.isAny(arg(0)) || !!this.jsIteration(arg(0))) ? `JSArray<${p0}>(${seq}.map { ${this.fromAny('it', p0)} })` : `JSArray(${seq}.toList())`;
+						return `${arr}.map(${this.fn(arg(1))})`;
+					});
+				}
 				if (method === 'of') return `${RT.jsArrayOf}<${T().replace(/^JSArray<(.*)>$/, '$1')}>(${a().join(', ')})`;
 				// `Array.apply(thisArg, list)`: `Array(...list)`, a length when the list is one number.
 				if (method === 'apply' && e.arguments.length === 2) {

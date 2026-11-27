@@ -259,14 +259,15 @@ class JSPromise<T> internal constructor() : JSThenable, JSDynamic {
     }
 
     /** Resolving with a native promise: NewPromiseResolveThenableJob, then that promise's `then`. */
-    internal fun adopt(other: JSPromise<T>) {
+    @Suppress("UNCHECKED_CAST")
+    internal fun adopt(other: JSPromise<*>) {
         if (other === this) {
             settleRejected(JSTypeError("Chaining cycle detected for promise #<Promise>"))
             return
         }
         Microtasks.enqueue {
             val resolvers = JSResolvers(this)
-            other.performThen({ resolvers.resolve(it) }, { resolvers.reject(it) })
+            other.performThen({ resolvers.resolve(it as T) }, { resolvers.reject(it) })
         }
     }
 
@@ -629,7 +630,7 @@ class JSAsync<T> {
     }
 
     /** `return promise`: adopted through a NewPromiseResolveThenableJob, two ticks later than `return await`. */
-    fun returnPromise(other: JSPromise<T>) {
+    fun returnPromise(other: JSPromise<*>) {
         if (settled) return
         settled = true
         promise.adopt(other)

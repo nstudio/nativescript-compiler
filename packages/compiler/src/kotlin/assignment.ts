@@ -187,6 +187,9 @@ export const assignmentMethods = {
 				// `promise.cancel = …` on the kit's promise: kept beside it, as script adds it.
 				isPromiseType(this.nativeOf(left.expression)));
 		if (ts.isPropertyAccessExpression(left) && !this.library && this.isGlobalObject(left.expression)) return `${RT.jsSet}(jsGlobalThis, ${kotlinString(left.name.text)}, ${this.untypedCallable(right)})`;
+		if (ts.isPropertyAccessExpression(left) && !this.library && this.typeOf(left.expression).replace(/\?$/, '') === 'JSWorker' && (left.name.text === 'onmessage' || left.name.text === 'onerror')) {
+			return `${RT.jsSet}(${this.expr(left.expression)}, ${kotlinString(left.name.text)}, ${this.untypedCallable(right)})`;
+		}
 		// `record.key = v` of a `Record<string, T>`: its entry.
 		const record = ts.isPropertyAccessExpression(left) ? /^JSRecord<(.*)>\??$/.exec(this.typeOf(left.expression)) : null;
 		if (record && ts.isPropertyAccessExpression(left)) return `${this.typeOf(left.expression).endsWith('?') ? this.present(this.expr(left.expression), left.name.text, left.expression, true) : this.expr(left.expression)}[${kotlinString(left.name.text)}] = ${this.stored(right, left, record[1], checks)}`;

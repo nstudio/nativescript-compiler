@@ -133,14 +133,16 @@ export async function writeAndroid(b: AndroidBuild): Promise<void> {
 		bindingDefines.push(...prepared.defines);
 	}
 	const classPath = androidClassPath(widgets, native);
+	const slash = (p: string) => p.replace(/\\/g, '/');
 	// The app's own typings of Java APIs no package types (`declare module androidx { … }` in a script .d.ts).
-	const appDir = resolve(b.app) + '/';
-	const appTypings = b.program.getSourceFiles().filter((sf) => sf.isDeclarationFile && sf.fileName.startsWith(appDir) && !sf.fileName.includes('/node_modules/') && !/^(import|export)\b/m.test(sf.text) && /^declare\s+(module|namespace)\s+(android|androidx|java|javax|com|org|kotlin|io)\b/m.test(sf.text));
+	const appDir = slash(resolve(b.app)) + '/';
+	const appTypings = b.program.getSourceFiles().filter((sf) => sf.isDeclarationFile && slash(sf.fileName).startsWith(appDir) && !slash(sf.fileName).includes('/node_modules/') && !/^(import|export)\b/m.test(sf.text) && /^declare\s+(module|namespace)\s+(android|androidx|java|javax|com|org|kotlin|io)\b/m.test(sf.text));
+	const allModuleFiles = [...b.modules, ...b.components.map((c) => c.file), ...(b.compiledPlugins ?? [])].map(slash);
 	if (b.workers?.length) {
-		const writes = sharedWorkerState(b.program, b.workers, new Set([...b.modules, ...b.components.map((c) => c.file), ...(b.compiledPlugins ?? [])]), b.resolved);
+		const writes = sharedWorkerState(b.program, b.workers.map(slash), new Set(allModuleFiles), b.resolved);
 		if (writes.length) throw sharedWorkerStateError(writes, b.app);
 	}
-	const moduleFiles = [...new Set([...b.modules, ...b.components.map((c) => c.file), ...(b.compiledPlugins ?? [])])];
+	const moduleFiles = [...new Set(allModuleFiles)];
 	// Which modules run on the main thread only; a worker's script reaching one stops the build with the import chain.
 	const threads = moduleThreads({ program: b.program, modules: moduleFiles, workers: b.workers, resolved: b.resolved, coreModuleOf: (f) => /[\\/]@nativescript[\\/]core[\\/](.+)$/.exec(f)?.[1] ?? null });
 	// A module only `await import(…)` reaches (and what only it imports) runs when it is imported, as the bundle evaluates
@@ -168,7 +170,7 @@ export async function writeAndroid(b: AndroidBuild): Promise<void> {
 		errors: b.allErrors ? [] : null,
 		plainFields: !!b.translatorHooks?.plainFields,
 		appMembersByName: !!b.xml && !b.xmlMemberKeys,
-		pluginRoots: (b.plugins ?? []).map((p) => p.root + '/'),
+		pluginRoots: (b.plugins ?? []).map((p) => slash(p.root) + '/'),
 		workerScripts: new Map((b.workers ?? []).map((f) => [f.replace(/\\/g, '/'), relative(b.app, f).replace(/\\/g, '/')])),
 		resolveAlias: b.aliased ?? null,
 		moduleThread: (file) => threads.get(file),
@@ -419,8 +421,8 @@ project(":kit").projectDir = file(${kotlinString(kitProjectDir(b.out))})
 		join(b.out, 'gradle.properties'),
 		`org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8
 android.useAndroidX=true
-nativescriptWidgetsAar=${widgets}
-${overlay ? `kitOverlay=${join(KIT_ANDROID, 'overlays', XML_FREE_OVERLAY)}\nkitOverlayReplaces=${overlay.replaces.join(',')}\n` : ''}${adapterSources.length ? `kitAdapterSources=${adapterSources.join(',')}\n` : ''}`,
+nativescriptWidgetsAar=${slash(widgets)}
+${overlay ? `kitOverlay=${slash(join(KIT_ANDROID, 'overlays', XML_FREE_OVERLAY))}\nkitOverlayReplaces=${overlay.replaces.join(',')}\n` : ''}${adapterSources.length ? `kitAdapterSources=${adapterSources.map(slash).join(',')}\n` : ''}`,
 	);
 	writeFileSync(
 		join(b.out, 'build.gradle.kts'),

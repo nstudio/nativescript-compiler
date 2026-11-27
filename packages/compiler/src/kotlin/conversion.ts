@@ -418,6 +418,9 @@ export const conversionMethods = {
 			if (!type.endsWith('?')) return read(code);
 			return this.marks.isPure(code) ? `(if (${RT.jsIsNullish}(${code})) null else ${read(code)})` : `${RT.jsUnlessNullish}(${code}) { ${read('it')} }`;
 		}
+		if (!this.library && (type === 'JSWorker' || type === 'JSWorker?')) {
+			return type.endsWith('?') ? `${RT.jsUnlessNullish}(${code}) { JSWorker.fromAny(it) }` : `JSWorker.fromAny(${code})`;
+		}
 		if (!this.library && /^[A-Z]\w*\??$/.test(type)) {
 			const reified = this.reifiedRead(code, type);
 			if (reified) return reified;

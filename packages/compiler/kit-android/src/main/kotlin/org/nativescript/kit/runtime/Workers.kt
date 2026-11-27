@@ -54,13 +54,13 @@ class JSErrorEvent(val message: String) : JSDynamic {
  * runs in one live worker at a time; a new one of a script whose worker is stopping starts once
  * that worker's thread has ended.
  */
-class JSWorker(scriptURL: Any?, script: String? = null) : JSDynamic {
+class JSWorker private constructor(private val scope: JSObject?) : JSDynamic {
     var onmessage: ((JSMessageEvent) -> Any?)? = null
     var onerror: ((JSErrorEvent) -> Any?)? = null
 
     private val owner = JSRealm.current()
     private val realm = JSRealm()
-    private val key: String
+    private var key: String = ""
     private val inbox = LinkedBlockingQueue<() -> Unit>()
     /** `terminate()`: nothing more runs in the worker, and nothing more reaches the creator. */
     @Volatile private var terminated = false
@@ -69,11 +69,11 @@ class JSWorker(scriptURL: Any?, script: String? = null) : JSDynamic {
     /** When the worker's next timer is due, in `System.nanoTime()`; only its thread reads and writes it. */
     private var wake: Long? = null
     /** The worker's thread; it ends once the worker is terminated or closed and its running task returns. */
-    val thread: Thread
+    lateinit var thread: Thread
 
     private val live: Boolean get() = !terminated && !closing
 
-    init {
+    constructor(scriptURL: Any?, script: String? = null) : this(null) {
         val entry = script?.let { scripts[it] }
             ?: throw JSException(JSError("Worker script ${jsToString(scriptURL)} was not compiled with the app"))
         if (owner.post == null) throw JSException(JSError("Worker: the creating thread has no event loop to receive messages"))
@@ -144,6 +144,11 @@ class JSWorker(scriptURL: Any?, script: String? = null) : JSDynamic {
 
     /** `worker.postMessage(message, transfer)`: the buffers listed move to the worker; a stopped worker drops it. */
     fun postMessage(message: Any?, transfer: Any? = null) {
+        if (scope != null) {
+            if (transfer == null) jsCallMethod(scope, "postMessage", message)
+            else jsCallMethod(scope, "postMessage", message, transfer)
+            return
+        }
         if (!live) return
         val data = jsStructuredClone(message, jsTransferred(transfer))
         inbox.put { jsGetOptional(realm.global, "onmessage")?.let { jsCall(it, JSMessageEvent(data)) } }
@@ -185,26 +190,42 @@ class JSWorker(scriptURL: Any?, script: String? = null) : JSDynamic {
 
     /** `terminate()`: queued messages and timers are dropped; a blocking call in progress finishes first. */
     fun terminate() {
+        if (scope != null) {
+            jsCallMethod(scope, "close")
+            return
+        }
         if (terminated) return
         terminated = true
         inbox.put {}
     }
 
-    override fun jsGet(key: String): Any? = when (key) {
-        "postMessage" -> JSMethod { _, a -> postMessage(a.getOrNull(0), a.getOrNull(1)); null }
-        "terminate" -> JSMethod { _, _ -> terminate(); null }
-        "onmessage" -> onmessage
-        "onerror" -> onerror
-        else -> null
+    /** `close()`: on a worker global scope, stops the worker after the current task. */
+    fun close() {
+        if (scope != null) jsCallMethod(scope, "close")
+        else terminate()
     }
+
+    override fun jsGet(key: String): Any? =
+        if (scope != null) scope.jsGet(key)
+        else when (key) {
+            "postMessage" -> JSMethod { _, a -> postMessage(a.getOrNull(0), a.getOrNull(1)); null }
+            "terminate" -> JSMethod { _, _ -> terminate(); null }
+            "onmessage" -> onmessage
+            "onerror" -> onerror
+            else -> null
+        }
     override fun jsSet(key: String, value: Any?) {
+        if (scope != null) {
+            scope.jsSet(key, value)
+            return
+        }
         val handler: ((Any?) -> Any?)? = if (jsIsFunction(value)) { event -> jsCall(value, event) } else null
         when (key) {
             "onmessage" -> onmessage = handler
             "onerror" -> onerror = handler
         }
     }
-    override val jsKeys: List<String> get() = emptyList()
+    override val jsKeys: List<String> get() = scope?.jsKeys ?: emptyList()
     override val jsClassName: String? get() = "Worker"
 
     companion object {
@@ -213,6 +234,13 @@ class JSWorker(scriptURL: Any?, script: String? = null) : JSDynamic {
 
         /** A worker script the app compiled, by its path in the app: its module's top level, run on the worker's thread. */
         fun register(script: String, entry: () -> Unit) { scripts[script] = entry }
+
+        /** `globalThis as Worker` inside a worker script: wraps the worker realm's global object as a `JSWorker`. */
+        fun fromAny(value: Any?): JSWorker = when (value) {
+            is JSWorker -> value
+            is JSObject -> JSWorker(value)
+            else -> jsUnchecked(jsJavaArgument(value))
+        }
     }
 }
 

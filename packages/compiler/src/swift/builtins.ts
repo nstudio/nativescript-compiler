@@ -608,6 +608,12 @@ export const builtinMethods = {
 				const call = this.marks.tryCode(`${RT.jsCall}(${this.expr(e)}, __reason)`);
 				return `{ (__reason: Any?) throws -> ${result} in ${result === 'Void' ? `_ = ${call}` : `return ${this.fromAnyCode(call, result, true)}`} }`;
 			}
+			// A 0-arg function value (`run: () => Promise<T>`): wrap to ignore the rejection reason.
+			const parts = functionParts(this.typeOf(e).replace(/^\((.*)\)!$/, '$1'));
+			if (parts && !parts.params.length) {
+				const call = this.marks.tryCode(`(${this.fn(e)})()`);
+				return `{ (_: Any?) throws -> ${parts.result} in ${parts.result === 'Void' ? call : `return ${call}`} }`;
+			}
 			return this.fn(e);
 		}
 		// A handler that only rethrows (`(error) => { …; throw error; }`) is typed as the promise's other handler.
@@ -643,8 +649,11 @@ export const builtinMethods = {
 				let onFulfilled = nullFulfilled ? `{ (__v: ${value}) -> ${value} in ${value === 'Never' ? 'switch __v {}' : '__v'} }` : ignores ? this.closure(f as ts.ArrowFunction, [`_ __unused: ${value}`]) : f && this.fn(f);
 				// A function value taking its arguments as a rest (`then(log)` of a `log(...values)`), or any value where the promise's is
 				// undefined (`then($DONE)`, which Swift would pass `()`): called with the one value, as it holds it.
-				const own = f && !adopt && !ts.isArrowFunction(f) && !ts.isFunctionExpression(f) ? functionParts(this.typeOf(f).replace(/^\((.*)\)!$/, '$1')) : null;
-				if (own && (own.rest >= 0 || (value === 'Void' && own.params.length && own.params[0] !== 'Void'))) onFulfilled = this.coerce(f, `(${value}) throws -> ${own.result}`);
+				const own = f && !nullFulfilled && !ts.isArrowFunction(f) && !ts.isFunctionExpression(f) ? functionParts(this.typeOf(f).replace(/^\((.*)\)!$/, '$1')) : null;
+				if (own && !own.params.length && value !== 'Void') {
+					const call = this.marks.tryCode(`(${this.fn(f)})()`);
+					onFulfilled = `{ (_: ${value}) throws -> ${own.result} in ${own.result === 'Void' ? call : `return ${call}`} }`;
+				} else if (own && !adopt && (own.rest >= 0 || (value === 'Void' && own.params.length && own.params[0] !== 'Void'))) onFulfilled = this.coerce(f, `(${value}) throws -> ${own.result}`);
 				// A handler declaring the type of what an untyped promise settles with (`.then((r: Item) => …)` of a `Promise<any>`): it takes the value untyped, read as that type.
 				const declared = f && !ignores && isUntyped(spelledType(value)) && (ts.isArrowFunction(f) || ts.isFunctionExpression(f)) && f.parameters.length ? this.closureParamType(f.parameters[0]) : undefined;
 				if (declared && !isUntyped(spelledType(declared)) && !(f as ts.ArrowFunction).parameters[0].dotDotDotToken) {

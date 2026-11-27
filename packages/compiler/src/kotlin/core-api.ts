@@ -363,6 +363,22 @@ export class CoreKotlin extends KitTypes implements KotlinCore {
 				const ps = Array.from({ length: arity }, (_, k) => `__s${k}`);
 				return `{ ${ps.map((p) => `${p}: Any?`).join(', ')} -> ${recv}.${name}(${ps.join(', ')}) }`;
 			}
+			// A kit method with non-null Kotlin default parameters (e.g. `flags: Double = 2.0`) where TS types the parameter optional (`Double?`):
+			// a method reference drops the default and keeps non-null `Double`, so wrap in a lambda that forwards the default.
+			const parsedParams = (m.params ?? '').trim()
+				? splitTopLevel(m.params!).map((p) => {
+						const hit = /^([^:]+):\s*(.+?)(?:\s*=\s*(.+))?$/.exec(p.trim());
+						return hit ? { type: hit[2].trim(), def: hit[3]?.trim() } : null;
+					})
+				: [];
+			const tsParts = functionTypeParts(t.typeOf(e).replace(/^\((.*)\)\?$/, '$1'));
+			if (tsParts && parsedParams.length === tsParts.params.length && parsedParams.every(Boolean) && parsedParams.some((p, k) => p!.def && !p!.type.endsWith('?') && tsParts.params[k].endsWith('?'))) {
+				const ps = tsParts.params.map((pt, k) => `__p${k}: ${pt}`);
+				const callArgs = parsedParams.map((p, k) => (p!.def && !p!.type.endsWith('?') && tsParts.params[k].endsWith('?') ? `(__p${k} ?: ${p!.def})` : `__p${k}`));
+				const call = (r: string) => `{ ${ps.join(', ')} -> ${r}.${name}(${callArgs.join(', ')}) }`;
+				if (owner.isStatic) return call(recv);
+				return recv.endsWith('?') ? `${recv.slice(0, -1)}?.let { __r -> ${call('__r')} }` : `(${recv}).let { __r -> ${call('__r')} }`;
+			}
 			// A Kotlin object's own function is referenced on the object; a class's static, on its companion.
 			if (owner.isStatic) return (this.index.get(owner.name) as (KitType & { object?: boolean }) | undefined)?.object ? `${recv}::${name}` : `${recv}.Companion::${name}`;
 			return recv.endsWith('?') ? `${recv.slice(0, -1)}?.let { __r -> __r::${name} }` : `${recv}::${name}`;

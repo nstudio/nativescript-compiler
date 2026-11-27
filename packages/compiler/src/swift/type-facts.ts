@@ -291,6 +291,7 @@ export const typeFactsMethods = {
 		if (this.states.unsetMember(decl)) return optionalType(t);
 		if ((t === 'Bool' || t === 'String' || t === 'Double') && (this.holdsUndefined(e) || this.states.lenientNullField(decl) || (ts.isPropertyAccessExpression(e) && this.states.shapeFieldOptional(sym)))) return `${t}?`;
 		if (isFunctionType(t) && this.widenedFunctionField(decl)) return optionalType(t);
+		if (ts.isParameter(decl) && this.states.nullishHeld(decl)) return optionalType(t);
 		return isWriteTarget(e) && (this.looseObjectDeclaration(decl, t) || (ts.isParameter(decl) && this.states.mayBeNull(decl))) ? optionalType(t) : t;
 	},
 

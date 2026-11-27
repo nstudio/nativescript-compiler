@@ -1,11 +1,11 @@
 // JavaScript's library as the Kotlin backend names it: the runtime's classes and functions for the library's globals,
 // constants and functions, and the core classes kit-android names otherwise.
 import type { MathOp } from '../semantics/apis/math.ts';
-import { SHARED_LIB_CONSTANTS } from '../semantics/globals.ts';
+import { BUFFER_TYPES, SHARED_LIB_CONSTANTS } from '../semantics/globals.ts';
 import { RT } from './syntax.ts';
 
 // No prototype: a name like `toString` is no error class.
-export const BUILTIN_CLASSES: Record<string, string> = Object.assign(Object.create(null), { Promise: 'JSPromise<*>', Array: 'JSArray<*>', Map: 'JSMap<*, *>', Set: 'JSSet<*>', Date: 'JSDate' });
+export const BUILTIN_CLASSES: Record<string, string> = Object.assign(Object.create(null), { Promise: 'JSPromise<*>', Array: 'JSArray<*>', Map: 'JSMap<*, *>', Set: 'JSSet<*>', Date: 'JSDate', RegExp: 'JSRegExp' }, Object.fromEntries([...BUFFER_TYPES].map((n) => [n, `JS${n}`])));
 /** Core classes kit-android implements under another name. */
 export const KIT_NAMES_ANDROID: Record<string, string> = { ViewBase: 'View', ViewCommon: 'View', EditableTextBase: 'TextBase', LayoutBaseCommon: 'LayoutBase' };
 

@@ -419,7 +419,12 @@ export const declarationsMethods = {
 		// A match reads its values as an array does.
 		const js = ts.isArrayBindingPattern(name) && !/^JSMatch\??$/.test(this.typeOf(init)) ? this.patternIteration(init) : null;
 		// A literal builds a shape class of its own, which the pattern's contextual shape need not be.
-		if (!js) return ts.isObjectLiteralExpression(init) ? ` = ${this.expr(init)}` : `: ${this.typeOf(init)} = ${this.coerce(init, this.typeOf(init))}`;
+		if (!js) {
+			if (ts.isObjectLiteralExpression(init)) return ` = ${this.expr(init)}`;
+			const t = this.typeOf(init);
+			const target = isNullable(t) && !isUntyped(spelledType(t)) ? t.slice(0, -1) : t;
+			return `: ${target} = ${this.coerce(init, target)}`;
+		}
 		const rest = (name as ts.ArrayBindingPattern).elements.some((el) => ts.isBindingElement(el) && el.dotDotDotToken);
 		return ` = JSArray(ArrayList(${js}.${rest ? 'jsCollect()' : `jsTake(${(name as ts.ArrayBindingPattern).elements.length})`}))`;
 	},

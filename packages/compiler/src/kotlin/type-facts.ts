@@ -42,8 +42,9 @@ export const typeFactsMethods = {
 		else if (this.library && decl.getSourceFile().isDeclarationFile && (ts.isPropertyDeclaration(decl) || ts.isPropertySignature(decl) || ts.isGetAccessorDeclaration(decl)) && !isLibDeclaration(decl) && !this.native?.isNativeDeclaration(decl)) t = this.lenientRef(t);
 		// Lenient code: an optional member's type does not say it may be missing.
 		if (this.lenient && (ts.isPropertySignature(decl) || ts.isPropertyDeclaration(decl)) && decl.questionToken) t = optionalType(t);
-		// A parameter with a default is nullable in its signature only; the body sees it filled in.
-		if (ts.isParameter(decl) && decl.questionToken) t = optionalType(t);
+		// A parameter with a default is nullable in its signature only; the body sees it filled in,
+		// except when held as `JSNullish<T>` (where `.optional` is nullable until narrowed/unwrapped).
+		if (ts.isParameter(decl) && (decl.questionToken || this.states.nullishHeld(decl))) t = optionalType(t);
 		if ((this.nullableDecls.has(sym) || this.states.looseDeclaration(decl) || this.states.lenientNullField(decl) || (ts.isPropertyAccessExpression(e) && (['String', 'Double', 'Boolean'].includes(t) || this.states.unsetMember(decl)) && this.states.shapeFieldOptional(sym))) && !isUntyped(spelledType(t))) t = optionalType(t);
 		if (this.holdingNull(t, e)) t = t.replace(/>$/, '?>');
 		if (this.overUntypedField(decl)) return 'Any?';
