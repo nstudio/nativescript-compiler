@@ -13,7 +13,7 @@ import { isLibDeclaration } from '../semantics/ast.ts';
 import { nullAs } from './expressions.ts';
 import { bigIntArithmetic, bigIntCompare, bigIntPlan, type BigIntInfix } from '../semantics/apis/bigint.ts';
 import { BIT_ASSIGNMENTS, addCall, bitOperation, concatOperand, numericThrowing, untypedBinary, untypedConversion } from '../semantics/apis/operators.ts';
-import { flattenStringConcat, planRelational } from '../semantics/lower.ts';
+import { flattenStringConcat, planArithmetic, planEquality, planLogicalAssign, planRelational } from '../semantics/lower.ts';
 import { isReadonlySignalProperty } from '../semantics/signals.ts';
 
 /** BigInt's operations the backend spells as an operator. */
@@ -99,31 +99,29 @@ export const operatorsMethods = {
 			case K.AsteriskAsteriskEqualsToken:
 				return `${target()} = ${RT.jsPow}(${this.heldOptionalNumber(e.left) ? this.undefinedAs(this.expr(e.left), 'Double') : this.isAny(e.left) ? this.toNumber(e.left) : l()}, ${this.toNumber(e.right)})`;
 			case K.QuestionQuestionEqualsToken:
-				return `if (${RT.jsIsNullish}(${l()})) ${this.assignment(e.left, e.right)}`;
 			case K.BarBarEqualsToken:
-				return `if (!${RT.jsTruthy}(${l()})) ${this.assignment(e.left, e.right)}`;
-			case K.AmpersandAmpersandEqualsToken:
-				return `if (${RT.jsTruthy}(${l()})) ${this.assignment(e.left, e.right)}`;
-			case K.PlusToken: {
-				if (this.isString(e.left) || this.isString(e.right)) return `${concatOperand(this, e.left, untyped)} + ${concatOperand(this, e.right, untyped)}`;
-				if (this.isAny(e.left) || this.isAny(e.right)) {
+			case K.AmpersandAmpersandEqualsToken: {
+				const plan = planLogicalAssign(op)!;
+				const guard = plan.op === '??=' ? `${RT.jsIsNullish}(${l()})` : plan.op === '||=' ? `!${RT.jsTruthy}(${l()})` : `${RT.jsTruthy}(${l()})`;
+				return `if (${guard}) ${this.assignment(e.left, e.right)}`;
+			}
+			case K.PlusToken:
+			case K.MinusToken:
+			case K.AsteriskToken:
+			case K.SlashToken:
+			case K.PercentToken:
+			case K.AsteriskAsteriskToken: {
+				const plan = planArithmetic(op, this.isString(e.left), this.isString(e.right), this.isAny(e.left), this.isAny(e.right))!;
+				if (plan.kind === 'concat') return `${concatOperand(this, e.left, untyped)} + ${concatOperand(this, e.right, untyped)}`;
+				if (plan.kind === 'dynamicAdd') {
 					const sum = addCall(this, e, untyped),
 						t = this.typeOf(e);
 					// An operand held untyped though TypeScript types it, and so the sum, a number or string.
 					return isUntyped(spelledType(t)) ? sum : this.fromAnyCode(sum, t);
 				}
-				return `${this.toNumber(e.left)} + ${this.toNumber(e.right)}`;
+				if (plan.op === '**') return `${RT.jsPow}(${this.toNumber(e.left)}, ${this.toNumber(e.right)})`;
+				return `${this.toNumber(e.left)} ${plan.op} ${this.toNumber(e.right)}`;
 			}
-			case K.MinusToken:
-				return `${this.toNumber(e.left)} - ${this.toNumber(e.right)}`;
-			case K.AsteriskToken:
-				return `${this.toNumber(e.left)} * ${this.toNumber(e.right)}`;
-			case K.SlashToken:
-				return `${this.toNumber(e.left)} / ${this.toNumber(e.right)}`;
-			case K.PercentToken:
-				return `${this.toNumber(e.left)} % ${this.toNumber(e.right)}`;
-			case K.AsteriskAsteriskToken:
-				return `${RT.jsPow}(${this.toNumber(e.left)}, ${this.toNumber(e.right)})`;
 			case K.EqualsEqualsEqualsToken:
 			case K.ExclamationEqualsEqualsToken:
 			case K.EqualsEqualsToken:
@@ -315,9 +313,9 @@ export const operatorsMethods = {
 
 	equality(this: Translator, e: ts.BinaryExpression): string {
 		const K = ts.SyntaxKind;
-		const op = e.operatorToken.kind;
-		const negate = op === K.ExclamationEqualsEqualsToken || op === K.ExclamationEqualsToken;
-		const strict = op === K.EqualsEqualsEqualsToken || op === K.ExclamationEqualsEqualsToken;
+		const eq = planEquality(e.operatorToken.kind, false, false, false, false)!;
+		const negate = eq.negated;
+		const strict = eq.kind === 'strict';
 		const isNullish = (x: ts.Expression) => x.kind === K.NullKeyword || (ts.isIdentifier(x) && x.text === 'undefined');
 		const [a, b] = [e.left, e.right];
 		const lt = this.typeOf(a);

@@ -9,26 +9,32 @@ import { isArrayLengthWrite } from '../semantics/throws.ts';
 import { byKey } from '../semantics/spelled.ts';
 import { isKit, isUntyped, spelledType } from '../semantics/types.ts';
 import { untypedUnary } from '../semantics/apis/operators.ts';
+import { planUnary } from '../semantics/lower.ts';
 
 export const assignmentMethods = {
 	prefix(this: Translator, e: ts.PrefixUnaryExpression): string {
 		const K = ts.SyntaxKind;
 		const thrown = untypedUnary(this, e);
 		if (thrown) return thrown;
-		switch (e.operator) {
-			case K.ExclamationToken: {
-				const cell = negatedCell(this.conditions, e.operand);
-				const operand = cell.step === 'bool' ? this.expr(cell.e) : this.cond(e.operand, cell);
-				return negation(operand);
+		const unary = planUnary(e.operator, this.typeOf(e.operand) === 'JSBigInt');
+		if (unary) {
+			switch (unary.kind) {
+				case 'not': {
+					const cell = negatedCell(this.conditions, e.operand);
+					const operand = cell.step === 'bool' ? this.expr(cell.e) : this.cond(e.operand, cell);
+					return negation(operand);
+				}
+				// `-0` is negative zero; Swift reads the literal `-0` as an integer zero.
+				case 'negate':
+					if (unary.bigInt) return `(-${this.expr(e.operand)})`;
+					return ts.isNumericLiteral(e.operand) ? (Number(e.operand.text) === 0 ? '-0.0' : `-${this.expr(e.operand)}`) : `-${this.toNumber(e.operand)}`;
+				case 'plus':
+					return this.toNumber(e.operand);
+				case 'bitNot':
+					return unary.bigInt ? `(~${this.expr(e.operand)})` : `${RT.jsBitNot}(${this.toNumber(e.operand)})`;
 			}
-			// `-0` is negative zero; Swift reads the literal `-0` as an integer zero.
-			case K.MinusToken:
-				if (this.typeOf(e.operand) === 'JSBigInt') return `(-${this.expr(e.operand)})`;
-				return ts.isNumericLiteral(e.operand) ? (Number(e.operand.text) === 0 ? '-0.0' : `-${this.expr(e.operand)}`) : `-${this.toNumber(e.operand)}`;
-			case K.PlusToken:
-				return this.toNumber(e.operand);
-			case K.TildeToken:
-				return this.typeOf(e.operand) === 'JSBigInt' ? `(~${this.expr(e.operand)})` : `${RT.jsBitNot}(${this.toNumber(e.operand)})`;
+		}
+		switch (e.operator) {
 			case K.PlusPlusToken:
 			case K.MinusMinusToken: {
 				const member = this.untypedMember(e.operand);

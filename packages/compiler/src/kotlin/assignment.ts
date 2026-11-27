@@ -10,6 +10,7 @@ import { assignedTo, negatedCell } from '../semantics/placement.ts';
 import { isStatic } from '../semantics/throws.ts';
 import { symbolField, isPromiseType } from '../semantics/spelled.ts';
 import { untypedUnary } from '../semantics/apis/operators.ts';
+import { planUnary } from '../semantics/lower.ts';
 
 export const assignmentMethods = {
 	/** The 1 that `++` and `--` step a number or a BigInt by. */
@@ -21,18 +22,23 @@ export const assignmentMethods = {
 		const K = ts.SyntaxKind;
 		const thrown = untypedUnary(this, e);
 		if (thrown) return thrown;
-		switch (e.operator) {
-			case K.ExclamationToken: {
-				const cell = negatedCell(this.conditions, e.operand);
-				return negated(cell.step === 'bool' ? this.expr(cell.e) : this.cond(e.operand, cell));
+		const unary = planUnary(e.operator, this.typeOf(e.operand) === 'JSBigInt');
+		if (unary) {
+			switch (unary.kind) {
+				case 'not': {
+					const cell = negatedCell(this.conditions, e.operand);
+					return negated(cell.step === 'bool' ? this.expr(cell.e) : this.cond(e.operand, cell));
+				}
+				case 'negate':
+					if (unary.bigInt) return `(-${this.expr(e.operand)})`;
+					return ts.isNumericLiteral(e.operand) ? `-${this.expr(e.operand)}` : `-(${this.toNumber(e.operand)})`;
+				case 'plus':
+					return this.toNumber(e.operand);
+				case 'bitNot':
+					return unary.bigInt ? `${this.expr(e.operand)}.inv()` : `${RT.jsBitNot}(${this.toNumber(e.operand)})`;
 			}
-			case K.MinusToken:
-				if (this.typeOf(e.operand) === 'JSBigInt') return `(-${this.expr(e.operand)})`;
-				return ts.isNumericLiteral(e.operand) ? `-${this.expr(e.operand)}` : `-(${this.toNumber(e.operand)})`;
-			case K.PlusToken:
-				return this.toNumber(e.operand);
-			case K.TildeToken:
-				return this.typeOf(e.operand) === 'JSBigInt' ? `${this.expr(e.operand)}.inv()` : `${RT.jsBitNot}(${this.toNumber(e.operand)})`;
+		}
+		switch (e.operator) {
 			case K.PlusPlusToken:
 			case K.MinusMinusToken: {
 				const sign = e.operator === K.PlusPlusToken ? '+' : '-';

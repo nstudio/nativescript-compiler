@@ -13,7 +13,7 @@ import { constClassExpr, hasInstanceClass } from '../semantics/classes.ts';
 import { isUntyped, spelledType } from '../semantics/types.ts';
 import { bigIntArithmetic, bigIntCompare, bigIntPlan, type BigIntInfix } from '../semantics/apis/bigint.ts';
 import { BIT_ASSIGNMENTS, addCall, bitOperation, concatOperand, numericThrowing, untypedBinary, untypedConversion } from '../semantics/apis/operators.ts';
-import { planRelational } from '../semantics/lower.ts';
+import { planArithmetic, planEquality, planLogicalAssign, planRelational, typeofComparison } from '../semantics/lower.ts';
 
 /** BigInt's operations the backend spells as an operator. */
 const BIGINT_INFIX: { readonly [Op in BigIntInfix]: string } = { add: '+', subtract: '-', multiply: '*', and: '&', or: '|', xor: '^' };
@@ -117,29 +117,29 @@ export const operatorsMethods = {
 				if (readWrite(e, this.checker)?.stored ?? true) return assigned(() => `${l()} ?? ${(isOptional(this.declaredTypeOf(e.left) ?? this.typeOf(e.left)) ? this.maybeUndefined(e.right) : null) ?? this.stored(e.right, e.left, this.typeOf(e.left).replace(/\?$/, ''))}`);
 				return this.marks.blockCode(`if ${this.tryPrefix(e.left)}${RT.jsIsNullish}(${l()}) { ${this.tryPrefix(e.right)}${target()} = ${(isOptional(this.declaredTypeOf(e.left) ?? this.typeOf(e.left)) ? this.maybeUndefined(e.right) : null) ?? this.stored(e.right, e.left, this.typeOf(e.left).replace(/\?$/, ''))} }`);
 			case K.BarBarEqualsToken:
-				return this.marks.blockCode(`if !${RT.jsTruthy}(${this.tryPrefix(e.left)}${l()}) { ${this.tryPrefix(e)}${target()} = ${this.stored(e.right, e.left, this.typeOf(e.left))} }`);
-			case K.AmpersandAmpersandEqualsToken:
-				return this.marks.blockCode(`if ${RT.jsTruthy}(${this.tryPrefix(e.left)}${l()}) { ${this.tryPrefix(e)}${target()} = ${this.stored(e.right, e.left, this.typeOf(e.left))} }`);
-			case K.PlusToken: {
-				if (this.isString(e.left) || this.isString(e.right)) return this.marks.infix(concatOperand(this, e.left, untyped), '+', concatOperand(this, e.right, untyped));
-				if (this.isAny(e.left) || this.isAny(e.right)) {
+			case K.AmpersandAmpersandEqualsToken: {
+				const plan = planLogicalAssign(op)!;
+				return this.marks.blockCode(`if ${plan.op === '||=' ? '!' : ''}${RT.jsTruthy}(${this.tryPrefix(e.left)}${l()}) { ${this.tryPrefix(e)}${target()} = ${this.stored(e.right, e.left, this.typeOf(e.left))} }`);
+			}
+			case K.PlusToken:
+			case K.MinusToken:
+			case K.AsteriskToken:
+			case K.SlashToken:
+			case K.PercentToken:
+			case K.AsteriskAsteriskToken: {
+				const plan = planArithmetic(op, this.isString(e.left), this.isString(e.right), this.isAny(e.left), this.isAny(e.right))!;
+				if (plan.kind === 'concat') return this.marks.infix(concatOperand(this, e.left, untyped), '+', concatOperand(this, e.right, untyped));
+				if (plan.kind === 'dynamicAdd') {
 					const sum = addCall(this, e, untyped),
 						t = this.typeOf(e);
 					return isUntyped(spelledType(t)) ? sum : this.fromAnyCode(sum, t);
 				}
-				return this.marks.infix(this.toNumber(e.left), '+', this.toNumber(e.right));
+				// Integer literals on both sides would divide as Int where no operand pins Double (`Double(1 / 8)`, `js(16 / 9)`).
+				if (plan.op === '/' && numericLiteralOnly(e.left) && numericLiteralOnly(e.right)) return `(${this.expr(e.left)} as Double) / ${this.expr(e.right)}`;
+				if (plan.op === '%') return `${RT.jsMod}(${this.toNumber(e.left)}, ${this.toNumber(e.right)})`;
+				if (plan.op === '**') return `${RT.jsPow}(${this.toNumber(e.left)}, ${this.toNumber(e.right)})`;
+				return this.marks.infix(this.toNumber(e.left), plan.op, this.toNumber(e.right));
 			}
-			case K.MinusToken:
-				return this.marks.infix(this.toNumber(e.left), '-', this.toNumber(e.right));
-			case K.AsteriskToken:
-				return this.marks.infix(this.toNumber(e.left), '*', this.toNumber(e.right));
-			// Integer literals on both sides would divide as Int where no operand pins Double (`Double(1 / 8)`, `js(16 / 9)`).
-			case K.SlashToken:
-				return numericLiteralOnly(e.left) && numericLiteralOnly(e.right) ? `(${this.expr(e.left)} as Double) / ${this.expr(e.right)}` : this.marks.infix(this.toNumber(e.left), '/', this.toNumber(e.right));
-			case K.PercentToken:
-				return `${RT.jsMod}(${this.toNumber(e.left)}, ${this.toNumber(e.right)})`;
-			case K.AsteriskAsteriskToken:
-				return `${RT.jsPow}(${this.toNumber(e.left)}, ${this.toNumber(e.right)})`;
 			case K.EqualsEqualsEqualsToken:
 			case K.ExclamationEqualsEqualsToken:
 			case K.EqualsEqualsToken:
@@ -409,23 +409,22 @@ export const operatorsMethods = {
 	 * there, a nil check. Null where the test is not one of presence.
 	 */
 	typeofPresence(this: Translator, e: ts.BinaryExpression): string | null {
-		const strip = (x: ts.Expression) => ts.skipOuterExpressions(x, ts.OuterExpressionKinds.Parentheses);
-		const [l, r] = [strip(e.left), strip(e.right)];
-		const [t, lit] = ts.isTypeOfExpression(l) && ts.isStringLiteralLike(r) ? [l, r] : ts.isTypeOfExpression(r) && ts.isStringLiteralLike(l) ? [r, l] : [null, null];
-		if (!t || !lit) return null;
+		const cmp = typeofComparison(e);
+		if (!cmp) return null;
+		const left = ts.skipOuterExpressions(e.left, ts.OuterExpressionKinds.Parentheses);
+		const t = (ts.isTypeOfExpression(left) ? left : ts.skipOuterExpressions(e.right, ts.OuterExpressionKinds.Parentheses)) as ts.TypeOfExpression;
 		const c = this.typeofCell(t);
-		if (c.cell !== 'presence' || (lit.text !== 'undefined' && lit.text !== c.type)) return null;
-		const negate = e.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken || e.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsToken;
-		return `${c.tested} ${(lit.text === 'undefined') !== negate ? '==' : '!='} nil`;
+		if (c.cell !== 'presence' || (cmp.tag !== 'undefined' && cmp.tag !== c.type)) return null;
+		return `${c.tested} ${(cmp.tag === 'undefined') !== cmp.negated ? '==' : '!='} nil`;
 	},
 
 	equality(this: Translator, e: ts.BinaryExpression): string {
 		this.refuseUnheldIdentity(e.left);
 		this.refuseUnheldIdentity(e.right);
 		const K = ts.SyntaxKind;
-		const op = e.operatorToken.kind;
-		const negate = op === K.ExclamationEqualsEqualsToken || op === K.ExclamationEqualsToken;
-		const strict = op === K.EqualsEqualsEqualsToken || op === K.ExclamationEqualsEqualsToken;
+		const eq = planEquality(e.operatorToken.kind, false, false, false, false)!;
+		const negate = eq.negated;
+		const strict = eq.kind === 'strict';
 		const isNullish = (x: ts.Expression) => x.kind === K.NullKeyword || (ts.isIdentifier(x) && x.text === 'undefined');
 		const [a, b] = [e.left, e.right];
 		const lt = this.typeOf(a);
