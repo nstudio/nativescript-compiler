@@ -239,10 +239,7 @@ export const globalCallsMethods = {
 		return !decl || decl.getSourceFile().isDeclarationFile;
 	},
 
-	symbolName(this: Translator, e: ts.Expression): string {
-		const t = this.checker.getTypeAtLocation(e);
-		return (t.aliasSymbol ?? t.getSymbol())?.getName() ?? '';
-	},
+	/* symbolName is installed from semantics/lowering-methods.ts */
 
 	/** A navigation (`$navigateTo(Page, { props })`) to a component, with the props its options give. */
 	navigate(this: Translator, e: ts.CallExpression, component: string, options: ts.Expression | undefined): string {

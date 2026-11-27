@@ -274,3 +274,23 @@ export function droppedProtocolMemberNames(
 	}
 	return out;
 }
+
+/** Whether dotted version `a` is newer than `b` (when `preferStable` is set, releases without `-` outrank prereleases). */
+export function newerVersion(a: string, b: string, preferStable = false): boolean {
+	if (preferStable) {
+		const sa = !/-/.test(a),
+			sb = !/-/.test(b);
+		if (sa !== sb) return sa;
+	}
+	const key = (v: string) => (v.match(/\d+/g) ?? []).map(Number);
+	const ka = key(a),
+		kb = key(b);
+	for (let i = 0; i < Math.max(ka.length, kb.length); i++) if ((ka[i] ?? 0) !== (kb[i] ?? 0)) return (ka[i] ?? 0) > (kb[i] ?? 0);
+	return false;
+}
+
+/** The unwrapped initializer of an untyped variable declaration reached from `n` (declaration or identifier), or null. */
+export function untypedVariableInitializer(n: ts.Node, resolve: (id: ts.Identifier) => ts.Symbol | undefined): ts.Expression | null {
+	const d = ts.isVariableDeclaration(n) ? n : ts.isIdentifier(n) ? (ts.isVariableDeclaration(n.parent) && n.parent.name === n ? n.parent : resolve(n)?.valueDeclaration) : undefined;
+	return d && ts.isVariableDeclaration(d) && !d.type && d.initializer ? ts.skipOuterExpressions(d.initializer, ts.OuterExpressionKinds.Parentheses) : null;
+}

@@ -360,12 +360,7 @@ export const optionalChainsMethods = {
 	 * A string, number or boolean read `e` of type `t` as the optional it holds, where it converts undefined (a read, or
 	 * a choice one of whose branches does); null where it converts nothing.
 	 */
-	convertedOptional(this: Translator, e: ts.Expression, t: string): string | null {
-		if (this.library) return null;
-		const inner = ts.skipOuterExpressions(e);
-		if (ts.isConditionalExpression(inner) && this.typeOf(inner) === t && [inner.whenTrue, inner.whenFalse].some((x) => this.undefinedConverted(this.coerce(ts.skipOuterExpressions(x, ts.OuterExpressionKinds.Parentheses), t)))) return this.coerce(inner, optionalType(t));
-		return this.undefinedConverted(this.expr(ts.skipOuterExpressions(e, ts.OuterExpressionKinds.Parentheses)));
-	},
+	/* convertedOptional is installed from semantics/lowering-methods.ts */
 
 	/**
 	 * App and plugin code's string, number or boolean read that converts undefined (`(x ?? "undefined")`): the optional it

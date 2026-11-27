@@ -297,11 +297,6 @@ export const componentMethods = {
 		return this.framework.hooks.componentStatics?.(this, cls) ?? [];
 	},
 
-	/** A component created as a root view (bootstrap, route, dialog): made and rendered as the framework makes it. */
-	rootView(this: Translator, cls: ts.ClassDeclaration, type: string, make: string): string {
-		return this.framework.hooks.wrapRootView ? this.framework.hooks.wrapRootView(this, cls, type, make) : make;
-	},
-
 	/** What a component's method returning an array (a loop's items) holds, as Swift spells it. */
 	memberElementType(this: Translator, cls: ts.ClassDeclaration, name: string): string | null {
 		const m = cls.members.find((x): x is ts.MethodDeclaration => ts.isMethodDeclaration(x) && ts.isIdentifier(x.name) && x.name.text === name);

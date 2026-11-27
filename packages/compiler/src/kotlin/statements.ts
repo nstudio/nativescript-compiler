@@ -114,17 +114,7 @@ export const statementsMethods = {
 		return forward;
 	},
 
-	block(this: Translator, b: ts.Statement, base?: string): string {
-		if (base === undefined) base = this.indent;
-		const saved = this.indent;
-		this.indent = base + '    ';
-		try {
-			const body = this.statements(ts.isBlock(b) ? [...b.statements] : [b]);
-			return `{\n${body.join('\n')}\n${base}}`;
-		} finally {
-			this.indent = saved;
-		}
-	},
+	/* block is installed from semantics/lowering-methods.ts */
 
 	stmt(this: Translator, s: ts.Statement): string {
 		let code: string;

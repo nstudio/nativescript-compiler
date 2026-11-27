@@ -6,9 +6,9 @@ the one Gradle cached for kit-android).
 
 ## What runs where
 
-CI jobs are those of `.github/workflows/compiler.yml` (every push and pull request touching the compiler) unless named
-otherwise; `nightly` is `compiler-nightly.yml`, which a pull request also runs when labelled `test262`, `fuzz` or
-`decision-parity`.
+CI jobs are those of `.github/workflows/ci.yml` (every push and pull request) unless named
+otherwise; `nightly` is `.github/workflows/compiler-nightly.yml`, which runs on a nightly schedule, via manual
+`workflow_dispatch`, and on pull requests labelled `nightly`, `test262`, `fuzz`, or `decision-parity`.
 
 | Harness | Command | CI | Cost |
 |---|---|---|---|

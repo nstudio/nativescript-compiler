@@ -1,7 +1,7 @@
 {
-	"sameName": 269,
-	"identicalBodies": 15,
-	"decisionTwins": 12,
+	"sameName": 248,
+	"identicalBodies": 0,
+	"decisionTwins": 6,
 	"identicalDecisionTwins": 0,
-	"sharedLines": 1353
+	"sharedLines": 1310
 }

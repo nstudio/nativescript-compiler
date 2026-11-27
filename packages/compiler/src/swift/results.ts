@@ -112,11 +112,6 @@ export const resultsMethods = {
 		}
 		return this.undefinedAs(slot.raw, t, slot.target);
 	},
-	/** The slot of the await `e` is, where its continuation holds the value optional. */
-	awaited(this: Translator, e: ts.Expression): AwaitSlot | undefined {
-		return this.awaitSlots.get(ts.skipOuterExpressions(e, ts.OuterExpressionKinds.Parentheses));
-	},
-
 	/** A local Swift holds optional though its type says a value (`const x = f()` of a call that may give nothing). */
 	heldOptionalLocal(this: Translator, e: ts.Expression, type: string): boolean {
 		e = ts.skipOuterExpressions(e, ts.OuterExpressionKinds.Parentheses);

@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { inflateRawSync } from 'node:zlib';
+import { newerVersion } from '../../semantics/lang.ts';
 
 /**
  * Java signatures for Android APIs, read from the class files themselves: the
@@ -293,18 +294,7 @@ export function parseClass(b: Buffer): JavaClass {
 
 // ---- The classpath -----------------------------------------------------------------------------
 
-function versionKey(v: string): number[] {
-	return v.split(/[.-]/).map((x) => (/^\d+$/.test(x) ? Number(x) : -1));
-}
-
-export function newer(a: string, b: string): boolean {
-	const stable = (v: string) => !/-/.test(v);
-	if (stable(a) !== stable(b)) return stable(a);
-	const ka = versionKey(a),
-		kb = versionKey(b);
-	for (let i = 0; i < Math.max(ka.length, kb.length); i++) if ((ka[i] ?? 0) !== (kb[i] ?? 0)) return (ka[i] ?? 0) > (kb[i] ?? 0);
-	return false;
-}
+export const newer = (a: string, b: string): boolean => newerVersion(a, b, true);
 
 /** The SDK platform's android.jar: the compile SDK's when installed, else the newest. */
 export function androidJar(compileSdk: number): string {

@@ -11,7 +11,7 @@ import { libFunctionValueKind } from '../semantics/apis/statics.ts';
 import { ERRORS, isLibGlobal } from '../semantics/globals.ts';
 import { spell, ident, isCompared, isNullable, isThisParameter, kotlinString, numberLiteral, optionalType, testsMissing, scriptPrimitive, RT, assertedReader } from './syntax.ts';
 import type { Translator } from './translator.ts';
-import { observerSlot, place, receiverCell, receiverSlot, isEnumObject, nullishField, type ReceiverCell } from '../semantics/placement.ts';
+import { receiverCell, receiverSlot, isEnumObject, nullishField, type ReceiverCell } from '../semantics/placement.ts';
 import { accessedDeclaration, augmentedPropertyRead, functionProperty, wellKnownMember, isSelf, literalMethod, uncheckedMatch } from '../semantics/lang.ts';
 import { convertedRead, onlyNull } from '../semantics/states/predicates.ts';
 import { isLibDeclaration, isWriteTarget, notIterable } from '../semantics/ast.ts';
@@ -284,7 +284,7 @@ export const accessMethods = {
 		const describedClass = this.library && symbol?.valueDeclaration?.getSourceFile().isDeclarationFile && !isLibDeclaration(symbol.valueDeclaration) && !this.native?.isNativeDeclaration(symbol.valueDeclaration) ? this.compiledClasses().get(this.checker.getNonNullableType(this.checker.getTypeAtLocation(target)).getSymbol()?.name ?? '') : undefined;
 		// Library mode: a member TypeScript does not find on the type (lenient code reading what the type omits): read by name.
 		const unknown = this.library && !symbol && !e.name.text.startsWith('#') && this.isObjectRef(target);
-		if (((describedClass && !this.compiledMember(describedClass, name)) || unknown) && !(ts.isCallExpression(e.parent) && e.parent.expression === e && !e.parent.questionDotToken)) {
+		if (((describedClass && !this.declaresCompiledMember(describedClass, name)) || unknown) && !(ts.isCallExpression(e.parent) && e.parent.expression === e && !e.parent.questionDotToken)) {
 			const t = this.typeOf(e);
 			const code = `${e.questionDotToken || inChain ? RT.jsGetIfPresent : RT.jsGet}(${this.expr(target)}, ${kotlinString(name)})`;
 			// Called (`x.callback?.(…)`): the function as script holds it, which the call reads.
@@ -310,7 +310,7 @@ export const accessMethods = {
 		const plain = `${receiver}${dot}${ident(name)}`;
 		const read = dot === '.' ? this.marks.marked(plain, { op: 'member', of: this.marks.valueOf(receiver), name }) : plain;
 		// A non-strict app's optional member is held optional though its type says present: a value read reads its undefined.
-		if ((this.optionalMember(e) || (!e.questionDotToken && !(e.flags & ts.NodeFlags.OptionalChain) && !!symbol && this.states.shapeFieldOptional(symbol))) && !isWriteTarget(e) && !this.nullOk.has(e) && ['String', 'Double', 'Boolean'].includes(this.typeOf(e))) return this.undefinedAs(read, this.typeOf(e));
+		if ((this.isLenientOptionalMember(e) || (!e.questionDotToken && !(e.flags & ts.NodeFlags.OptionalChain) && !!symbol && this.states.shapeFieldOptional(symbol))) && !isWriteTarget(e) && !this.nullOk.has(e) && ['String', 'Double', 'Boolean'].includes(this.typeOf(e))) return this.undefinedAs(read, this.typeOf(e));
 		return this.narrowed(e, read);
 	},
 
@@ -382,7 +382,7 @@ export const accessMethods = {
 		// Library code reads its own interfaces' members by key (`jsGet`): they have no Kotlin field to read as held.
 		if (ts.isPropertyAccessExpression(x) && this.library && this.resolve(x.name)?.declarations?.some((d) => ts.isPropertySignature(d) && !isLibDeclaration(d))) return null;
 		if (ts.isPropertyAccessExpression(x)) {
-			if (!(this.optionalMember(x) || (!this.typeOf(x).endsWith('?') && !!this.declaredTypeOf(x)?.endsWith('?')))) return null;
+			if (!(this.isLenientOptionalMember(x) || (!this.typeOf(x).endsWith('?') && !!this.declaredTypeOf(x)?.endsWith('?')))) return null;
 			return this.isExpando(x) ? this.fromAny(`${RT.jsGet}(${this.expr(x.expression)}, ${kotlinString(x.name.text)})`, optionalType(this.typeOf(x))) : `${this.expr(x.expression)}.${ident(x.name.text)}`;
 		}
 		const d = ts.isIdentifier(x) ? this.resolve(x)?.valueDeclaration : undefined;
@@ -418,7 +418,7 @@ export const accessMethods = {
 	},
 
 	/** A non-strict app's read of an object type's optional member (`o.a`, `a?: string`), which Kotlin holds optional. */
-	optionalMember(this: Translator, x: ts.PropertyAccessExpression): boolean {
+	isLenientOptionalMember(this: Translator, x: ts.PropertyAccessExpression): boolean {
 		if (!this.lenientApp || this.library || x.questionDotToken || x.flags & ts.NodeFlags.OptionalChain || this.typeOf(x).endsWith('?')) return false;
 		const d = this.resolve(x.name)?.valueDeclaration;
 		return !!d && ts.isPropertySignature(d) && !!d.questionToken && !d.getSourceFile().isDeclarationFile;
@@ -572,11 +572,6 @@ export const accessMethods = {
 		if (this.library) return null;
 		const holder = ts.findAncestor(e.parent, (p) => !ts.isParenthesizedExpression(p));
 		return holder && ts.isVariableDeclaration(holder) ? this.widerAsserted(holder) : null;
-	},
-
-	/** `x` read by an equality or `typeof` (`ObserverSlot`). */
-	observe(this: Translator, x: ts.Expression, read: 'untyped' | 'asIs' = 'untyped'): string {
-		return place(this.placement, x, observerSlot(this.placement, read));
 	},
 
 	/**

@@ -88,7 +88,7 @@ export const typeTestsMethods = {
 		if (!this.library) {
 			const x = ts.skipOuterExpressions(e, ts.OuterExpressionKinds.Parentheses);
 			if (this.lenientApp && ts.isIdentifier(x) && this.declaredTypeOf(x) === optionalType(t)) return true;
-			if (ts.isPropertyAccessExpression(x) && this.optionalMember(x)) return true;
+			if (ts.isPropertyAccessExpression(x) && this.isLenientOptionalMember(x)) return true;
 			if (this.lenientMissingMember(x)) return true;
 			const d = ts.isCallExpression(x) ? this.checker.getResolvedSignature(x)?.getDeclaration() : ts.isIdentifier(x) || ts.isPropertyAccessExpression(x) ? this.resolve(ts.isPropertyAccessExpression(x) ? x.name : x)?.valueDeclaration : undefined;
 			return !!d && !ts.isJSDocSignature(d) && this.states.looseDeclaration(d);

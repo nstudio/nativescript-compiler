@@ -137,12 +137,6 @@ export const namesMethods = {
 		return !!d && ts.isModuleDeclaration(d) && !d.getSourceFile().isDeclarationFile;
 	},
 
-	/** The kit class a mixin class (`applyMixins(View, [Extended])`) is applied to. */
-	mixinOf(this: Translator, sym: ts.Symbol | undefined): string | null {
-		const d = sym?.valueDeclaration;
-		return d && ts.isClassDeclaration(d) ? this.patterns.mixinTarget(d) : null;
-	},
-
 	/**
 	 * The name a translated declaration has: an import renamed (`install as
 	 * installGestureHandler`) names its export, and a module-level name that
@@ -158,11 +152,6 @@ export const namesMethods = {
 		// Core's declarations are the kit's names, whatever the import calls them (`requestAnimationFrame as raf`).
 		if (!alias || !decl || (decl.getSourceFile().isDeclarationFile && !isCoreDeclaration(decl)) || target.name === 'default' || target.flags & ts.SymbolFlags.ValueModule) return e.text;
 		return target.name;
-	},
-
-	/** A module-level function or variable's Swift name. */
-	topName(this: Translator, decl: ts.Node, name: string): string {
-		return this.topNames().get(decl) ?? name;
 	},
 
 	/** `name` in `file`'s module: the shortest end of its path no other name has taken (`label__index`, else `label__two_index`). */

@@ -2,7 +2,7 @@
 import ts from 'typescript';
 import { cast, destructuringSource, ident, isNullable, jsObjectCode, kotlinString, optionalType, splitTopLevel, spell, RT } from './syntax.ts';
 import type { ShapeField, Translator } from './translator.ts';
-import { assertedOperand, evolvingElementContext, intersectionAliasMembers, isTypeParameterType, literalKey, openSpreadType, spreadOperand, unquoted, wellKnownMember } from '../semantics/lang.ts';
+import { assertedOperand, evolvingElementContext, intersectionAliasMembers, isTypeParameterType, literalKey, openSpreadType, spreadOperand, unquoted, untypedVariableInitializer, wellKnownMember } from '../semantics/lang.ts';
 import { holdsNil, literalNotes, signatureField, shapePlanOfLiteral, spelledOptional, spreadElementNeedsMap, resultShapeNamed } from '../semantics/shapes.ts';
 import { structural, type Structural, type StructuralFacts } from '../semantics/conversion.ts';
 import { heldOf, isKit, isUntyped, parseNativeType, spelledType } from '../semantics/types.ts';
@@ -570,9 +570,7 @@ export const literalsMethods = {
 
 	/** A variable declared without a type whose value is a read of a signal holding null (`const card = this.morning()`). */
 	givenNullSignalValue(this: Translator, n: ts.Node): boolean {
-		const d = ts.isVariableDeclaration(n) ? n : ts.isIdentifier(n) ? (ts.isVariableDeclaration(n.parent) && n.parent.name === n ? n.parent : this.resolve(n)?.valueDeclaration) : undefined;
-		if (!d || !ts.isVariableDeclaration(d) || d.type || !d.initializer) return false;
-		const read = ts.skipOuterExpressions(d.initializer, ts.OuterExpressionKinds.Parentheses);
-		return ts.isCallExpression(read) && !read.arguments.length && /^Signal<.*\?>$/.test(this.typeOf(read.expression));
+		const read = untypedVariableInitializer(n, (id) => this.resolve(id));
+		return !!read && ts.isCallExpression(read) && !read.arguments.length && /^Signal<.*\?>$/.test(this.typeOf(read.expression));
 	},
 };

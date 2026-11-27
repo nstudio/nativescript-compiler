@@ -110,16 +110,7 @@ export const placementMethods = {
 		return !/[?!]$/.test(t);
 	},
 
-	/** A `nullishRead` value as its `JSNullish<T>`. */
-	nullishCode(this: Translator, e: ts.Expression): string {
-		if (!ts.isCallExpression(e) && !ts.isPropertyAccessExpression(e)) return this.refName(e as ts.Identifier);
-		this.nullishCalls.add(e);
-		try {
-			return this.expr(e);
-		} finally {
-			this.nullishCalls.delete(e);
-		}
-	},
+	/* nullishCode is installed from semantics/lowering-methods.ts */
 
 	/** An app generic class's instance where the same class with an `any` type argument is wanted: Swift's generic classes are invariant. */
 	checkAnyArgument(this: Translator, e: ts.Expression, target: string): void {

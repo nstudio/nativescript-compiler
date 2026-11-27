@@ -2,7 +2,7 @@
 import ts from 'typescript';
 import { balanced, functionParts, hasTopLevelArrow, isFunctionType, isOptional, splitTopLevel, swiftString, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
-import { accessedDeclaration, evolvingElementContext, isSelf } from '../semantics/lang.ts';
+import { accessedDeclaration, evolvingElementContext, isSelf, untypedVariableInitializer } from '../semantics/lang.ts';
 import { hasModifier, isWriteTarget, notIterable } from '../semantics/ast.ts';
 import { rethrowUnlessRefused } from '../semantics/refusals.ts';
 import { isUntyped, spelledType } from '../semantics/types.ts';
@@ -240,9 +240,8 @@ export const lenientMethods = {
 
 	/** A variable declared without a type whose value is a read of a signal holding null (`const card = this.morning()`). */
 	givenNullSignalValue(this: Translator, n: ts.Node): boolean {
-		const d = ts.isVariableDeclaration(n) ? n : ts.isIdentifier(n) ? (ts.isVariableDeclaration(n.parent) && n.parent.name === n ? n.parent : this.resolve(n)?.valueDeclaration) : undefined;
-		if (!d || !ts.isVariableDeclaration(d) || d.type || !d.initializer) return false;
-		return this.nullSignalRead(ts.skipOuterExpressions(d.initializer, ts.OuterExpressionKinds.Parentheses));
+		const init = untypedVariableInitializer(n, (id) => this.resolve(id));
+		return !!init && this.nullSignalRead(init);
 	},
 
 	nullSignalRead(this: Translator, e: ts.Expression): boolean {

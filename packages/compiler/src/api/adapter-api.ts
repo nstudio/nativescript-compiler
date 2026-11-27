@@ -609,8 +609,8 @@ export interface KotlinTranslatorView extends TranslatorView {
 
 // ---- Program, modules and runtime ----
 
-/** A refusal's class: JavaScript a compiled release cannot run by design (`limit`), or code the compiler does not translate yet (`gap`). */
-export type RefusalClass = 'limit' | 'gap';
+/** A refusal's class: fundamentally incompatible with an engine-free release (`limit`), technically possible but intentionally excluded by design (`excluded`), or not translated yet (`gap`). */
+export type RefusalClass = 'limit' | 'excluded' | 'gap';
 
 /** A kind of refusal: its title, suggestion and example, as a build's refusal report shows them. */
 export interface RefusalKind {
@@ -664,7 +664,6 @@ export type CompilerRefusalId =
 	| 'class-expression'
 	| 'named-function-expression'
 	| 'unsupported-base'
-	| 'worker'
 	| 'delete-member'
 	| 'index-type'
 	| 'native'

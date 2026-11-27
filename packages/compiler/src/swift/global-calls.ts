@@ -158,11 +158,6 @@ export const globalCallsMethods = {
 		return !this.library && decl ? this.core.moduleCall(decl, call, this.typeOf(e), e) : call;
 	},
 
-	symbolName(this: Translator, e: ts.Expression): string {
-		const t = this.checker.getTypeAtLocation(e);
-		return (t.aliasSymbol ?? t.getSymbol())?.getName() ?? '';
-	},
-
 	/** A navigation (`$navigateTo(Page, { props })`) to a component, with the props its options give. */
 	navigate(this: Translator, e: ts.CallExpression, component: string, options: ts.Expression | undefined): string {
 		const info = this.components.get(component);

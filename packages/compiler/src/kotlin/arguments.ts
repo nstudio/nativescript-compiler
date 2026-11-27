@@ -78,7 +78,7 @@ export const argumentsMethods = {
 	},
 
 	/** A function held in a variable, parameter or field (an overloaded method's implementation bound): a Kotlin function type, which has no defaults. */
-	heldFunction(this: Translator, callee: ts.Expression): boolean {
+	isHeldFunctionValue(this: Translator, callee: ts.Expression): boolean {
 		const name = ts.isPropertyAccessExpression(callee) ? callee.name : ts.isIdentifier(callee) ? callee : null;
 		const d = name && this.checker.getSymbolAtLocation(name)?.valueDeclaration;
 		return !!d && !d.getSourceFile().isDeclarationFile && (ts.isVariableDeclaration(d) || ts.isParameter(d) || ts.isPropertyDeclaration(d));
@@ -141,7 +141,7 @@ export const argumentsMethods = {
 		if (restAt >= 0 && appDeclared && covered <= restAt) out.push(`${this.restType(params[restAt])}()`);
 		const decl = sig?.getDeclaration();
 		// A function value takes every parameter; a plugin's call (its code unchecked) may leave out one the callee requires.
-		const missing = count !== undefined || restAt >= 0 || !decl || ts.isJSDocSignature(decl) ? undefined : ts.isFunctionTypeNode(decl) || ts.isCallSignatureDeclaration(decl) || ts.isArrowFunction(decl) || ts.isFunctionExpression(decl) || (ts.isCallExpression(e) && this.heldFunction(e.expression)) ? 'empty' : !this.library && this.inPluginFile(e) ? 'undefined' : undefined;
+		const missing = count !== undefined || restAt >= 0 || !decl || ts.isJSDocSignature(decl) ? undefined : ts.isFunctionTypeNode(decl) || ts.isCallSignatureDeclaration(decl) || ts.isArrowFunction(decl) || ts.isFunctionExpression(decl) || (ts.isCallExpression(e) && this.isHeldFunctionValue(e.expression)) ? 'empty' : !this.library && this.inPluginFile(e) ? 'undefined' : undefined;
 		for (let k = covered; missing && k < params.length; k++) {
 			const s = this.missingSlot(e, params[k], k, missing);
 			if (!s) break;

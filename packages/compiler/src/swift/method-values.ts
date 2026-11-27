@@ -3,7 +3,7 @@ import ts from 'typescript';
 import { ident, isMethodValue, optionalType, scriptLength, swiftString, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { forwardedSetter, inferredFunctionName, methodValues } from '../semantics/lang.ts';
-import { thisNodes, declaresThis } from '../semantics/ast.ts';
+import { declaresThis } from '../semantics/ast.ts';
 import { isUntyped, spelledType } from '../semantics/types.ts';
 import { isStatic } from '../semantics/throws.ts';
 
@@ -145,22 +145,5 @@ export const methodValuesMethods = {
 		const method = `{ (__this: Any?, __a: [Any?]) throws -> Any? in ${binds.join('; ')}${binds.length ? '; ' : ''}${result} }`;
 		const fnName = !this.library ? inferredFunctionName(fn) : '';
 		return fnName ? `${RT.jsMethodFunction}(${swiftString(fnName)}, ${scriptLength(fn)}, ${method})` : `(${method} as JSMethod)`;
-	},
-
-	/** Runs `body` with `this` in `fn` (and in the arrow functions inside it) read as `name`. */
-	withThis<T>(this: Translator, fn: ts.Node, name: string, untyped: boolean, body: () => T): T {
-		const nodes = thisNodes(fn);
-		for (const n of nodes) {
-			this.subst.set(n, name);
-			if (untyped) this.untypedThis.add(n);
-		}
-		try {
-			return body();
-		} finally {
-			for (const n of nodes) {
-				this.subst.delete(n);
-				this.untypedThis.delete(n);
-			}
-		}
 	},
 };

@@ -212,10 +212,7 @@ export const componentMethods = {
 		return { params, lines, statics };
 	},
 
-	/** A component created as a root view (bootstrap, route, dialog): made and rendered as the framework makes it. */
-	rootView(this: Translator, cls: ts.ClassDeclaration, type: string, make: string): string {
-		return this.framework.hooks.wrapRootView ? this.framework.hooks.wrapRootView(this, cls, type, make) : make;
-	},
+	/* rootView is installed from semantics/lowering-methods.ts */
 
 	/**
 	 * `Object.defineProperty` on an app class's instance that makes one of its declared fields an accessor, read-only,
@@ -244,9 +241,7 @@ export const componentMethods = {
 		return ts.isInterfaceDeclaration(iface) && !!iface.typeParameters?.length && !iface.getSourceFile().isDeclarationFile && this.protocols.has(this.topName(iface, iface.name.text));
 	},
 
-	calleeName(this: Translator, e: ts.Expression): string {
-		return ts.isCallExpression(e) ? e.expression.getText() : '';
-	},
+	/* calleeName is installed from semantics/lowering-methods.ts */
 
 	/** The names an app class's members override: its app base classes' and its interfaces'. */
 	overridden(this: Translator, cls: ts.ClassLikeDeclaration, implemented?: string[]): Set<string> {

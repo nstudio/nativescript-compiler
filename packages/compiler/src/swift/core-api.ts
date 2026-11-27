@@ -2,7 +2,7 @@ import ts from 'typescript';
 import { heldLoss } from '../semantics/losses.ts';
 import { KIT_APPLE_SOURCES } from '../driver/paths.ts';
 import { KIT_GLOBALS, KitTypes, coreClass, kitExtends, kitIndex, kitMember, type KitMember } from '../kit/kit-index.ts';
-import { NATIVE_MEMBERS, SCRIPT_OBJECTS, addedDeclarations, augmentedProperty, coreBarrels, coreSymbolName, isCoreDeclaration, ownPropertyOnly, packageOf, unappliedProperty } from '../program/core-facts.ts';
+import { NATIVE_MEMBERS, SCRIPT_OBJECTS, addedDeclarations, augmentedProperty, coreBarrels, coreSymbolName, inheritedCoreOwner, isCoreDeclaration, ownPropertyOnly, packageOf, unappliedProperty } from '../program/core-facts.ts';
 import { optionalType, splitTopLevel, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { rethrowUnlessRefused } from '../semantics/refusals.ts';
@@ -297,18 +297,10 @@ export class CoreAPI extends KitTypes {
 		return m;
 	}
 
-	/** Whether the kit applies `name` by name on this view class (a property in its setProperty). */
-	private isViewProperty(owner: string, name: string): boolean {
-		// A style property applies to any view; the kit's classes each apply their own.
-		if (owner === 'Style') return [...this.index.values()].some((t) => kitExtends(this.index, t.name, 'View') && t.props.has(name));
-		for (let t = this.index.get(owner); t; t = t.base ? this.index.get(t.base) : undefined) if (t.props.has(name)) return true;
-		return false;
-	}
-
 	/** `object.name` of an `augmentedProperty` on a core-typed object, outside a chain: the read of its own property (`Any?`), or null. */
 	augmentedRead(e: ts.PropertyAccessExpression): string | null {
 		if (ts.isOptionalChain(e) || this.constant(e) !== null || this.mixinOwn(e.name)) return null;
-		const owner = this.owner(e.expression) ?? this.inheritedOwner(e.expression, e.name);
+		const owner = this.owner(e.expression) ?? inheritedCoreOwner(e.expression, e.name, this.t.checker, (c) => this.t.kitRootOf(c));
 		if (!owner || owner.isStatic || (this.isView(owner.name) && this.isViewProperty(owner.name, e.name.text))) return null;
 		if (!augmentedProperty(this.index, owner.name, e.name, this.t.resolve(e.name))) return null;
 		return `${this.receiver(e.expression, e.name.text)}[jsKey: ${JSON.stringify(e.name.text)}]`;
@@ -319,7 +311,7 @@ export class CoreAPI extends KitTypes {
 		const constant = this.constant(e);
 		if (constant !== null) return constant;
 		if (this.heldFunction(e.expression, e.name.text)) return null;
-		const owner = this.mixinOwn(e.name) ? null : (this.owner(e.expression) ?? this.inheritedOwner(e.expression, e.name));
+		const owner = this.mixinOwn(e.name) ? null : (this.owner(e.expression) ?? inheritedCoreOwner(e.expression, e.name, this.t.checker, (c) => this.t.kitRootOf(c)));
 		if (!owner) return null;
 		const t = this.t;
 		const name = e.name.text;
@@ -405,7 +397,7 @@ export class CoreAPI extends KitTypes {
 	/** `target.name = value` where target is core-typed. */
 	assign(left: ts.PropertyAccessExpression, value: ts.Expression): string | null {
 		if (this.heldFunction(left.expression, left.name.text)) return null;
-		const owner = this.mixinOwn(left.name) ? null : (this.owner(left.expression) ?? this.inheritedOwner(left.expression, left.name));
+		const owner = this.mixinOwn(left.name) ? null : (this.owner(left.expression) ?? inheritedCoreOwner(left.expression, left.name, this.t.checker, (c) => this.t.kitRootOf(c)));
 		if (!owner) return null;
 		const t = this.t;
 		const name = left.name.text;
@@ -431,16 +423,6 @@ export class CoreAPI extends KitTypes {
 		// Null where the kit holds an object maybe missing (`view.backgroundColor = null`): none.
 		if (nullish && /[?!]$/.test(m.type.trim())) return assigned('nil');
 		return assigned(this.toKit(t.coerce(value, t.typeOf(left)), m.type));
-	}
-
-	/** A core member read through a class of the app or a plugin that extends a core class (`this.isPassThroughParentEnabled` in a GridLayout subclass). */
-	private inheritedOwner(target: ts.Expression, name: ts.MemberName): { name: string; isStatic: boolean } | null {
-		const c = this.t.checker;
-		const decl = c.getSymbolAtLocation(name)?.valueDeclaration;
-		if (!decl || !isCoreDeclaration(decl)) return null;
-		const cls = c.getNonNullableType(c.getTypeAtLocation(target)).getSymbol()?.valueDeclaration;
-		const root = cls && ts.isClassLike(cls) && !cls.getSourceFile().isDeclarationFile ? this.t.kitRootOf(cls) : null;
-		return root ? { name: root, isStatic: false } : null;
 	}
 
 	/** A member a mixin class declares: the extension it becomes has it by name. */
@@ -494,7 +476,7 @@ export class CoreAPI extends KitTypes {
 	/** `signal.aborted`: a property of core's whose getter the kit compiled as throwing. */
 	throwingAccess(e: ts.PropertyAccessExpression): boolean {
 		if (this.mixinOwn(e.name)) return false;
-		const owner = (this.owner(e.expression) ?? this.inheritedOwner(e.expression, e.name))?.name;
+		const owner = (this.owner(e.expression) ?? inheritedCoreOwner(e.expression, e.name, this.t.checker, (c) => this.t.kitRootOf(c)))?.name;
 		const m = owner ? kitMember(this.index, owner, e.name.text) : null;
 		if (m && !e.questionDotToken && this.optionalKitValue(e.expression)) return true;
 		// A function held optional, called: checked (see `call`).
@@ -522,7 +504,7 @@ export class CoreAPI extends KitTypes {
 			}
 			const access = ts.isCallExpression(x) ? x.expression : x;
 			if (ts.isOptionalChain(x) || !ts.isPropertyAccessExpression(access) || this.mixinOwn(access.name)) return false;
-			const owner = this.owner(access.expression) ?? this.inheritedOwner(access.expression, access.name);
+			const owner = this.owner(access.expression) ?? inheritedCoreOwner(access.expression, access.name, this.t.checker, (c) => this.t.kitRootOf(c));
 			const m = !owner ? null : ts.isCallExpression(x) ? this.callMember(owner.name, access.name.text, x.arguments.length) : kitMember(this.index, owner.name, access.name.text);
 			if (!m || m.kind !== (ts.isCallExpression(x) ? 'func' : 'var')) return false;
 			const k = m.type.trim();
@@ -549,7 +531,7 @@ export class CoreAPI extends KitTypes {
 		// A kit method's optional result (`SplitView.getInstance()`, `SplitViewBase | null`), which a non-strict app's typings give present.
 		if (ts.isCallExpression(x) && ts.isPropertyAccessExpression(x.expression) && !x.expression.questionDotToken && !ts.isOptionalChain(x)) {
 			const c = x.expression;
-			const owner = this.mixinOwn(c.name) ? null : (this.owner(c.expression) ?? this.inheritedOwner(c.expression, c.name));
+			const owner = this.mixinOwn(c.name) ? null : (this.owner(c.expression) ?? inheritedCoreOwner(c.expression, c.name, this.t.checker, (k) => this.t.kitRootOf(k)));
 			const m = owner ? this.callMember(owner.name, c.name.text, x.arguments.length) : null;
 			if (
 				m?.kind !== 'func' ||
@@ -566,7 +548,7 @@ export class CoreAPI extends KitTypes {
 			return isUntyped(spelledType(read)) || read.endsWith('?');
 		}
 		if (!ts.isPropertyAccessExpression(x) || x.questionDotToken || ts.isOptionalChain(x)) return false;
-		const owner = this.mixinOwn(x.name) ? null : (this.owner(x.expression) ?? this.inheritedOwner(x.expression, x.name));
+		const owner = this.mixinOwn(x.name) ? null : (this.owner(x.expression) ?? inheritedCoreOwner(x.expression, x.name, this.t.checker, (k) => this.t.kitRootOf(k)));
 		const m = owner ? kitMember(this.index, owner.name, x.name.text) : null;
 		if (
 			m?.kind !== 'var' ||
@@ -639,7 +621,7 @@ export class CoreAPI extends KitTypes {
 		if (e.expression.getText() === 'CoreTypes.AnimationCurve.cubicBezier' && isCoreDeclaration(this.t.resolve(e.expression.name)?.declarations?.[0])) {
 			return `CubicBezierAnimationCurve(${e.arguments.map((a) => this.t.coerce(a, 'Double')).join(', ')})`;
 		}
-		const owner = this.mixinOwn(e.expression.name) ? null : (this.owner(e.expression.expression) ?? this.inheritedOwner(e.expression.expression, e.expression.name));
+		const owner = this.mixinOwn(e.expression.name) ? null : (this.owner(e.expression.expression) ?? inheritedCoreOwner(e.expression.expression, e.expression.name, this.t.checker, (k) => this.t.kitRootOf(k)));
 		if (!owner) return null;
 		const t = this.t;
 		const name = e.expression.name.text;

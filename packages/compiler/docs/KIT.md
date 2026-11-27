@@ -110,12 +110,12 @@ npx nx run compiler:kit-android   # writes kit-android/generated
   the kit itself makes.
 - **One core.** `src/driver/contract.ts` checks that the app's installed `@nativescript/core` is the release the kit was
   generated from: the kit is core's logic, and the native widgets it drives come from the app's core.
-- **Packing.** A published `@nativescript/compiler` carries both kits generated from one core release, and has that
-  release's version: each core release tag (`{version}-core`) publishes it
-  (`.github/workflows/npm_release_compiler.yml`). `prepack` refuses to pack without both kits or with kits from
+- **Packing.** A published `@nstudio/nativescript-compiler` carries both kits generated from one core release, and is
+  published via OIDC in `.github/workflows/publish.yml`. `prepack` refuses to pack without both kits or with kits from
   different cores (`tests/kits-present.ts`, run as TypeScript: packing needs Node 23.6 or newer and git, as
   development does, while the packed compiler runs on Node 20.17).
-- **CI** generates both kits from the branch's core and builds them (`.github/workflows/compiler.yml`, job `kit`).
+- **CI** checks the compiler and adapters on Linux and Windows (`.github/workflows/ci.yml`), while
+  `.github/workflows/publish.yml` generates and Gradle-verifies both kits from core before publishing.
 
 Core is read as source and keeps no compiler-only behaviour. An app's patch-package patch of core is applied as kit
 switches (`src/program/core-patches.ts`) or stops the build ([PACKAGE-TYPES.md](PACKAGE-TYPES.md#core-patches)).

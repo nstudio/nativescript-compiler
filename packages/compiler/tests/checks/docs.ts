@@ -48,7 +48,7 @@ const problems: string[] = [];
 const cell = (s: string) => s.replace(/\|/g, '\\|').replace(/\n/g, ' ');
 const yes = (v: unknown) => (typeof v === 'boolean' ? (v ? 'yes' : 'no') : `\`${String(v)}\``);
 
-function refusalTable(cls: 'limit' | 'gap'): string {
+function refusalTable(cls: 'limit' | 'excluded' | 'gap'): string {
 	const rows = Object.entries(REFUSALS)
 		.filter(([, r]) => r.class === cls)
 		.map(([id, r]) => {
@@ -126,6 +126,7 @@ function diffSuiteTable(): string {
 
 const GENERATORS: Record<string, () => string> = {
 	'refusals-limit': () => refusalTable('limit'),
+	'refusals-excluded': () => refusalTable('excluded'),
 	'refusals-gap': () => refusalTable('gap'),
 	'ledger-platform': () => ledgerTable('platform'),
 	'ledger-gap': () => ledgerTable('gap'),

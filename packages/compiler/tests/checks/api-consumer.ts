@@ -6,8 +6,9 @@
 //   node tests/checks/api-consumer.ts
 import { spawnSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import ts from 'typescript';
 
 const root = join(import.meta.dirname, '../..');
@@ -22,7 +23,8 @@ if (built.status !== 0) {
 	process.exit(1);
 }
 const emitted = readdirSync(join(installed, 'dist', 'types')).sort();
-symlinkSync(join(root, 'node_modules', 'typescript'), join(work, 'node_modules', 'typescript'), 'dir');
+const tsDir = dirname(createRequire(import.meta.url).resolve('typescript/package.json'));
+symlinkSync(tsDir, join(work, 'node_modules', 'typescript'), 'dir');
 writeFileSync(join(work, 'package.json'), JSON.stringify({ name: 'consumer', private: true, type: 'module' }));
 
 const consumer = join(work, 'adapter.ts');

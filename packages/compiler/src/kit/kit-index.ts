@@ -127,6 +127,13 @@ export class KitTypes {
 		return kitExtends(this.index, name, 'View');
 	}
 
+	/** Whether the kit applies `name` by name on this view class (a property in its setProperty). */
+	protected isViewProperty(owner: string, name: string): boolean {
+		if (owner === 'Style') return [...this.index.values()].some((t) => kitExtends(this.index, t.name, 'View') && t.props.has(name));
+		for (let t = this.index.get(owner); t; t = t.base ? this.index.get(t.base.replace(/\(.*$/, '')) : undefined) if (t.props.has(name)) return true;
+		return false;
+	}
+
 	/** A view, or a view's `style`: properties by name. */
 	protected isView(owner: string): boolean {
 		return owner === 'Style' || kitExtends(this.index, owner, 'View');

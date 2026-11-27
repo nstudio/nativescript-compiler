@@ -3,7 +3,6 @@ import ts from 'typescript';
 import { assignsTo, ident, isFunctionType, isOptional, nullishType, optionalType, swiftString, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { boundNames, hasModifier } from '../semantics/ast.ts';
-import { isConstant } from '../semantics/lang.ts';
 import { isUntyped, spelledType } from '../semantics/types.ts';
 
 export const parametersMethods = {
@@ -117,10 +116,6 @@ export const parametersMethods = {
 	 * A parameter Swift gives its default value itself: a constant, unless the method it overrides takes the parameter as optional.
 	 * An untyped one is given its default in the body, where an explicit undefined (nil) takes it too and null does not.
 	 */
-	constantDefault(this: Translator, p: ts.ParameterDeclaration): boolean {
-		return !!p.initializer && isConstant(p.initializer) && !this.optionalDefaults.has(p) && !this.familyDefaultsDiffer(p) && !this.isAny(p.name) && !this.states.defaultTakesUndefined(p);
-	},
-
 	/** An app parameter whose default its body applies (`paramPrelude`): an argument is given as the optional it may be. */
 	filledDefault(this: Translator, d: ts.Declaration | undefined): boolean {
 		return !this.library && !!d && ts.isParameter(d) && !!d.initializer && !d.dotDotDotToken && !this.templateParams && !d.getSourceFile().isDeclarationFile && !this.constantDefault(d);

@@ -29,12 +29,6 @@ export const declarationsMethods = {
 		return list.declarations.map((d) => this.declaration(d, constant || once(d), lowered)).join('\n');
 	},
 
-	/** An `optionalVariable`'s initializer stored as the optional `type`: a read converting undefined gives that undefined. */
-	heldStore(this: Translator, d: ts.VariableDeclaration, type: string): string {
-		const code = this.stored(d.initializer!, d, type);
-		return this.undefinedConverted(code) ?? code;
-	},
-
 	declaration(this: Translator, d: ts.VariableDeclaration, constant: boolean, lowered: boolean): string {
 		const i = this.indent;
 		const extension = this.native?.extensionClass(d);
@@ -385,10 +379,6 @@ export const declarationsMethods = {
 		const t = this.typeOf(slot.a);
 		if (!slot.isNull) return this.undefinedAs(slot.raw, t);
 		return `(${slot.raw} ?: ${t === 'Double' ? '0.0' : t === 'String' ? '"null"' : 'false'})`;
-	},
-	/** The slot of the await `e` is, where its continuation holds the value nullable. */
-	awaited(this: Translator, e: ts.Expression): AwaitSlot | undefined {
-		return this.awaitSlots.get(ts.skipOuterExpressions(e, ts.OuterExpressionKinds.Parentheses));
 	},
 	noteNullVar(this: Translator, d: ts.VariableDeclaration): void {
 		const init = d.initializer && ts.skipOuterExpressions(d.initializer, ts.OuterExpressionKinds.Parentheses);

@@ -326,16 +326,6 @@ export class Translator implements AsyncTranslator {
 		return this.marks.pureCode(/^__[a-z]$/.test(prefix) ? `${prefix}_${n}` : `${prefix}${n}`);
 	}
 
-	nested<T>(body: () => T): T {
-		const saved = this.indent;
-		this.indent += '    ';
-		try {
-			return body();
-		} finally {
-			this.indent = saved;
-		}
-	}
-
 	/** A constructor's `return`, inside the labeled block its `init` runs: Kotlin's `init` takes no `return`. */
 	returnLabel: string | null = null;
 

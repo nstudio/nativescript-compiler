@@ -46,16 +46,7 @@ export const placementMethods = {
 		return ts.isParameter(d) ? this.paramType(d) : this.returnTypeOf(d as ts.SignatureDeclaration);
 	},
 
-	/** A `nullishRead` value as its `JSNullish<T>`. */
-	nullishCode(this: Translator, e: ts.Expression): string {
-		if (!ts.isCallExpression(e) && !ts.isPropertyAccessExpression(e)) return this.refName(e as ts.Identifier);
-		this.nullishCalls.add(e);
-		try {
-			return this.expr(e);
-		} finally {
-			this.nullishCalls.delete(e);
-		}
-	},
+	/* nullishCode is installed from semantics/lowering-methods.ts */
 
 	/** `nullableEntry`'s read: `jsNulledEntry` of the Map value `code` reads, `jsNulledElement` of the element, the field by its key, or a static by its written flag. */
 	nulledEntry(this: Translator, read: NulledRead, code: () => string): string | null {

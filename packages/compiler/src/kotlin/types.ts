@@ -6,7 +6,7 @@ import { SPELLING, spell, destructuringSource, functionTypeParts, kotlinString, 
 import type { Translator } from './translator.ts';
 import { ambientBase, evolvingArrayRead, evolvingArrayType, isAmbientClass, isRegExpProtocol, memberOwner, namesOwnTypeParameter, tokenClassBase, isArguments } from '../semantics/lang.ts';
 import { nullishSignalType } from '../semantics/signals.ts';
-import { hasModifier, isLibDeclaration, thisNodes, isWriteTarget, implementationOf, takesOwnThis } from '../semantics/ast.ts';
+import { hasModifier, isLibDeclaration, isWriteTarget, implementationOf, takesOwnThis } from '../semantics/ast.ts';
 import { isCoreDeclaration } from '../program/core-facts.ts';
 import { coreTypeKind, eventDataTypeLiteral, hasMappedIntersection, isJsDocConstructorFunction, isKit, isLibObjectType, isNamed, isUntyped, libraryNativeType, libraryType, mappedOrErasedType, nonNullableInner, nonOptionalSpelling, parseNativeType, spelledType, valueModuleKind } from '../semantics/types.ts';
 import { isStatic } from '../semantics/throws.ts';
@@ -536,20 +536,5 @@ export const typesMethods = {
 		return this.returnTypeOf(decl) === optionalType(site) && site !== optionalType(site) && !this.nullTolerant(e);
 	},
 
-	/** Runs `body` with `this` in `fn` (and in the arrow functions inside it) read as `name`. */
-	withThis<T>(this: Translator, fn: ts.Node, name: string, untyped: boolean, body: () => T): T {
-		const nodes = thisNodes(fn);
-		for (const n of nodes) {
-			this.subst.set(n, name);
-			if (untyped) this.untypedThis.add(n);
-		}
-		try {
-			return body();
-		} finally {
-			for (const n of nodes) {
-				this.subst.delete(n);
-				this.untypedThis.delete(n);
-			}
-		}
-	},
+	/* withThis is installed from semantics/lowering-methods.ts */
 };

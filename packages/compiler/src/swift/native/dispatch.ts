@@ -3,6 +3,7 @@ import { CF_CLASSES, functionParts, RT } from '../syntax.ts';
 import { posted } from './bridging.ts';
 import { lookupClass, lookupInit, nativeTable, type NativeClass, type NativeMethod, type NativeProperty, type SwiftType } from './sdk.ts';
 import { compareText } from '../../program/order.ts';
+import { newerVersion } from '../../semantics/lang.ts';
 
 /**
  * Native objects script holds untyped (`declare var NSCSurface: any`,
@@ -76,7 +77,7 @@ export function nativeDispatch(modules: string[], uses: Map<string, UntypedUse>,
 	const gets: string[] = [],
 		sets: string[] = [],
 		calls: string[] = [];
-	const guarded = (introduced: string | undefined, code: string) => (introduced && newer(introduced, deploymentTarget) ? `if #available(iOS ${introduced}, *) { ${code} }` : code);
+	const guarded = (introduced: string | undefined, code: string) => (introduced && newerVersion(introduced, deploymentTarget) ? `if #available(iOS ${introduced}, *) { ${code} }` : code);
 	for (const [name, u] of [...uses].sort(([a], [b]) => compareText(a, b))) {
 		const get: string[] = [],
 			set: string[] = [],
@@ -206,9 +207,4 @@ function fromNative(code: string, type: SwiftType): string {
 	return `${RT.jsNativeResult}(${code})`;
 }
 
-function newer(version: string, than: string): boolean {
-	const a = version.split('.').map(Number),
-		b = than.split('.').map(Number);
-	for (let i = 0; i < Math.max(a.length, b.length); i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
-	return false;
-}
+

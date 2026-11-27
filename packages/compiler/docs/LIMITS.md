@@ -6,17 +6,22 @@ suggested rewrite, rather than compile code that behaves differently. This page 
 difference between the iOS and Android output, and where the remaining known divergences are recorded. The tables are
 generated from the source (`node tests/checks/docs.ts --write`), and CI fails when they are stale.
 
-## Two kinds of refusal
+## Three kinds of refusal
 
 Every refusal has an id and a class. The catalog is `src/semantics/refusals.ts`; a framework adapter adds its own
 (`FrameworkAdapter.refusals` in `src/api/adapter-api.ts`), reported the same way.
 
-- **Limits** (`class: 'limit'`) are JavaScript that a compiled release cannot run by design: code that needs a
-  JavaScript engine at run time (`eval`, `Proxy`, `new Function`), shared memory, finalizers, an environment the
-  release does not have (`process.env`), or behaviour a native representation cannot keep (an array copied where
-  JavaScript shares it, a lone surrogate in a Swift string). Each comes with a rewrite.
+- **Limits** (`class: 'limit'`) are fundamentally incompatible with an engine-free AOT execution model or a target
+  platform's native representation: runtime source evaluation (`eval`, `new Function`), dynamic module specifiers,
+  undefined build-time environment variables (`process.env`), or native representation constraints (a lone surrogate in
+  a Swift string, copying where JavaScript aliases). Each comes with a rewrite.
+- **Intentional exclusions** (`class: 'excluded'`) are features that are technically implementable in AOT code (for
+  example via compiled trap dispatch for `Proxy`), but intentionally excluded to preserve predictable native dispatch,
+  small runtime footprint, and portable semantics (`Proxy`, `Reflect`, `SharedArrayBuffer`, `Atomics`,
+  `FinalizationRegistry`, `arguments.callee`, `__proto__`).
 - **Gaps** (`class: 'gap'`) are code that runs as JavaScript and that the compiler does not translate yet. They are
-  compiler bugs, not rules. The build's report marks each one as a compiler gap and links the issue tracker.
+  compiler deficiencies, not design rules. The build's report marks each one as a compiler gap and links the issue
+  tracker.
 
 Refusals are made at three points:
 
@@ -36,18 +41,11 @@ example in the catalog is run on both backends by a diff case and matches Node.
 <!-- generated: refusals-limit -->
 | Id | What is refused | What to write instead | Refused on |
 |---|---|---|---|
-| `proxy` | Proxy (a compiled release has no JavaScript engine to run its traps) | use a class with explicit getters and setters, or a Map for dynamic keys | both |
-| `reflect` | Reflect | use the operation directly (obj[key], key in obj, Object.keys(obj), new Cls(...args)) | both |
 | `eval` | eval | there is no JavaScript engine to evaluate code: replace it with a lookup of known functions, or keep this app on the JavaScript release | both |
 | `function-constructor` | Function from text | there is no JavaScript engine to compile a function from text: write the function in the source | both |
-| `finalization-registry` | FinalizationRegistry | finalizers do not run in a compiled release: release the resource explicitly (a dispose() method, or an unloaded/disposeNativeView hook) | both |
-| `shared-array-buffer` | SharedArrayBuffer | use an ArrayBuffer, and post copies between workers | both |
-| `atomics` | Atomics | use an ArrayBuffer and post messages between workers instead of shared memory | both |
 | `with` | `with` | name the object explicitly (`obj.x` instead of `x` inside `with (obj)`) | both |
 | `computed-import` | import() of a computed specifier | import each module by a literal path (`() => import('./pages/a')`), and choose among those functions at run time | both |
 | `computed-require` | require() of a computed specifier | require each module by a literal path, and choose among them at run time | both |
-| `arguments-callee` | `arguments.callee` | name the function and call it by its name | both |
-| `proto` | `__proto__` | use Object.getPrototypeOf, or a class hierarchy declared in the source | both |
 | `process-env` | process.env the bundler did not define | a compiled release has no process environment: define the variable in the bundler config (Vite `define`, webpack DefinePlugin), which the compiled build reads too | both |
 | `undefined-constant` | a bundler constant declared but never given a value | if your bundler defines it (Vite `define`, webpack DefinePlugin), the compiled build reads the same config: check the name there; otherwise assign globalThis.NAME before it is read | both |
 | `shared-typed-copy` | an array of one object type converted into an array of another, a copy where JavaScript shares it | declare the value with the wanted type where it is made, or copy it explicitly (`list.map((x) => ({ ...x }))`) | both |
@@ -56,6 +54,20 @@ example in the catalog is run on both backends by a diff case and matches Node.
 | `generic-any-argument` | a generic class's instance held with `any` as its type argument (Swift holds a generic class's type argument, which `any` does not erase) | hold it with its own type argument; an overload implementation types its parameters and result as its overloads do | one backend: [`genericsReified`](#the-ledger) |
 | `generic-field-overload` | a generic class's field met as a generic interface's field (Swift can't overload a property by its type) | declare the interface's field with a concrete type, or read it through a method | one backend: [`genericsReified`](#the-ledger) |
 | `generic-field-erased` | a generic class's field met as a generic interface's writable field (the interface's field is erased to any value, which the class's field can't override) | declare the interface's field with a concrete type, or read it through a method | one backend: [`genericsReified`](#the-ledger) |
+<!-- /generated -->
+
+### Intentional exclusions
+
+<!-- generated: refusals-excluded -->
+| Id | What is refused | What to write instead | Refused on |
+|---|---|---|---|
+| `proxy` | Proxy (intentionally excluded to avoid intercepting every native property read and write through trap dispatch) | use a class with explicit getters and setters, or a Map for dynamic keys | both |
+| `reflect` | Reflect (intentionally excluded alongside Proxy trap forwarding) | use the operation directly (obj[key], key in obj, Object.keys(obj), new Cls(...args)) | both |
+| `finalization-registry` | FinalizationRegistry (intentionally excluded because ARC and JVM GC timing cannot preserve portable finalizer guarantees) | release the resource explicitly (a dispose() method, or an unloaded/disposeNativeView hook) | both |
+| `shared-array-buffer` | SharedArrayBuffer (intentionally excluded in favor of message-passing and buffer transfer between workers) | use an ArrayBuffer, and post copies or transfers between workers | both |
+| `atomics` | Atomics (intentionally excluded alongside SharedArrayBuffer) | use an ArrayBuffer and post messages between workers instead of shared memory | both |
+| `arguments-callee` | `arguments.callee` (disallowed in strict mode and intentionally excluded) | name the function and call it by its name | both |
+| `proto` | `__proto__` (legacy Annex B mutator intentionally excluded in favor of static class hierarchies) | use Object.getPrototypeOf, or a class hierarchy declared in the source | both |
 <!-- /generated -->
 
 ### Gaps
@@ -81,7 +93,6 @@ example in the catalog is run on both backends by a diff case and matches Node.
 | `class-expression` | a class expression | declare the class with a name, then use it | both |
 | `named-function-expression` | a named function expression that refers to itself | declare it as a function declaration and refer to that name | both |
 | `unsupported-base` | a class extending null, Function or another base the compiler does not extend yet | declare the class without that base: hold a function in a field and call it, or use Object.create(null) for an object without a prototype | both |
-| `worker` | a Worker in an iOS build | the iOS kit starts no workers yet (Android's does): run the work on the main thread in slices (a setTimeout per batch), or in native code on a background queue, and post its result back | both |
 | `delete-member` | delete of this member | keep entries that come and go in a Map (map.delete(key)), or make the field optional and assign undefined | both |
 | `index-type` | indexing this type | give the indexed object a Record or Map type, or read the member by its name | both |
 | `native` | a native API the compiler does not call yet | move the code into a plain function of its own with typed parameters and result, so the rest of the module translates; the refusal then names only that function | both |

@@ -25,10 +25,6 @@ export const classesMethods = {
 		return [`    lazy var ${memo} = ${this.memo(fn, t, throws, true)}`, `    var ${ident(name)}: ${t} ${throws ? `{\n        get throws { try ${memo}.read() }\n    }` : `{ ${memo}.value }`}`];
 	},
 
-	calleeName(this: Translator, e: ts.Expression): string {
-		return ts.isCallExpression(e) ? e.expression.getText() : '';
-	},
-
 	/** A class decorator the class's translation neither refuses nor runs: core's (`@CSSType`, `@NativeClass`) and the framework's. */
 	keptDecorator(this: Translator, d: ts.Decorator): boolean {
 		return new RegExp(`^(${['CSSType', 'NativeClass', 'ObjCClass', ...this.framework.readDecorators()].join('|')})\\b`).test(d.expression.getText());
@@ -429,12 +425,6 @@ export const classesMethods = {
 		const t = this.checker.getNonNullableType(this.checker.getTypeAtLocation(target));
 		const cls = (t.isTypeParameter() ? (t.getConstraint() ?? t) : t).getSymbol()?.valueDeclaration;
 		return !!cls && ts.isClassLike(cls) && !!this.kitRootOf(cls);
-	},
-
-	/** `fooProperty.setNative`: the registered name of the property it belongs to. */
-	setNativeOf(this: Translator, e: ts.Expression): string | null {
-		if (!ts.isPropertyAccessExpression(e) || e.name.text !== 'setNative') return null;
-		return this.properties?.name(this.resolve(e.expression)) ?? null;
 	},
 
 	/**

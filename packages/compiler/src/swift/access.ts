@@ -8,7 +8,7 @@ import { libFunctionValueKind } from '../semantics/apis/statics.ts';
 import { ERRORS, isLibGlobal } from '../semantics/globals.ts';
 import { spell, escapingFunction, functionParts, hasTopLevelArrow, ident, identPath, isFunctionType, isOptional, openSwiftChain, optionalType, splitTopLevel, swiftString, RT, lenientReader } from './syntax.ts';
 import type { Translator } from './translator.ts';
-import { elementReceiverCell, keyName, observerSlot, place, receiverCell, receiverSlot, isEnumObject, nullishField, type ReceiverCell } from '../semantics/placement.ts';
+import { elementReceiverCell, keyName, receiverCell, receiverSlot, isEnumObject, nullishField, type ReceiverCell } from '../semantics/placement.ts';
 import { ambientAddedMemberOf, augmentedPropertyRead, functionProperty, uncheckedMatch, wellKnownMember, isSelf } from '../semantics/lang.ts';
 import { convertedRead, onlyNull } from '../semantics/states/predicates.ts';
 import { isLibDeclaration, isWriteTarget, notIterable } from '../semantics/ast.ts';
@@ -585,11 +585,6 @@ export const accessMethods = {
 	/** A `missingObject` read Swift holds optional, as it is held; null where Swift holds it present. */
 	heldMissing(this: Translator, e: ts.Expression): string | null {
 		return this.marks.isUnwrap(this.expr(e)) || this.looseObjectRead(e) || this.widenedParameterRead(e) || /[?!]$/.test(this.declaredTypeOf(e) ?? '') ? this.observe(e, 'asIs') : null;
-	},
-
-	/** `x` read by an equality or `typeof` (`ObserverSlot`). */
-	observe(this: Translator, x: ts.Expression, read: 'untyped' | 'asIs' = 'untyped'): string {
-		return place(this.placement, x, observerSlot(this.placement, read));
 	},
 
 	/** A read `observedAsIs` (`instanceof`'s left): the optional it may be, never unwrapped. */

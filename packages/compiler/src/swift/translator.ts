@@ -323,16 +323,6 @@ export class Translator implements AsyncTranslator {
 	freshCounts: Map<string, number> | null = null;
 	programFreshCounts = new Map<string, number>();
 
-	nested<T>(body: () => T): T {
-		const saved = this.indent;
-		this.indent += '    ';
-		try {
-			return body();
-		} finally {
-			this.indent = saved;
-		}
-	}
-
 	/** Translates a function's body: no async region or loop of the enclosing function reaches into it. */
 	inFunction<T>(returnType: string, body: () => T): T {
 		const refined = this.refinedVersion;

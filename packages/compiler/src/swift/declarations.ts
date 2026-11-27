@@ -206,12 +206,6 @@ export const declarationsMethods = {
 		return (ts.isElementAccessExpression(read) || ts.isPropertyAccessExpression(read)) && isNamed(spelledType(this.typeOf(read.expression)), 'JSRecord<Any?>') ? 'Any?' : optionalType(t);
 	},
 
-	/** An `optionalVariable`'s initializer stored as the optional `type`: a read converting undefined gives that undefined. */
-	heldStore(this: Translator, d: ts.VariableDeclaration, type: string): string {
-		const code = this.stored(d.initializer!, d, type);
-		return this.undefinedConverted(code) ?? code;
-	},
-
 	/** Whether a pattern steps its value's iterator (`patternIteration`). */
 	patternIterated(this: Translator, name: ts.BindingName, init: ts.Expression): boolean {
 		// A match reads its values as an array does.

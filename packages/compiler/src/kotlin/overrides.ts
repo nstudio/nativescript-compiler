@@ -95,17 +95,7 @@ export const overridesMethods = {
 		return ts.isIdentifier(e) && (e.text === 'global' || e.text === 'globalThis') && (this.resolve(e)?.declarations ?? []).every((d) => d.getSourceFile().isDeclarationFile);
 	},
 
-	/** `fooProperty.setNative`: the registered name of the property it belongs to. */
-	setNativeOf(this: Translator, e: ts.Expression): string | null {
-		if (!ts.isPropertyAccessExpression(e) || e.name.text !== 'setNative') return null;
-		return this.properties?.name(this.resolve(e.expression)) ?? null;
-	},
-
-	/** The kit class a mixin class (`applyMixins(View, [Extended])`) is applied to. */
-	mixinOf(this: Translator, sym: ts.Symbol | undefined): string | null {
-		const d = sym?.valueDeclaration;
-		return d && ts.isClassDeclaration(d) ? this.patterns.mixinTarget(d) : null;
-	},
+	/* setNativeOf and mixinOf are installed from semantics/lowering-methods.ts */
 
 	/**
 	 * A method overriding kit-android's: the kit's Kotlin signature, the
@@ -223,7 +213,7 @@ export const overridesMethods = {
 	},
 
 	/** Whether a compiled class or one it extends declares a member of this name. */
-	compiledMember(this: Translator, cls: ts.ClassLikeDeclaration, name: string): boolean {
+	declaresCompiledMember(this: Translator, cls: ts.ClassLikeDeclaration, name: string): boolean {
 		for (let b: ts.ClassLikeDeclaration | undefined = cls; b; b = programBase(b, this.checker)) if (b.members.some((m) => m.name?.getText() === name) || this.facts.prototypeKeys().data.has(name) || this.facts.prototypeKeys().accessors.has(name)) return true;
 		return false;
 	},
@@ -561,9 +551,7 @@ export const overridesMethods = {
 	},
 
 	/** A module-level function, class or variable's Kotlin name. */
-	topName(this: Translator, decl: ts.Node, name: string): string {
-		return this.topNames().get(decl) ?? name;
-	},
+	/* topName is installed from semantics/lowering-methods.ts */
 	/**
 	 * App mode: a type name Kotlin code already has unqualified (a default import's, the runtime's, a thread annotation's,
 	 * whose import outranks the app's package). Java classes are spelled qualified, so their names hide nothing.

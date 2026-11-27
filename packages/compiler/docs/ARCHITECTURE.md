@@ -178,8 +178,8 @@ wrote (whether it is pure, whether it throws) in its own `CodeMarks` (`semantics
 
 ## Guards
 
-The decision layer is held in place by checks in `.github/workflows/compiler.yml`, which runs on pushes to `main` and
-on pull requests that touch the compiler, core or the platform typings (commands and costs in
+The decision layer is held in place by checks in `.github/workflows/ci.yml`, which runs on pushes to `main` and
+on pull requests, alongside `.github/workflows/compiler-nightly.yml` (commands and costs in
 [tests/README.md](../tests/README.md#what-runs-where)):
 
 | Check | What it fails on | CI job |
@@ -311,8 +311,9 @@ own, as linked.
 | Release checks (`tests/release-checks`) | the CLI paths: config, resources, signing, plugins, patches | expected projects | |
 | The adapter API (`tests/adapters`) | an app of a test-only framework, translated to Swift and Kotlin | the API's contract | |
 
-Diff cases and a per-merge subset of the fuzz variants run in `compiler.yml`; test262, the full fuzz set and decision
-parity over every case run nightly (`compiler-nightly.yml`). Real apps, including the
+Architectural checks, front-end unit tests, adapter contract checks, docs checks, and Windows smoke tests run in
+`.github/workflows/ci.yml`; the full Kotlin and Swift differential suites, decision parity, worker tests, release
+checks, and test262 run in `.github/workflows/compiler-nightly.yml`. Real apps, including the
 framework adapters' own, are built outside this repository and compared screenshot by screenshot against their own
 JavaScript release builds (`src/tools/verify.ts`).
 

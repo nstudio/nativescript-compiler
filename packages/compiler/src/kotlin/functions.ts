@@ -6,7 +6,7 @@ import { assignsTo, branch, functionTypeParts, ident, isFunctionType, isNullable
 import type { Translator } from './translator.ts';
 import { boundNames, thisNodes, takesOwnThis } from '../semantics/ast.ts';
 import { isAsync } from '../semantics/throws.ts';
-import { isConstant, methodValues, thisArgBound } from '../semantics/lang.ts';
+import { methodValues, thisArgBound } from '../semantics/lang.ts';
 import { isUntyped, spelledType } from '../semantics/types.ts';
 import { literalCallback } from '../semantics/conversion.ts';
 
@@ -94,10 +94,6 @@ export const functionsMethods = {
 	 * A parameter Kotlin gives its constant default itself. Not where another method of its override family declares the
 	 * parameter otherwise: Kotlin overrides take the root's default, where JavaScript applies the default of the method that runs.
 	 */
-	constantDefault(this: Translator, p: ts.ParameterDeclaration): boolean {
-		return !!p.initializer && isConstant(p.initializer) && !this.familyDefaultsDiffer(p) && !this.states.defaultTakesUndefined(p);
-	},
-
 	/** Statements a function body starts with: computed defaults, destructured parameters. */
 	paramPrelude(this: Translator, fn: ts.SignatureDeclaration): string[] {
 		const i = this.indent;

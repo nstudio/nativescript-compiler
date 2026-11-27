@@ -3,8 +3,9 @@
 // text a developer reads is here, or in the framework adapter's refusals, and
 // nowhere else.
 //
-// `limit`: JavaScript a compiled release cannot run by design. `gap`: code
-// that runs as JavaScript and the compiler does not translate yet. A rewrite
+// `limit`: fundamentally incompatible with an engine-free AOT release or platform representation.
+// `excluded`: technically implementable in AOT, intentionally excluded to preserve predictable native dispatch and footprint.
+// `gap`: code that runs as JavaScript and the compiler does not translate yet. A rewrite
 // shown here is one a diff case runs on both backends and matches Node with.
 
 import type ts from 'typescript';
@@ -17,19 +18,21 @@ export type { RefusalClass, RefusalId, RefusalKind } from '../api/adapter-api.ts
 const ISOLATE = 'move the code into a plain function of its own with typed parameters and result, so the rest of the module translates; the refusal then names only that function';
 
 export const REFUSALS = {
-	// Preflight: lib globals and syntax with no compiled runtime.
-	proxy: { class: 'limit', title: 'Proxy', why: 'a compiled release has no JavaScript engine to run its traps', suggestion: 'use a class with explicit getters and setters, or a Map for dynamic keys', before: 'const p = new Proxy(target, { get: (t, k) => t[k] ?? 0 })', after: 'const counts = new Map<string, number>(); const read = (k: string) => counts.get(k) ?? 0' },
-	reflect: { class: 'limit', title: 'Reflect', suggestion: 'use the operation directly (obj[key], key in obj, Object.keys(obj), new Cls(...args))', before: 'Reflect.has(o, "a"); Reflect.ownKeys(o)', after: '"a" in o; Object.keys(o)' },
+	// Preflight: intentionally excluded dynamic/meta-programming & shared-memory features (technically implementable in AOT, excluded by design for predictable native dispatch and footprint).
+	proxy: { class: 'excluded', title: 'Proxy', why: 'intentionally excluded to avoid intercepting every native property read and write through trap dispatch', suggestion: 'use a class with explicit getters and setters, or a Map for dynamic keys', before: 'const p = new Proxy(target, { get: (t, k) => t[k] ?? 0 })', after: 'const counts = new Map<string, number>(); const read = (k: string) => counts.get(k) ?? 0' },
+	reflect: { class: 'excluded', title: 'Reflect', why: 'intentionally excluded alongside Proxy trap forwarding', suggestion: 'use the operation directly (obj[key], key in obj, Object.keys(obj), new Cls(...args))', before: 'Reflect.has(o, "a"); Reflect.ownKeys(o)', after: '"a" in o; Object.keys(o)' },
+	'finalization-registry': { class: 'excluded', title: 'FinalizationRegistry', why: 'intentionally excluded because ARC and JVM GC timing cannot preserve portable finalizer guarantees', suggestion: 'release the resource explicitly (a dispose() method, or an unloaded/disposeNativeView hook)' },
+	'shared-array-buffer': { class: 'excluded', title: 'SharedArrayBuffer', why: 'intentionally excluded in favor of message-passing and buffer transfer between workers', suggestion: 'use an ArrayBuffer, and post copies or transfers between workers' },
+	atomics: { class: 'excluded', title: 'Atomics', why: 'intentionally excluded alongside SharedArrayBuffer', suggestion: 'use an ArrayBuffer and post messages between workers instead of shared memory' },
+	'arguments-callee': { class: 'excluded', title: '`arguments.callee`', why: 'disallowed in strict mode and intentionally excluded', suggestion: 'name the function and call it by its name', before: 'const f = function (n) { return n ? n * arguments.callee(n - 1) : 1; }', after: 'function f(n: number): number { return n ? n * f(n - 1) : 1; }' },
+	proto: { class: 'excluded', title: '`__proto__`', why: 'legacy Annex B mutator intentionally excluded in favor of static class hierarchies', suggestion: 'use Object.getPrototypeOf, or a class hierarchy declared in the source', before: 'b.__proto__ === A.prototype', after: 'b instanceof A' },
+
+	// Preflight & representation limits: fundamentally incompatible with an engine-free AOT release or target platform representation.
 	eval: { class: 'limit', title: 'eval', suggestion: 'there is no JavaScript engine to evaluate code: replace it with a lookup of known functions, or keep this app on the JavaScript release', before: 'eval(name + "()")', after: "const actions = new Map<string, () => void>([['save', save], ['load', load]]); actions.get(name)?.()" },
 	'function-constructor': { class: 'limit', title: 'Function from text', suggestion: 'there is no JavaScript engine to compile a function from text: write the function in the source', before: 'new Function("a", "b", "return a + b")', after: '(a: number, b: number) => a + b' },
-	'finalization-registry': { class: 'limit', title: 'FinalizationRegistry', suggestion: 'finalizers do not run in a compiled release: release the resource explicitly (a dispose() method, or an unloaded/disposeNativeView hook)' },
-	'shared-array-buffer': { class: 'limit', title: 'SharedArrayBuffer', suggestion: 'use an ArrayBuffer, and post copies between workers' },
-	atomics: { class: 'limit', title: 'Atomics', suggestion: 'use an ArrayBuffer and post messages between workers instead of shared memory' },
 	with: { class: 'limit', title: '`with`', suggestion: 'name the object explicitly (`obj.x` instead of `x` inside `with (obj)`)' },
 	'computed-import': { class: 'limit', title: 'import() of a computed specifier', suggestion: "import each module by a literal path (`() => import('./pages/a')`), and choose among those functions at run time" },
 	'computed-require': { class: 'limit', title: 'require() of a computed specifier', suggestion: 'require each module by a literal path, and choose among them at run time' },
-	'arguments-callee': { class: 'limit', title: '`arguments.callee`', suggestion: 'name the function and call it by its name', before: 'const f = function (n) { return n ? n * arguments.callee(n - 1) : 1; }', after: 'function f(n: number): number { return n ? n * f(n - 1) : 1; }' },
-	proto: { class: 'limit', title: '`__proto__`', suggestion: 'use Object.getPrototypeOf, or a class hierarchy declared in the source', before: 'b.__proto__ === A.prototype', after: 'b instanceof A' },
 	'process-env': { class: 'limit', title: 'process.env the bundler did not define', suggestion: 'a compiled release has no process environment: define the variable in the bundler config (Vite `define`, webpack DefinePlugin), which the compiled build reads too' },
 	'undefined-constant': { class: 'limit', title: 'a bundler constant declared but never given a value', suggestion: 'if your bundler defines it (Vite `define`, webpack DefinePlugin), the compiled build reads the same config: check the name there; otherwise assign globalThis.NAME before it is read' },
 	'shared-typed-copy': { class: 'limit', title: 'an array of one object type converted into an array of another, a copy where JavaScript shares it', suggestion: 'declare the value with the wanted type where it is made, or copy it explicitly (`list.map((x) => ({ ...x }))`)' },
@@ -62,7 +65,6 @@ export const REFUSALS = {
 	'class-expression': { class: 'gap', title: 'a class expression', suggestion: 'declare the class with a name, then use it', before: 'const o = new (class { x = 1; })()', after: 'class Point { x = 1; } const o = new Point()' },
 	'named-function-expression': { class: 'gap', title: 'a named function expression that refers to itself', suggestion: 'declare it as a function declaration and refer to that name', before: 'const g = function f(n) { return n ? f(n - 1) : 0; }', after: 'function f(n: number): number { return n ? f(n - 1) : 0; } const g = f' },
 	'unsupported-base': { class: 'gap', title: 'a class extending null, Function or another base the compiler does not extend yet', suggestion: 'declare the class without that base: hold a function in a field and call it, or use Object.create(null) for an object without a prototype', before: 'class Fn extends Function { constructor() { super(); } }', after: 'class Fn { constructor(readonly call: () => number) {} }' },
-	worker: { class: 'gap', title: 'a Worker in an iOS build', suggestion: "the iOS kit starts no workers yet (Android's does): run the work on the main thread in slices (a setTimeout per batch), or in native code on a background queue, and post its result back" },
 	'delete-member': { class: 'gap', title: 'delete of this member', suggestion: 'keep entries that come and go in a Map (map.delete(key)), or make the field optional and assign undefined', before: 'delete this.cache[key]', after: 'this.cache.delete(key)  // cache: Map<string, T>' },
 	'index-type': { class: 'gap', title: 'indexing this type', suggestion: 'give the indexed object a Record or Map type, or read the member by its name', before: '(obj as any)[key]', after: 'const table: Record<string, number> = obj; table[key]' },
 	native: { class: 'gap', title: 'a native API the compiler does not call yet', suggestion: ISOLATE },

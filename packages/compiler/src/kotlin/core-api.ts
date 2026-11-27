@@ -1,7 +1,7 @@
 import ts from 'typescript';
 import { heldLoss } from '../semantics/losses.ts';
 import { join } from 'node:path';
-import { addedDeclarations, augmentedProperty, isCoreDeclaration, ownPropertyOnly } from '../program/core-facts.ts';
+import { addedDeclarations, augmentedProperty, inheritedCoreOwner, isCoreDeclaration, ownPropertyOnly } from '../program/core-facts.ts';
 import { KitTypes, coreClass, kitExtends, kitMember, type KitMember, type KitType } from '../kit/kit-index.ts';
 import { KIT_NAMES_ANDROID } from './library.ts';
 import { functionTypeParts, kotlinString, numberLiteral, safeCast, splitTopLevel, RT } from './syntax.ts';
@@ -242,7 +242,7 @@ export class CoreKotlin extends KitTypes implements KotlinCore {
 	 * (`Utils.android` of utils/index is utils/native-helper's): that module's object.
 	 */
 	private ownerOf(target: ts.Expression, name: ts.MemberName): { name: string; isStatic: boolean } | null {
-		let owner = isMixinOwnMember(name, this.t.checker, (s) => this.t.mixinOf(s)) ? null : (this.owner(target) ?? this.inheritedOwner(target, name));
+		let owner = isMixinOwnMember(name, this.t.checker, (s) => this.t.mixinOf(s)) ? null : (this.owner(target) ?? inheritedCoreOwner(target, name, this.t.checker, (c) => this.t.kitRootOf(c)));
 		if (owner && !kitMember(this.index, owner.name, name.text)) owner = this.renamedOwner(owner, name.text) ?? owner;
 		if (!owner || !owner.isStatic || !owner.name.startsWith('Core_') || kitMember(this.index, owner.name, name.text)) return owner;
 		// A namespace core's declarations give where its platform file declares a class of statics (`AndroidHelper`): the class.
@@ -256,16 +256,6 @@ export class CoreKotlin extends KitTypes implements KotlinCore {
 		const decl = sym?.valueDeclaration ?? sym?.declarations?.[0];
 		const module = decl && isCoreDeclaration(decl) ? this.moduleObject(decl) : null;
 		return module && kitMember(this.index, module, name.text) ? { name: module, isStatic: true } : owner;
-	}
-
-	/** A core member read through a class of the app or a plugin that extends a core class (`this.isPassThroughParentEnabled` in a GridLayout subclass). */
-	private inheritedOwner(target: ts.Expression, name: ts.MemberName): { name: string; isStatic: boolean } | null {
-		const c = this.t.checker;
-		const decl = c.getSymbolAtLocation(name)?.valueDeclaration;
-		if (!decl || !isCoreDeclaration(decl)) return null;
-		const cls = c.getNonNullableType(c.getTypeAtLocation(target)).getSymbol()?.valueDeclaration;
-		const root = cls && ts.isClassLike(cls) && !cls.getSourceFile().isDeclarationFile ? this.t.kitRootOf(cls) : null;
-		return root ? { name: root, isStatic: false } : null;
 	}
 
 	/**
@@ -300,13 +290,6 @@ export class CoreKotlin extends KitTypes implements KotlinCore {
 		const m = kitMember(this.index, owner, name);
 		if (!m) throw this.t.error(e, `${owner}.${name} (kit-android has no such member)`);
 		return m;
-	}
-
-	private isViewProperty(owner: string, name: string): boolean {
-		// A style property applies to any view; the kit's classes each apply their own.
-		if (owner === 'Style') return [...this.index.values()].some((t) => kitExtends(this.index, t.name, 'View') && t.props.has(name));
-		for (let t = this.index.get(owner); t; t = t.base ? this.index.get(t.base.replace(/\(.*$/, '')) : undefined) if (t.props.has(name)) return true;
-		return false;
 	}
 
 	/** `object.name` of an `augmentedProperty` on a core-typed object, outside a chain: the read of its own property (`Any?`), or null. */

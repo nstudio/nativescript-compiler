@@ -161,3 +161,12 @@ export function nativeViewOf(checker: ts.TypeChecker, type: ts.Type, table: Reco
 	};
 	return visit(checker.getNonNullableType(type));
 }
+
+/** A core member read through a class of the app or a plugin that extends a core class (`this.isPassThroughParentEnabled` in a GridLayout subclass). */
+export function inheritedCoreOwner(target: ts.Expression, name: ts.MemberName, checker: ts.TypeChecker, kitRootOf: (cls: ts.ClassLikeDeclaration) => string | null): { name: string; isStatic: boolean } | null {
+	const decl = checker.getSymbolAtLocation(name)?.valueDeclaration;
+	if (!decl || !isCoreDeclaration(decl)) return null;
+	const cls = checker.getNonNullableType(checker.getTypeAtLocation(target)).getSymbol()?.valueDeclaration;
+	const root = cls && ts.isClassLike(cls) && !cls.getSourceFile().isDeclarationFile ? kitRootOf(cls) : null;
+	return root ? { name: root, isStatic: false } : null;
+}

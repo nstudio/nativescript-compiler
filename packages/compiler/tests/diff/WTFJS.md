@@ -55,7 +55,7 @@ commit where CI's differential and `wtfjs.ts --check` steps pass. To compare it 
 | 27 | Addition of RegExps | refused: 1573 R | refused: 1573 R | builtin-prototype |  |
 | 28 | Strings aren't instances of `String` | matches Node, the rest refused: 1520 ✓, 1521 R, 1546 ✓ | matches Node, the rest refused: 1520 ✓, 1521 R, 1546 ✓ | wrapper-object |  |
 | 29 | Calling functions with backticks | matches Node: 1525 ✓, 1548 ✓ | matches Node: 1525 ✓, 1548 ✓ |  |  |
-| 30 | Call call call | matches Node, the rest refused: 1567 ✓, 1578 R | matches Node: 1567 ✓, 1578 ✓ | other-receiver (Swift) |  |
+| 30 | Call call call | matches Node, the rest refused: 1567 ✓, 1578 R | matches Node: 1567 ✓, 1578 ✓ | ? (Swift) |  |
 | 31 | A `constructor` property | matches Node: 1522 ✓ | matches Node: 1522 ✓ |  |  |
 | 32 | Object as a key of object's property | matches Node: 1547 ✓ | matches Node: 1547 ✓ |  |  |
 | 33 | Accessing prototypes with `__proto__` | refused: 1566 R | refused: 1566 R | proto |  |
@@ -66,7 +66,7 @@ commit where CI's differential and `wtfjs.ts --check` steps pass. To compare it 
 | 38 | Nested labels | matches Node: 1549 ✓ | matches Node: 1549 ✓ |  |  |
 | 39 | Insidious `try..catch` | matches Node, the rest refused: 1549 ✓, 1568 R | matches Node: 1549 ✓, 1568 ✓ | finally-jump (Swift) |  |
 | 40 | Is this multiple inheritance? | refused: 1574 R | refused: 1574 R | unsupported-base |  |
-| 41 | A generator which yields itself | matches Node, the rest refused: 1551 ✓, 1569 R | matches Node, the rest refused: 1551 ✓, 1569 R | named-function-expression |  |
+| 41 | A generator which yields itself | matches Node, the rest refused: 1551 ✓, 1569 R | matches Node, the rest refused: 1551 ✓, 1569 R | ? |  |
 | 42 | A class of class | matches Node: 1550 ✓, 1570 ✓ | matches Node: 1550 ✓, 1570 ✓ |  |  |
 | 43 | Non-coercible objects | matches Node, the rest refused: 1553 ✓, 1571 R | matches Node, the rest refused: 1553 ✓, 1571 R | object-call |  |
 | 44 | Tricky arrow functions | matches Node: 1548 ✓ | matches Node: 1548 ✓ |  |  |
