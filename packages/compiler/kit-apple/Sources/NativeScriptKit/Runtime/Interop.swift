@@ -27,7 +27,7 @@ public final class InteropReference {
     }
     /// A Core Foundation error out-parameter: what the function writes is owned by the caller, and held as an NSError.
     public var cfError: Unmanaged<CFError>? {
-        get { (value as? NSError).map { Unmanaged.passUnretained($0 as CFError) } }
+        get { (value as? NSError).map { Unmanaged.passUnretained(unsafeBitCast($0, to: CFError.self)) } }
         set { value = newValue.map { $0.takeRetainedValue() as Error as NSError } }
     }
 }

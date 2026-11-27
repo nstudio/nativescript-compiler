@@ -501,12 +501,170 @@ private struct JSJSONWriter {
 
     var text: String { output.string }
 
-    /// `value`, the root property `""` of `holder`, serialized iteratively.
+    /// `value`, the property `key` of `holder`, after its `toJSON` and the replacer; false, writing nothing, when
+    /// it serializes to undefined. Uses direct recursion below depth 64 for speed, spilling to `frames` past that
+    /// so arbitrarily deep structures (e.g. 5000+ nested arrays) never overflow the call stack.
     mutating func property(_ holder: AnyObject?, _ key: @autoclosure () -> String, _ value: Any?) throws -> Bool {
-        guard let resolved = try resolve(holder, key(), value) else { return false }
-        guard try emitOrPush(resolved) else { return false }
-        try drain()
+        if depth >= 64 {
+            guard let resolved = try resolve(holder, key(), value) else { return false }
+            guard try emitOrPush(resolved) else { return false }
+            try drain()
+            return true
+        }
+        var v = jsFlat(value)
+        if let value = v, jsIsClassInstance(value) {
+            let object = jsObjectReference(value)
+            let kind = kind(of: object)
+            switch kind {
+            case .plainObject:
+                let plain = unsafeDowncast(object, to: JSObject.self)
+                if let f = jsFlat(plain["toJSON"]), jsIsFunction(f) {
+                    v = try jsInvoke(f, plain, [key()])
+                } else if replacer == nil {
+                    try membersDirect(plain, plain.keys) { plain[$0] }
+                    return true
+                }
+            case .dynamic:
+                let dynamic = object as! JSDynamic
+                if let f = jsFlat(dynamic[jsKey: "toJSON"]), jsIsFunction(f) {
+                    v = try jsInvoke(f, dynamic, [key()])
+                } else if replacer == nil {
+                    try membersDirect(dynamic, dynamic.jsKeys) { dynamic[jsKey: $0] }
+                    return true
+                }
+            case .toJSON: v = try (object as! JSToJSONConvertible).jsToJSON(key())
+            case .date: v = unsafeDowncast(object, to: JSDate.self).toJSON() ?? jsNull
+            default: if replacer == nil { return try writeDirect(object: object, kind) }
+            }
+        }
+        if let replacer { v = try jsFlat(jsInvoke(replacer, holder, [key(), v])) }
+        guard let v else { return false }
+        return try writeDirect(v)
+    }
+
+    private mutating func writeDirect(_ value: Any) throws -> Bool {
+        if jsIsClassInstance(value) {
+            let object = jsObjectReference(value)
+            return try writeDirect(object: object, kind(of: object))
+        }
+        let output = self.output
+        func scalar<T>(_ value: T) -> Bool {
+            if T.self == String.self { output.appendJSONString(unsafeBitCast(value, to: String.self)) }
+            else if T.self == Double.self { output.appendJSONNumber(unsafeBitCast(value, to: Double.self)) }
+            else if T.self == Bool.self { output.append(unsafeBitCast(value, to: Bool.self) ? "true" : "false") }
+            else { return false }
+            return true
+        }
+        if _openExistential(value, do: scalar) { return true }
+        if value is JSBigInt { throw JSException(JSTypeError("Do not know how to serialize a BigInt")) }
+        if let n = jsNumeric(value) {
+            output.appendJSONNumber(n)
+        } else if jsIsFunction(value) {
+            return false
+        } else if jsIsTuple(value) {
+            let list = Mirror(reflecting: value).children.map { jsFlat($0.value) }
+            try elementsDirect(nil, list.count) { list[$0] }
+        } else {
+            return try writeBridgedDirect(value)
+        }
         return true
+    }
+
+    private mutating func writeDirect(object: AnyObject, _ kind: JSJSONClassKind) throws -> Bool {
+        switch kind {
+        case .null:
+            output.append("null")
+        case .plainObject:
+            let plain = unsafeDowncast(object, to: JSObject.self)
+            try membersDirect(plain, plain.keys) { plain[$0] }
+        case .dynamic, .error:
+            let dynamic = object as! JSDynamic
+            try membersDirect(dynamic, dynamic.jsKeys) { dynamic[jsKey: $0] }
+        case .numbers:
+            let array = unsafeDowncast(object, to: JSArray<Double>.self)
+            array.track()
+            try elementsDirect(array, array.storage.count) {
+                let d = array.storage[$0]
+                return d.isNaN ? JSArray<Double>.untyped(d) : d
+            }
+        case .strings:
+            let array = unsafeDowncast(object, to: JSArray<String>.self)
+            array.track()
+            try elementsDirect(array, array.storage.count) { jsIsHoleString(array.storage[$0]) ? nil : array.storage[$0] }
+        case .values where unsafeDowncast(object, to: JSArray<Any?>.self).jsTracker == nil && unsafeDowncast(object, to: JSArray<Any?>.self).shared == nil:
+            let array = unsafeDowncast(object, to: JSArray<Any?>.self)
+            try elementsDirect(array, array.storage.count) { array.storage[$0] }
+        case .match:
+            let values = unsafeDowncast(object, to: JSMatch.self).values
+            try elementsDirect(values, values.storage.count) { values.storage[$0] }
+        case .matchIndices:
+            let values = unsafeDowncast(object, to: JSMatchIndices.self).values
+            try elementsDirect(values, values.storage.count) { values.storage[$0] }
+        case .values, .array:
+            let array = object as! JSArrayProtocol
+            let values = array.jsAnyElements
+            try elementsDirect(array, values.count) { values[$0] }
+        case .date:
+            guard let iso = unsafeDowncast(object, to: JSDate.self).toJSON() else { output.append("null"); break }
+            output.appendJSONString(iso)
+        case .function:
+            return false
+        case .toJSON, .other:
+            return try writeBridgedDirect(object)
+        }
+        return true
+    }
+
+    private mutating func writeBridgedDirect(_ value: Any) throws -> Bool {
+        switch value {
+        case let s as String: output.appendJSONString(s)
+        case let b as Bool: output.append(b ? "true" : "false")
+        case let n where jsNumeric(n) != nil: output.appendJSONNumber(jsNumeric(n)!)
+        case let array as JSArrayProtocol:
+            let values = array.jsAnyElements
+            try elementsDirect(array, values.count) { values[$0] }
+        case let dynamic as JSDynamic:
+            try membersDirect(dynamic, dynamic.jsKeys) { dynamic[jsKey: $0] }
+        default: output.append("{}")
+        }
+        return true
+    }
+
+    private mutating func elementsDirect(_ object: AnyObject?, _ count: Int, _ element: (Int) -> Any?) throws {
+        try enter(object)
+        defer { leave(object) }
+        guard count > 0 else { return output.append("[]") }
+        output.append(0x5B)
+        depth += 1
+        for i in 0..<count {
+            if i > 0 { output.append(0x2C) }
+            newline()
+            if try !property(object, String(i), element(i)) { output.append("null") }
+        }
+        depth -= 1
+        newline()
+        output.append(0x5D)
+    }
+
+    private mutating func membersDirect(_ object: AnyObject, _ keys: [String], _ member: (String) -> Any?) throws {
+        try enter(object)
+        defer { leave(object) }
+        output.append(0x7B)
+        depth += 1
+        var empty = true
+        for key in allowed ?? keys {
+            if allowed != nil, !keys.contains(key) { continue }
+            let start = output.count
+            if !empty { output.append(0x2C) }
+            newline()
+            output.appendJSONString(key)
+            output.append(0x3A)
+            if !gap.isEmpty { output.append(0x20) }
+            if try property(object, key, member(key)) { empty = false } else { output.truncate(to: start) }
+        }
+        depth -= 1
+        if !empty { newline() }
+        output.append(0x7D)
     }
 
     /// Runs `toJSON` and `replacer`, returning `nil` if the property is omitted (undefined or function).
