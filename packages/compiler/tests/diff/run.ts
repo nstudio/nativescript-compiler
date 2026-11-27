@@ -31,7 +31,16 @@ const optimize = process.argv.includes('--osize') ? '-Osize' : '-Onone';
 const build = (process.env.NS_DIFF_BUILD ?? join(tmpdir(), 'ns-compiled-diff')) + (optimize === '-Osize' ? '-osize' : '');
 const argv = process.argv.slice(2);
 const jsonFile = argv.includes('--json') ? argv[argv.indexOf('--json') + 1] : undefined;
-const args = argv.filter((a, k) => !a.startsWith('--') && argv[k - 1] !== '--json');
+const shardArg = argv.includes('--shard') ? argv[argv.indexOf('--shard') + 1] : undefined;
+const shard = (() => {
+  if (!shardArg) return null;
+  const m = /^(\d+)\/(\d+)$/.exec(shardArg);
+  if (!m) throw new Error(`invalid --shard ${shardArg}: expected <index>/<total> (1-based)`);
+  const index = Number(m[1]), total = Number(m[2]);
+  if (index < 1 || index > total) throw new Error(`invalid --shard ${shardArg}: index must be 1..${total}`);
+  return { index, total };
+})();
+const args = argv.filter((a, k) => !a.startsWith('--') && argv[k - 1] !== '--json' && argv[k - 1] !== '--shard');
 const keep = process.argv.includes('--keep');
 // Emitted programs name their cases' files (Swift's #sourceLocation) and build folder: as placeholders in keys and entries, one checkout's entries serve another's.
 const places = new Placeholders({ BUILD: build, ROOT: root, SUITE: suiteDir });
@@ -71,7 +80,8 @@ function toJavaScript(dir: string, out: string) {
 
 // ---- Run ---------------------------------------------------------------------------------------
 
-const cases = selected(args, readdirSync(diffCases).filter((f) => f.endsWith('.ts')).map((f) => basename(f, '.ts'))).map((n) => `${n}.ts`).sort();
+const allCases = selected(args, readdirSync(diffCases).filter((f) => f.endsWith('.ts')).map((f) => basename(f, '.ts'))).map((n) => `${n}.ts`).sort();
+const cases = shard ? allCases.filter((_, k) => k % shard.total === shard.index - 1) : allCases;
 const js = join(build, 'js');
 rmSync(js, { recursive: true, force: true });
 toJavaScript(diffCases, js);

@@ -29,9 +29,17 @@ const kitAndroid = join(root, 'kit-android/src/main/kotlin/org/nativescript/kit'
 const build = process.env.NS_WORKER_BUILD ?? join(tmpdir(), 'ns-compiled-worker');
 const modulesDir = process.env.NS_DIFF_MODULES ?? join(root, 'tests/node_modules');
 const keep = process.argv.includes('--keep');
+const wantSwift = process.argv.includes('--swift');
+const wantKotlin = process.argv.includes('--kotlin');
+const runKotlin = wantKotlin || !wantSwift;
+const runSwift = process.platform === 'darwin' && (wantSwift || !wantKotlin);
 const runtimeSources = [...readdirSync(join(kitAndroid, 'runtime')).filter((f) => f.endsWith('.kt')).map((f) => join(kitAndroid, 'runtime', f)), join(kitAndroid, 'Signals.kt')];
 mkdirSync(build, { recursive: true });
 
+let failed = 0;
+const casesDir = join(here, 'cases');
+
+if (runKotlin) {
 const toolchain = kotlinToolchain();
 function kotlinc(sources: string[], out: string, classpath: string[]): void {
   rmSync(out, { recursive: true, force: true });
@@ -47,7 +55,6 @@ if (!existsSync(stamp) || statSync(stamp).mtimeMs < Math.max(...runtimeSources.m
 }
 const java = (classes: string, main: string) => spawnSync('java', ['-Xss16m', '-cp', [classes, runtime, toolchain.stdlib].join(':'), main], { encoding: 'utf8', timeout: 60000 });
 
-let failed = 0;
 const tests = join(build, 'tests');
 kotlinc([join(here, 'Host.kt'), join(here, 'WorkerTests.kt'), join(here, 'RuntimeTests.kt')], tests, [runtime]);
 for (const main of ['workertest.WorkerTestsKt', 'workertest.RuntimeTestsKt']) {
@@ -86,7 +93,6 @@ function translate(dir: string, out: string, pkg: string): void {
   writeFileSync(join(out, '__Main.kt'), `package ${pkg}.entry\n\nimport org.nativescript.kit.*\nimport ${pkg}.*\n\nfun main() {\n    workertest.Host.install()\n${registered}${inits}    Microtasks.checkpoint()\n    if (!workertest.Host.pumpUntilIdle(10000)) println("timed out with " + workertest.Host.workerThreads().joinToString { it.name })\n    System.out.flush()\n}\n`);
 }
 
-const casesDir = join(here, 'cases');
 for (const name of readdirSync(casesDir).sort()) {
   const dir = join(casesDir, name);
   const pkg = 'worker_' + name.replace(/\W/g, '_');
@@ -107,9 +113,10 @@ for (const name of readdirSync(casesDir).sort()) {
   }
   if (!keep) rmSync(out, { recursive: true, force: true });
 }
+}
 
 // kit-apple's Worker on macOS: WorkerTests.swift + platform-agnostic cases under cases/.
-if (process.platform === 'darwin') {
+if (runSwift) {
   const swiftRuntimeDir = join(build, 'swift-runtime');
   const workerSwiftFlags = ['-Xfrontend', '-disable-dynamic-actor-isolation'];
   buildSwiftRuntime(swiftRuntimeDir, '-Onone', workerSwiftFlags);

@@ -1,8 +1,8 @@
 name: Compiler Nightly & Conformance
 
-# Runs the full Kotlin and Swift differential suites against Node.js, decision-parity checks,
-# worker/runtime suites, release checks, and (optionally) Test262, publishing a commit-pinned
-# conformance summary artifact and job summary.
+# Runs the full Kotlin and Swift differential suites against Node.js (sharded & cached),
+# decision-parity checks, worker/runtime suites, and (optionally) Test262, publishing
+# commit-pinned conformance artifacts and job summaries.
 
 on:
   schedule:
@@ -22,17 +22,22 @@ permissions:
 
 concurrency:
   group: compiler-nightly-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
 
 jobs:
   kotlin-conformance:
-    name: Kotlin differential, worker & release conformance (Linux)
+    name: Kotlin conformance shard ${{ matrix.shard }}/4 (Linux)
     if: >-
       github.event_name != 'pull_request' ||
       contains(github.event.pull_request.labels.*.name, 'nightly') ||
       contains(github.event.pull_request.labels.*.name, 'test262') ||
       contains(github.event.pull_request.labels.*.name, 'decision-parity')
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -55,32 +60,47 @@ jobs:
           echo "/tmp/kotlinc-dist/kotlinc/bin" >> "$GITHUB_PATH"
           /tmp/kotlinc-dist/kotlinc/bin/kotlinc -version
 
+      - name: Restore Kotlin differential cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/ns-diff-cache
+          key: ns-diff-kotlin-s${{ matrix.shard }}-${{ hashFiles('packages/compiler/kit-android/**', 'packages/compiler/src/**') }}-${{ github.sha }}
+          restore-keys: |
+            ns-diff-kotlin-s${{ matrix.shard }}-${{ hashFiles('packages/compiler/kit-android/**', 'packages/compiler/src/**') }}-
+            ns-diff-kotlin-s${{ matrix.shard }}-
+
       - name: Install workspace dependencies
         run: |
           npm install --no-audit --no-fund
           npm ci --prefix packages/compiler/tests --no-audit --no-fund
 
-      - name: Run Kotlin differential suite against Node.js
+      - name: Run Kotlin differential suite against Node.js (shard ${{ matrix.shard }}/4)
         run: |
           mkdir -p conformance-out
-          node packages/compiler/tests/diff/run.ts --kotlin --json conformance-out/diff-kotlin.json
+          node packages/compiler/tests/diff/run.ts --kotlin --shard ${{ matrix.shard }}/4 --json conformance-out/diff-kotlin-s${{ matrix.shard }}.json
 
       - name: Run Kotlin worker & runtime concurrency checks
+        if: matrix.shard == 1
         run: node packages/compiler/tests/worker/run.ts --kotlin
 
       - name: Run Test262 selection (Kotlin)
         if: >-
-          github.event_name == 'schedule' ||
-          inputs.run_test262 == true ||
-          contains(github.event.pull_request.labels.*.name, 'test262')
+          matrix.shard == 1 && (
+            github.event_name == 'schedule' ||
+            inputs.run_test262 == true ||
+            contains(github.event.pull_request.labels.*.name, 'test262')
+          )
         run: node packages/compiler/tests/test262/run.ts --kotlin
 
       - name: Summarize Kotlin conformance
         if: always()
+        env:
+          SHARD: ${{ matrix.shard }}
         run: |
           node --input-type=module -e '
             import { existsSync, readFileSync, writeFileSync } from "node:fs";
-            const file = "conformance-out/diff-kotlin.json";
+            const shard = process.env.SHARD;
+            const file = `conformance-out/diff-kotlin-s${shard}.json`;
             if (!existsSync(file)) process.exit(0);
             const data = JSON.parse(readFileSync(file, "utf8"));
             const entries = Array.isArray(data) ? data : Object.values(data.results ?? data);
@@ -89,9 +109,9 @@ jobs:
               const s = typeof e === "string" ? e : (e?.status ?? "unknown");
               counts[s] = (counts[s] ?? 0) + 1;
             }
-            const summary = { commit: process.env.GITHUB_SHA, backend: "kotlin", total: entries.length, counts };
-            writeFileSync("conformance-out/summary-kotlin.json", JSON.stringify(summary, null, 2));
-            const lines = ["## Kotlin Conformance (`" + process.env.GITHUB_SHA.slice(0, 10) + "`)", "", "| Outcome | Count |", "|---|---:|", ...Object.entries(counts).map(([k, v]) => `| ${k} | ${v} |`)];
+            const summary = { commit: process.env.GITHUB_SHA, backend: "kotlin", shard: Number(shard), total: entries.length, counts };
+            writeFileSync(`conformance-out/summary-kotlin-s${shard}.json`, JSON.stringify(summary, null, 2));
+            const lines = [`## Kotlin Conformance shard ${shard}/4 (\`${process.env.GITHUB_SHA.slice(0, 10)}\`)`, "", "| Outcome | Count |", "|---|---:|", ...Object.entries(counts).map(([k, v]) => `| ${k} | ${v} |`)];
             if (process.env.GITHUB_STEP_SUMMARY) writeFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n") + "\n", { flag: "a" });
             console.log(lines.join("\n"));
           '
@@ -100,18 +120,23 @@ jobs:
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: conformance-kotlin
+          name: conformance-kotlin-s${{ matrix.shard }}
           path: conformance-out/
           if-no-files-found: ignore
 
   swift-conformance:
-    name: Swift differential, decision-parity & worker conformance (macOS)
+    name: Swift conformance shard ${{ matrix.shard }}/2 (macOS)
     if: >-
       github.event_name != 'pull_request' ||
       contains(github.event.pull_request.labels.*.name, 'nightly') ||
       contains(github.event.pull_request.labels.*.name, 'test262') ||
       contains(github.event.pull_request.labels.*.name, 'decision-parity')
     runs-on: macos-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -121,35 +146,51 @@ jobs:
         with:
           node-version: '24'
 
+      - name: Restore Swift differential cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/Library/Caches/ns-diff-cache
+          key: ns-diff-swift-s${{ matrix.shard }}-${{ hashFiles('packages/compiler/kit-apple/**', 'packages/compiler/src/**') }}-${{ github.sha }}
+          restore-keys: |
+            ns-diff-swift-s${{ matrix.shard }}-${{ hashFiles('packages/compiler/kit-apple/**', 'packages/compiler/src/**') }}-
+            ns-diff-swift-s${{ matrix.shard }}-
+
       - name: Install workspace dependencies
         run: |
           npm install --no-audit --no-fund
           npm ci --prefix packages/compiler/tests --no-audit --no-fund
 
-      - name: Run Swift differential suite against Node.js
+      - name: Run Swift differential suite against Node.js (shard ${{ matrix.shard }}/2)
         run: |
           mkdir -p conformance-out
-          node packages/compiler/tests/diff/run.ts --swift --json conformance-out/diff-swift.json
+          node packages/compiler/tests/diff/run.ts --swift --shard ${{ matrix.shard }}/2 --json conformance-out/diff-swift-s${{ matrix.shard }}.json
 
       - name: Run decision-parity check (merge set)
+        if: matrix.shard == 1
         run: node packages/compiler/tests/checks/decision-parity.ts --set merge
 
       - name: Run Swift worker checks
+        if: matrix.shard == 1
         run: node packages/compiler/tests/worker/run.ts --swift
 
       - name: Run Test262 selection (Swift)
         if: >-
-          github.event_name == 'schedule' ||
-          inputs.run_test262 == true ||
-          contains(github.event.pull_request.labels.*.name, 'test262')
+          matrix.shard == 1 && (
+            github.event_name == 'schedule' ||
+            inputs.run_test262 == true ||
+            contains(github.event.pull_request.labels.*.name, 'test262')
+          )
         run: node packages/compiler/tests/test262/run.ts --swift
 
       - name: Summarize Swift conformance
         if: always()
+        env:
+          SHARD: ${{ matrix.shard }}
         run: |
           node --input-type=module -e '
             import { existsSync, readFileSync, writeFileSync } from "node:fs";
-            const file = "conformance-out/diff-swift.json";
+            const shard = process.env.SHARD;
+            const file = `conformance-out/diff-swift-s${shard}.json`;
             if (!existsSync(file)) process.exit(0);
             const data = JSON.parse(readFileSync(file, "utf8"));
             const entries = Array.isArray(data) ? data : Object.values(data.results ?? data);
@@ -158,9 +199,9 @@ jobs:
               const s = typeof e === "string" ? e : (e?.status ?? "unknown");
               counts[s] = (counts[s] ?? 0) + 1;
             }
-            const summary = { commit: process.env.GITHUB_SHA, backend: "swift", total: entries.length, counts };
-            writeFileSync("conformance-out/summary-swift.json", JSON.stringify(summary, null, 2));
-            const lines = ["## Swift Conformance (`" + process.env.GITHUB_SHA.slice(0, 10) + "`)", "", "| Outcome | Count |", "|---|---:|", ...Object.entries(counts).map(([k, v]) => `| ${k} | ${v} |`)];
+            const summary = { commit: process.env.GITHUB_SHA, backend: "swift", shard: Number(shard), total: entries.length, counts };
+            writeFileSync(`conformance-out/summary-swift-s${shard}.json`, JSON.stringify(summary, null, 2));
+            const lines = [`## Swift Conformance shard ${shard}/2 (\`${process.env.GITHUB_SHA.slice(0, 10)}\`)`, "", "| Outcome | Count |", "|---|---:|", ...Object.entries(counts).map(([k, v]) => `| ${k} | ${v} |`)];
             if (process.env.GITHUB_STEP_SUMMARY) writeFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n") + "\n", { flag: "a" });
             console.log(lines.join("\n"));
           '
@@ -169,6 +210,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: conformance-swift
+          name: conformance-swift-s${{ matrix.shard }}
           path: conformance-out/
           if-no-files-found: ignore
