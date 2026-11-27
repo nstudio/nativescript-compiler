@@ -12,6 +12,78 @@ import { definedField } from '../semantics/shapes.ts';
 import { isKit, isNamed, isUntyped, spelledType } from '../semantics/types.ts';
 
 export const declarationsMethods = {
+	/**
+	 * Whether a function-local `let s = ...` of type `String` is only ever mutated via statement-level `s += ...`
+	 * (at least once inside a loop) and never captured by a closure: safe to back with a `StringBuilder` to avoid O(N^2) copies.
+	 */
+	isStringBuilderLocal(this: Translator, d: ts.VariableDeclaration): boolean {
+		if (!ts.isIdentifier(d.name) || !d.initializer) return false;
+		const ownerFn = ts.findAncestor(d, (n): n is ts.FunctionLikeDeclaration => ts.isFunctionLike(n) && 'body' in n && !!(n as ts.FunctionLikeDeclaration).body);
+		if (!ownerFn || !ownerFn.body || ts.isSourceFile(d.parent.parent.parent)) return false;
+		const sym = this.checker.getSymbolAtLocation(d.name);
+		if (!sym || (sym.declarations?.length ?? 0) !== 1) return false;
+		let appendedInLoop = false;
+		let disqualified = false;
+		const visit = (n: ts.Node, inNestedFn: boolean, inLoop: boolean): void => {
+			if (disqualified) return;
+			if (n !== ownerFn && (ts.isFunctionLike(n) || ts.isClassLike(n))) {
+				ts.forEachChild(n, (c) => visit(c, true, inLoop));
+				return;
+			}
+			if (ts.isIdentifier(n) && n !== d.name) {
+				const p = n.parent;
+				if ((ts.isPropertyAccessExpression(p) && p.name === n) || ((ts.isPropertyAssignment(p) || ts.isMethodDeclaration(p) || ts.isPropertyDeclaration(p)) && p.name === n)) return;
+				if (this.checker.getSymbolAtLocation(n) === sym) {
+					if (inNestedFn || (ts.isShorthandPropertyAssignment(p) && p.name === n)) {
+						disqualified = true;
+						return;
+					}
+					if (ts.isBinaryExpression(p) && p.left === n && p.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && p.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+						if (p.operatorToken.kind !== ts.SyntaxKind.PlusEqualsToken || !ts.isExpressionStatement(p.parent)) {
+							disqualified = true;
+							return;
+						}
+						// Reject `s += ...s...` self-append edge case.
+						let readsSelf = false;
+						const checkRhs = (x: ts.Node): void => {
+							if (ts.isIdentifier(x) && this.checker.getSymbolAtLocation(x) === sym) readsSelf = true;
+							if (!readsSelf) ts.forEachChild(x, checkRhs);
+						};
+						checkRhs(p.right);
+						if (readsSelf) {
+							disqualified = true;
+							return;
+						}
+						if (inLoop) appendedInLoop = true;
+						return;
+					}
+					if (ts.isPrefixUnaryExpression(p) || ts.isPostfixUnaryExpression(p)) {
+						if (p.operator === ts.SyntaxKind.PlusPlusToken || p.operator === ts.SyntaxKind.MinusMinusToken) {
+							disqualified = true;
+							return;
+						}
+					}
+					if ((ts.isForInStatement(p) || ts.isForOfStatement(p)) && p.initializer === n) {
+						disqualified = true;
+						return;
+					}
+					if (ts.isArrayLiteralExpression(p) || ts.isObjectLiteralExpression(p) || ts.isSpreadAssignment(p) || ts.isSpreadElement(p)) {
+						let up: ts.Node = p;
+						while (ts.isArrayLiteralExpression(up) || ts.isObjectLiteralExpression(up) || ts.isPropertyAssignment(up) || ts.isSpreadAssignment(up) || ts.isSpreadElement(up)) up = up.parent;
+						if (ts.isBinaryExpression(up) && up.operatorToken.kind === ts.SyntaxKind.EqualsToken && up.left.pos <= n.pos && n.end <= up.left.end) {
+							disqualified = true;
+							return;
+						}
+					}
+				}
+			}
+			const nextLoop = inLoop || ts.isIterationStatement(n, false);
+			ts.forEachChild(n, (c) => visit(c, inNestedFn, nextLoop));
+		};
+		visit(ownerFn.body, false, false);
+		return appendedInLoop && !disqualified;
+	},
+
 	declarationList(this: Translator, list: ts.VariableDeclarationList, lowered: boolean): string {
 		const constant = !!(list.flags & ts.NodeFlags.Const);
 		// A `let` or `var` set once, where it is declared, is a constant too.
@@ -151,6 +223,12 @@ export const declarationsMethods = {
 				// An untyped value (`args[1]` of `...args`) where the declaration names a type: as that type.
 				const read = (this.isAny(d.initializer) || this.untypedElement(d.initializer)) && !isUntyped(spelledType(t)) ? (this.checkedPlacement(d.initializer, optionalType(t), maybe, this.storeSlot(d.initializer, optionalType(t), d)) ?? this.fromAny(maybe, optionalType(t))) : this.nullableArrayAs(maybe, this.typeOf(d.initializer), t);
 				return `${i}${constant ? 'val' : 'var'} ${name}: ${optionalType(t)} = ${read}`;
+			}
+			if (!this.library && !constant && !lowered && !this.asyncCtx && t === 'String' && this.isStringBuilderLocal(d)) {
+				const sym = this.checker.getSymbolAtLocation(d.name)!;
+				this.stringBuilders.add(sym);
+				const init = this.stored(d.initializer, d, 'String');
+				return `${i}val ${name} = StringBuilder(${init === '""' ? '' : init})`;
 			}
 			// An untyped value asserted a Java class its uses need only a superclass of: held as that class, unchecked as script's assertion is.
 			const wider = !this.library && ts.isIdentifier(d.name) ? this.widerAsserted(d) : null;

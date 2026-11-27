@@ -13,6 +13,7 @@ import { isLibDeclaration } from '../semantics/ast.ts';
 import { nullAs } from './expressions.ts';
 import { bigIntArithmetic, bigIntCompare, bigIntPlan, type BigIntInfix } from '../semantics/apis/bigint.ts';
 import { BIT_ASSIGNMENTS, addCall, bitOperation, concatOperand, numericThrowing, untypedBinary, untypedConversion } from '../semantics/apis/operators.ts';
+import { flattenStringConcat, planRelational } from '../semantics/lower.ts';
 
 /** BigInt's operations the backend spells as an operator. */
 const BIGINT_INFIX: { readonly [Op in BigIntInfix]: string } = { add: '+', subtract: '-', multiply: '*', and: 'and', or: 'or', xor: 'xor' };
@@ -71,6 +72,11 @@ export const operatorsMethods = {
 				const added = () => (untyped?.kind === 'concat' ? concatOperand(this, e.right, untyped) : this.str(e.right));
 				// A string that may be missing converts first: Kotlin's `+` on a null string writes "null" for undefined too.
 				if (this.isString(e.left) && isNullable(this.declaredTypeOf(e.left) ?? this.typeOf(e.left))) return `${target()} = ${this.str(e.left)} + ${added()}`;
+				if (ts.isIdentifier(e.left) && this.stringBuilders.has(this.resolve(e.left)!)) {
+					const parts = flattenStringConcat(e.right, (x) => this.isString(x));
+					const appends = parts.map((p) => `.append(${untyped?.kind === 'concat' ? concatOperand(this, p, untyped) : this.str(p)})`).join('');
+					return `${ident(e.left.text)}${appends}`;
+				}
 				return this.isString(e.left) ? `${target()} += ${added()}` : `${target()} += ${untyped ? untypedConversion(this, untyped, e.right) : this.toNumber(e.right)}`;
 			}
 			case K.MinusEqualsToken:
@@ -126,18 +132,18 @@ export const operatorsMethods = {
 			case K.GreaterThanToken:
 			case K.LessThanEqualsToken:
 			case K.GreaterThanEqualsToken: {
-				const sym = ts.tokenToString(op)!;
-				if (this.isString(e.left) && this.isString(e.right)) return `${l()} ${sym} ${r()}`;
 				// An untyped or object operand: compared as strings or as numbers by what it holds when the program runs.
 				const dynamic = (x: ts.Expression) => {
 					const t = this.typeOf(x);
 					return isUntyped(spelledType(t)) || t === 'Any' || t === 'String?' || /^[A-Z]\??$/.test(t) || (this.isObjectType(t) && !/^JSDate\??$/.test(t));
 				};
-				if (dynamic(e.left) || dynamic(e.right)) {
-					const fn = ({ [K.LessThanToken]: RT.jsLess, [K.GreaterThanToken]: RT.jsGreater, [K.LessThanEqualsToken]: RT.jsLessOrEqual, [K.GreaterThanEqualsToken]: RT.jsGreaterOrEqual } as Partial<Record<ts.SyntaxKind, string>>)[op];
+				const plan = planRelational(op, this.isString(e.left), this.isString(e.right), dynamic(e.left) || dynamic(e.right))!;
+				if (plan.kind === 'string') return `${l()} ${plan.op} ${r()}`;
+				if (plan.kind === 'dynamic') {
+					const fn = ({ '<': RT.jsLess, '>': RT.jsGreater, '<=': RT.jsLessOrEqual, '>=': RT.jsGreaterOrEqual } as const)[plan.op];
 					return `${fn}(${this.coerce(e.left, 'Any?')}, ${this.coerce(e.right, 'Any?')})`;
 				}
-				return `${this.toNumber(e.left)} ${sym} ${this.toNumber(e.right)}`;
+				return `${this.toNumber(e.left)} ${plan.op} ${this.toNumber(e.right)}`;
 			}
 			case K.QuestionQuestionToken: {
 				const t = this.typeOf(e);

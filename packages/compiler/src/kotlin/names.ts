@@ -204,6 +204,7 @@ export const namesMethods = {
 			return `${kit ?? this.declaredName(e).split('.').map(ident).join('.')}::class.java`;
 		}
 		const ref = this.globalAlias(e) ?? this.refName(e);
+		if (sym && this.stringBuilders.has(sym)) return `${ref}.toString()`;
 		// Library mode: a class named where a member of that name is in scope (ApplicationCommon's `AndroidApplication` getter) by its package.
 		if (this.library && this.appModule && sym && sym.flags & (ts.SymbolFlags.Class | ts.SymbolFlags.Enum) && !ref.includes('.') && this.memberInScope(e, name)) return `${this.appModule}.${ref}`;
 		return this.narrowed(e, ref);

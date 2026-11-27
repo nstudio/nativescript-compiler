@@ -109,7 +109,7 @@ private class JSONParser(val source: String) {
                         value = top.array
                     }
                     is Container.Object -> {
-                        top.obj[top.key] = value
+                        top.obj.defineParsed(top.key, value)
                         if (peek() == ','.code) {
                             position++
                             skipWhitespace()
@@ -365,7 +365,7 @@ interface JSToJSON {
 
 /** SerializeJSONProperty and its kin, writing into one builder. */
 private class JSONWriter(val gap: String?) {
-    private val out = StringBuilder()
+    private val out = StringBuilder(256)
     /** The arrays and objects being written, outermost first, and the key each is written under (for a cycle's message). */
     private val holders = ArrayList<Any>()
     private val holderKeys = ArrayList<String>()
@@ -382,8 +382,12 @@ private class JSONWriter(val gap: String?) {
      */
     private fun property(holder: Any?, key: String?, index: Int, value: Any?, depth: Int): Boolean {
         var v = jsBox(value)
-        if (v is JSToJSON) v = jsBox(v.jsToJSON(key ?: index.toString()))
-        else if (v is JSDynamic && v !is JSError) {
+        if (v is JSObject) {
+            val toJSON = if (v.isPlainFast) v.storage["toJSON"] else v.jsGet("toJSON")
+            if (toJSON is Function<*>) v = jsBox(jsCall(toJSON, key ?: index.toString()))
+        } else if (v is JSToJSON) {
+            v = jsBox(v.jsToJSON(key ?: index.toString()))
+        } else if (v is JSDynamic && v !is JSError) {
             val toJSON = v.jsGet("toJSON")
             if (toJSON is Function<*>) v = jsBox(jsCall(toJSON, key ?: index.toString()))
         }
@@ -415,6 +419,7 @@ private class JSONWriter(val gap: String?) {
                     is Pair<*, *> -> array(v, key ?: index.toString(), listOf(v.first, v.second), depth)
                     is Triple<*, *, *> -> array(v, key ?: index.toString(), listOf(v.first, v.second, v.third), depth)
                     is JSRegExp -> out.append("{}")
+                    is JSObject -> if (v.isPlainFast && allowed == null && replacer == null) plainObj(v, key ?: index.toString(), depth) else obj(v, key ?: index.toString(), depth)
                     is JSDynamic -> obj(v, key ?: index.toString(), depth)
                     else -> out.append("{}")
                 }
@@ -494,6 +499,27 @@ private class JSONWriter(val gap: String?) {
             newline(depth)
             out.append(']')
         }
+        leave()
+    }
+
+    /** Fast path for a plain JSObject with no replacer, filter, slots, prototype, or reactive tracker. */
+    private fun plainObj(owner: JSObject, key: String, depth: Int) {
+        enter(key, owner)
+        val keys = owner.namedKeys
+        val map = owner.storage
+        out.append('{')
+        var written = false
+        for (i in 0 until keys.size) {
+            val k = keys[i]
+            val mark = out.length
+            if (written) out.append(',')
+            newline(depth + 1)
+            appendJSONQuoted(out, k)
+            out.append(if (gap == null) ":" else ": ")
+            if (property(owner, k, -1, map[k], depth + 1)) written = true else out.setLength(mark)
+        }
+        if (written) newline(depth)
+        out.append('}')
         leave()
     }
 

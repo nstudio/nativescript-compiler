@@ -45,6 +45,8 @@ export class Translator implements AsyncTranslator {
 	spelling: { type: ts.Type; cycle: boolean }[] = [];
 	/** Variables initialized from an element read (`const r = xs[i]`): nullable, unwrapped where they are used. */
 	undefinedVars = new Map<ts.Symbol, string>();
+	/** Function-local `let s: string` variables only mutated via `+=` in a loop: lowered to `StringBuilder`. */
+	stringBuilders = new Set<ts.Symbol>();
 	/** A binding Kotlin holds as nullable though TypeScript types it present: reads take it as the undefined it may be. */
 	bindsOptional(name: ts.Identifier, type: string): string {
 		const sym = this.checker.getSymbolAtLocation(name);

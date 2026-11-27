@@ -13,6 +13,7 @@ import { constClassExpr, hasInstanceClass } from '../semantics/classes.ts';
 import { isUntyped, spelledType } from '../semantics/types.ts';
 import { bigIntArithmetic, bigIntCompare, bigIntPlan, type BigIntInfix } from '../semantics/apis/bigint.ts';
 import { BIT_ASSIGNMENTS, addCall, bitOperation, concatOperand, numericThrowing, untypedBinary, untypedConversion } from '../semantics/apis/operators.ts';
+import { planRelational } from '../semantics/lower.ts';
 
 /** BigInt's operations the backend spells as an operator. */
 const BIGINT_INFIX: { readonly [Op in BigIntInfix]: string } = { add: '+', subtract: '-', multiply: '*', and: '&', or: '|', xor: '^' };
@@ -148,14 +149,14 @@ export const operatorsMethods = {
 			case K.GreaterThanToken:
 			case K.LessThanEqualsToken:
 			case K.GreaterThanEqualsToken: {
-				const sym = ts.tokenToString(op)!;
-				if (this.isString(e.left) && this.isString(e.right)) return `${RT.jsCompare}(${l()}, ${r()}) ${sym} 0`;
+				const plan = planRelational(op, this.isString(e.left), this.isString(e.right), this.isAny(e.left) || this.isAny(e.right))!;
+				if (plan.kind === 'string') return `${RT.jsCompare}(${l()}, ${r()}) ${plan.op} 0`;
 				// An untyped side may hold a string, and two strings compare as strings.
-				if (this.isAny(e.left) || this.isAny(e.right)) {
+				if (plan.kind === 'dynamic') {
 					const [a, b] = [this.coerce(e.left, 'Any?'), this.coerce(e.right, 'Any?')];
-					return op === K.LessThanToken ? `(${RT.jsLessThan}(${a}, ${b}) == true)` : op === K.GreaterThanToken ? `(${RT.jsGreaterThan}(${a}, ${b}) == true)` : op === K.LessThanEqualsToken ? `(${RT.jsGreaterThan}(${a}, ${b}) == false)` : `(${RT.jsLessThan}(${a}, ${b}) == false)`;
+					return plan.op === '<' ? `(${RT.jsLessThan}(${a}, ${b}) == true)` : plan.op === '>' ? `(${RT.jsGreaterThan}(${a}, ${b}) == true)` : plan.op === '<=' ? `(${RT.jsGreaterThan}(${a}, ${b}) == false)` : `(${RT.jsLessThan}(${a}, ${b}) == false)`;
 				}
-				return this.marks.infix(this.toNumber(e.left), sym, this.toNumber(e.right));
+				return this.marks.infix(this.toNumber(e.left), plan.op, this.toNumber(e.right));
 			}
 			case K.QuestionQuestionToken: {
 				const t = this.typeOf(e);

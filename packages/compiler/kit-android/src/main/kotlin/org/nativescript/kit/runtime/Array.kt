@@ -69,10 +69,14 @@ open class JSArray<T>(storage: ArrayList<T>) : Iterable<T>, JSReactiveConvertibl
         return read(i.toInt())
     }
 
-    operator fun get(i: Int): T {
-        track()
-        return read(i)
+    private fun readTracked(i: Int): T {
+        jsTracker!!.track()
+        val v = storage[i]
+        jsReactiveAny(v)
+        return v
     }
+
+    operator fun get(i: Int): T = if (jsTracker == null) storage[i] else readTracked(i)
 
     operator fun get(i: Double): T = get(i.toInt())
 
@@ -424,60 +428,92 @@ open class JSArray<T>(storage: ArrayList<T>) : Iterable<T>, JSReactiveConvertibl
     }
 
     fun forEach(f: (T) -> Unit) {
+        val list = storage
         val n = size
         var i = 0
-        while (i < n && i < storage.size) { f(read(i)); i++ }
+        if (jsTracker == null) {
+            while (i < n && i < list.size) { f(list[i]); i++ }
+        } else {
+            while (i < n && i < list.size) { f(read(i)); i++ }
+        }
     }
 
     fun forEach(f: (T, Double) -> Unit) {
+        val list = storage
         val n = size
         var i = 0
-        while (i < n && i < storage.size) { f(read(i), i.toDouble()); i++ }
+        if (jsTracker == null) {
+            while (i < n && i < list.size) { f(list[i], i.toDouble()); i++ }
+        } else {
+            while (i < n && i < list.size) { f(read(i), i.toDouble()); i++ }
+        }
     }
 
     fun forEach(f: (T, Double, JSArray<T>) -> Unit) {
+        val list = storage
         val n = size
         var i = 0
-        while (i < n && i < storage.size) { f(read(i), i.toDouble(), this); i++ }
+        while (i < n && i < list.size) { f(read(i), i.toDouble(), this); i++ }
     }
 
     fun <U> map(f: (T) -> U): JSArray<U> {
+        val list = storage
         val n = size
         val out = ArrayList<U>(n)
         var i = 0
-        while (i < n && i < storage.size) { out.add(f(read(i))); i++ }
+        if (jsTracker == null) {
+            while (i < n && i < list.size) { out.add(f(list[i])); i++ }
+        } else {
+            while (i < n && i < list.size) { out.add(f(read(i))); i++ }
+        }
         return JSArray(out)
     }
 
     fun <U> map(f: (T, Double) -> U): JSArray<U> {
+        val list = storage
         val n = size
         val out = ArrayList<U>(n)
         var i = 0
-        while (i < n && i < storage.size) { out.add(f(read(i), i.toDouble())); i++ }
+        if (jsTracker == null) {
+            while (i < n && i < list.size) { out.add(f(list[i], i.toDouble())); i++ }
+        } else {
+            while (i < n && i < list.size) { out.add(f(read(i), i.toDouble())); i++ }
+        }
         return JSArray(out)
     }
 
     fun <U> map(f: (T, Double, JSArray<T>) -> U): JSArray<U> {
+        val list = storage
         val n = size
         val out = ArrayList<U>(n)
         var i = 0
-        while (i < n && i < storage.size) { out.add(f(read(i), i.toDouble(), this)); i++ }
+        while (i < n && i < list.size) { out.add(f(read(i), i.toDouble(), this)); i++ }
         return JSArray(out)
     }
 
     fun filter(f: (T) -> Boolean): JSArray<T> {
+        val list = storage
         val n = size
         val out = ArrayList<T>()
         var i = 0
-        while (i < n && i < storage.size) { val v = read(i); if (f(v)) out.add(v); i++ }
+        if (jsTracker == null) {
+            while (i < n && i < list.size) { val v = list[i]; if (f(v)) out.add(v); i++ }
+        } else {
+            while (i < n && i < list.size) { val v = read(i); if (f(v)) out.add(v); i++ }
+        }
         return JSArray(out)
     }
 
     fun filter(f: (T, Double) -> Boolean): JSArray<T> {
+        val list = storage
         val n = size
         val out = ArrayList<T>()
         var i = 0
-        while (i < n && i < storage.size) { val v = read(i); if (f(v, i.toDouble())) out.add(v); i++ }
+        if (jsTracker == null) {
+            while (i < n && i < list.size) { val v = list[i]; if (f(v, i.toDouble())) out.add(v); i++ }
+        } else {
+            while (i < n && i < list.size) { val v = read(i); if (f(v, i.toDouble())) out.add(v); i++ }
+        }
         return JSArray(out)
     }
 
@@ -507,9 +543,14 @@ open class JSArray<T>(storage: ArrayList<T>) : Iterable<T>, JSReactiveConvertibl
 
     fun <U> reduce(f: (U, T) -> U, initial: U): U {
         var acc = initial
+        val list = storage
         val n = size
         var i = 0
-        while (i < n && i < storage.size) { acc = f(acc, read(i)); i++ }
+        if (jsTracker == null) {
+            while (i < n && i < list.size) { acc = f(acc, list[i]); i++ }
+        } else {
+            while (i < n && i < list.size) { acc = f(acc, read(i)); i++ }
+        }
         return acc
     }
 

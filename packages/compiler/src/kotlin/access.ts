@@ -214,6 +214,7 @@ export const accessMethods = {
 			return ((base.endsWith('?') || held) && !proven && !e.questionDotToken && !inChain && !isSelf(target, this.subst)) || this.isAsserted(code) ? this.present(code, name, target, isWriteTarget(e)) : code;
 		};
 		if (name === 'length' && this.isString(target)) {
+			if (!e.questionDotToken && !inChain && ts.isIdentifier(target) && this.stringBuilders.has(this.resolve(target)!)) return `${ident(target.text)}.length.toDouble()`;
 			return e.questionDotToken || inChain ? `${this.expr(target)}?.length?.toDouble()` : `${recv()}.length.toDouble()`;
 		}
 		if (name === 'length' && (base.startsWith('Pair<') || base.startsWith('Triple<'))) return base.startsWith('Pair<') ? '2.0' : '3.0';

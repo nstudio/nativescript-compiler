@@ -356,6 +356,39 @@ fun <T : Any> jsMethodReceiver(self: Any?, own: T, cls: Class<*>): T = if (cls.i
 /** A method read from a prototype for an instance (`View.prototype._setMinWidthNative`): the instance is its `this`. */
 fun jsBoundTo(value: Any?, receiver: Any?): Any? = if (value is JSMethod) JSFunction { args -> value.call(receiver, args.toTypedArray()) } else value
 
+/** Zero-vararg exact-arity fast paths for `jsCallMethod` (0–3 arguments). */
+fun jsCallMethod(target: Any?, key: String): Any? {
+    if ((key == "bind" || key == "call" || key == "apply") && jsIsFunction(target)) return jsCallMethod(target, key, *JS_EMPTY_ARGS)
+    var f = jsGet(target, key)
+    if (jsBox(f) == null && jsBox(target) is JSDynamic && JSPrototypes.objectPrototype.has(key)) f = JSPrototypes.objectPrototype[key]
+    if (f is JSMethod) return jsBox(f.call(target, JS_EMPTY_ARGS))
+    return jsCall(f)
+}
+
+fun jsCallMethod(target: Any?, key: String, a0: Any?): Any? {
+    if ((key == "bind" || key == "call" || key == "apply") && jsIsFunction(target)) return jsCallMethod(target, key, *arrayOf(a0))
+    var f = jsGet(target, key)
+    if (jsBox(f) == null && jsBox(target) is JSDynamic && JSPrototypes.objectPrototype.has(key)) f = JSPrototypes.objectPrototype[key]
+    if (f is JSMethod) return jsBox(f.call(target, arrayOf(a0)))
+    return jsCall(f, a0)
+}
+
+fun jsCallMethod(target: Any?, key: String, a0: Any?, a1: Any?): Any? {
+    if ((key == "bind" || key == "call" || key == "apply") && jsIsFunction(target)) return jsCallMethod(target, key, *arrayOf(a0, a1))
+    var f = jsGet(target, key)
+    if (jsBox(f) == null && jsBox(target) is JSDynamic && JSPrototypes.objectPrototype.has(key)) f = JSPrototypes.objectPrototype[key]
+    if (f is JSMethod) return jsBox(f.call(target, arrayOf(a0, a1)))
+    return jsCall(f, a0, a1)
+}
+
+fun jsCallMethod(target: Any?, key: String, a0: Any?, a1: Any?, a2: Any?): Any? {
+    if ((key == "bind" || key == "call" || key == "apply") && jsIsFunction(target)) return jsCallMethod(target, key, *arrayOf(a0, a1, a2))
+    var f = jsGet(target, key)
+    if (jsBox(f) == null && jsBox(target) is JSDynamic && JSPrototypes.objectPrototype.has(key)) f = JSPrototypes.objectPrototype[key]
+    if (f is JSMethod) return jsBox(f.call(target, arrayOf(a0, a1, a2)))
+    return jsCall(f, a0, a1, a2)
+}
+
 /** `object.method(args)` on an untyped object: a method sees the object as `this`. */
 fun jsCallMethod(target: Any?, key: String, vararg args: Any?): Any? {
     // `fn.call(thisArg, …)`, `fn.apply(thisArg, list)` of a function value: a method sees `thisArg`, any other function ignores it.

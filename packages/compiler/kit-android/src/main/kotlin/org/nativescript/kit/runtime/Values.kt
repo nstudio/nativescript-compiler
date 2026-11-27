@@ -258,11 +258,12 @@ fun jsObjectOf(vararg entries: Pair<String, Any?>): JSObject = JSObject(*entries
  * ascending, then the other keys in insertion order.
  */
 class JSObject() : JSDynamic, JSSymbolKeyed, JSAccessorKeyed, JSReactiveConvertible {
-    private val storage = HashMap<String, Any?>()
-    private val indexKeys = ArrayList<Long>()
-    private val namedKeys = ArrayList<String>()
+    internal val storage = HashMap<String, Any?>(8)
+    private var indexKeys: ArrayList<Long>? = null
+    internal val namedKeys = ArrayList<String>(8)
     /** Properties that are accessors or not plain writable, enumerable, configurable data. */
-    private val slots = HashMap<String, JSPropertySlot>()
+    private var slots: HashMap<String, JSPropertySlot>? = null
+    private var hasSymbols = false
     var extensible = true
         private set
     var jsTracker: JSTracker? = null
@@ -272,6 +273,10 @@ class JSObject() : JSDynamic, JSSymbolKeyed, JSAccessorKeyed, JSReactiveConverti
 
     /** What weak collections hold for this object as their key. */
     internal var weakSlots: JSWeakSlots? = null
+
+    /** True when this object has only plain enumerable string keys, no prototype, and no reactive tracker. */
+    internal val isPlainFast: Boolean
+        get() = indexKeys == null && !hasSymbols && slots == null && jsPrototype == null && jsTracker == null
 
     constructor(entries: List<Pair<String, Any?>>) : this() {
         for ((k, v) in entries) define(k, v)
@@ -285,7 +290,8 @@ class JSObject() : JSDynamic, JSSymbolKeyed, JSAccessorKeyed, JSReactiveConverti
     var jsPrototype: Any? = null
 
     operator fun get(key: String): Any? {
-        if (slots.isNotEmpty()) slots[key]?.get?.let { return it(this) }
+        val s = slots
+        if (s != null && s.isNotEmpty()) s[key]?.get?.let { return it(this) }
         jsPrototype?.let { proto -> if (!storage.containsKey(key)) return jsBox(proto).let { p -> if (p is JSObject) p.get(key, this) else jsGet(p, key) } }
         val tracker = jsTracker ?: return storage[key]
         tracker.track()
@@ -294,7 +300,8 @@ class JSObject() : JSDynamic, JSSymbolKeyed, JSAccessorKeyed, JSReactiveConverti
 
     /** `object[key]` read for `receiver`, which an accessor sees as `this` (an instance reading its prototype's). */
     fun get(key: String, receiver: Any?): Any? {
-        if (slots.isNotEmpty()) slots[key]?.let { if (it.isAccessor) return it.get?.invoke(receiver) }
+        val s = slots
+        if (s != null && s.isNotEmpty()) s[key]?.let { if (it.isAccessor) return it.get?.invoke(receiver) }
         val proto = jsBox(jsPrototype)
         if (proto is JSObject && !storage.containsKey(key)) return proto.get(key, receiver)
         return this[key]
@@ -311,16 +318,30 @@ class JSObject() : JSDynamic, JSSymbolKeyed, JSAccessorKeyed, JSReactiveConverti
     }
 
     /** The setter of an accessor property; it takes the receiver as `this`. */
-    fun setter(key: String): ((Any?, Any?) -> Unit)? = slots[key]?.takeIf { it.isAccessor }?.set
+    fun setter(key: String): ((Any?, Any?) -> Unit)? = slots?.get(key)?.takeIf { it.isAccessor }?.set
 
     operator fun set(key: String, value: Any?) = put(key, value)
+
+    /** Fast property insertion for `JSON.parse` on a freshly created object. */
+    internal fun defineParsed(key: String, value: Any?) {
+        if (key.isEmpty() || key[0] !in '0'..'9') {
+            val existed = storage.containsKey(key)
+            storage[key] = value
+            if (!existed) {
+                namedKeys.add(key)
+                if (jsIsSymbolKey(key)) hasSymbols = true
+            }
+        } else {
+            define(key, value)
+        }
+    }
 
     /**
      * `object[key] = value` in strict code: a read-only property, a getter without a setter
      * or a new key on an object that is not extensible throws a TypeError.
      */
     fun put(key: String, value: Any?) {
-        val slot = slots[key]
+        val slot = slots?.get(key)
         if (slot != null) {
             if (slot.isAccessor) {
                 val setter = slot.set ?: throw JSException(JSTypeError("Cannot set property $key of #<Object> which has only a getter"))
@@ -350,7 +371,7 @@ class JSObject() : JSDynamic, JSSymbolKeyed, JSAccessorKeyed, JSReactiveConverti
     /** `Object.defineProperty(object, key, descriptor)`; attributes the descriptor leaves out are false for a new property. */
     fun defineProperty(key: String, d: JSPropertyDescriptor) {
         val exists = storage.containsKey(key)
-        val slot = slots[key] ?: JSPropertySlot(enumerable = exists, writable = exists, configurable = exists)
+        val slot = slots?.get(key) ?: JSPropertySlot(enumerable = exists, writable = exists, configurable = exists)
         if (!exists && !extensible) throw JSException(JSTypeError("Cannot define property $key, object is not extensible"))
         if (exists && !slot.configurable) {
             val changes = d.get != null || d.set != null || d.configurable == true || (d.enumerable != null && d.enumerable != slot.enumerable) ||
@@ -366,14 +387,14 @@ class JSObject() : JSDynamic, JSSymbolKeyed, JSAccessorKeyed, JSReactiveConverti
         d.writable?.let { slot.writable = it }
         d.configurable?.let { slot.configurable = it }
         define(key, if (slot.isAccessor) null else if (d.hasValue) d.value else storage[key])
-        if (slot.isPlain) slots.remove(key) else slots[key] = slot
+        if (slot.isPlain) slots?.remove(key) else (slots ?: HashMap<String, JSPropertySlot>(4).also { slots = it })[key] = slot
         jsTracker?.trigger()
     }
 
     /** `Object.getOwnPropertyDescriptor(object, key)`. */
     fun descriptor(key: String): JSObject? {
         if (!storage.containsKey(key)) return null
-        val slot = slots[key] ?: JSPropertySlot()
+        val slot = slots?.get(key) ?: JSPropertySlot()
         if (slot.isAccessor) {
             val g = slot.get
             val s = slot.set
@@ -388,39 +409,60 @@ class JSObject() : JSDynamic, JSSymbolKeyed, JSAccessorKeyed, JSReactiveConverti
     fun restrict(sealed: Boolean, frozen: Boolean) {
         extensible = false
         if (!sealed && !frozen) return
-        for (key in indexKeys.map { it.toString() } + namedKeys) {
-            val slot = slots[key] ?: JSPropertySlot()
+        val s = slots ?: HashMap<String, JSPropertySlot>(storage.size).also { slots = it }
+        val idx = indexKeys
+        if (idx != null) {
+            for (n in idx) {
+                val key = n.toString()
+                val slot = s[key] ?: JSPropertySlot()
+                slot.configurable = false
+                if (frozen && !slot.isAccessor) slot.writable = false
+                s[key] = slot
+            }
+        }
+        for (key in namedKeys) {
+            val slot = s[key] ?: JSPropertySlot()
             slot.configurable = false
             if (frozen && !slot.isAccessor) slot.writable = false
-            slots[key] = slot
+            s[key] = slot
         }
     }
 
-    val isSealed: Boolean get() = !extensible && storage.keys.all { !(slots[it] ?: JSPropertySlot()).configurable }
-    val isFrozen: Boolean get() = !extensible && storage.keys.all { val s = slots[it] ?: JSPropertySlot(); !s.configurable && (s.isAccessor || !s.writable) }
+    val isSealed: Boolean get() = !extensible && storage.keys.all { !(slots?.get(it) ?: JSPropertySlot()).configurable }
+    val isFrozen: Boolean get() = !extensible && storage.keys.all { val s = slots?.get(it) ?: JSPropertySlot(); !s.configurable && (s.isAccessor || !s.writable) }
 
     override fun jsAccessorKind(key: String): String? {
-        val slot = slots[key] ?: return null
+        val slot = slots?.get(key) ?: return null
         if (!slot.isAccessor) return null
         return if (slot.get != null && slot.set != null) "Getter/Setter" else if (slot.get != null) "Getter" else "Setter"
     }
 
     /** `Object.getOwnPropertyNames(object)`: string keys, enumerable or not. */
-    val ownPropertyNames: List<String> get() = indexKeys.map { it.toString() } + namedKeys.filter { !jsIsSymbolKey(it) }
+    val ownPropertyNames: List<String>
+        get() {
+            val idx = indexKeys
+            if (idx == null && !hasSymbols) return namedKeys
+            val names = if (hasSymbols) namedKeys.filter { !jsIsSymbolKey(it) } else namedKeys
+            return if (idx == null || idx.isEmpty()) names else idx.map { it.toString() } + names
+        }
 
     private fun define(key: String, value: Any?) {
         if (storage.containsKey(key)) { storage[key] = value; return }
         storage[key] = value
         val index = jsArrayIndex(key)
         if (index != null) {
+            val idx = indexKeys ?: ArrayList<Long>(4).also { indexKeys = it }
             var low = 0
-            var high = indexKeys.size
+            var high = idx.size
             while (low < high) {
                 val mid = (low + high) / 2
-                if (indexKeys[mid] < index) low = mid + 1 else high = mid
+                if (idx[mid] < index) low = mid + 1 else high = mid
             }
-            indexKeys.add(low, index)
-        } else namedKeys.add(key)
+            idx.add(low, index)
+        } else {
+            if (jsIsSymbolKey(key)) hasSymbols = true
+            namedKeys.add(key)
+        }
     }
 
     /** `key in object` for own keys. */
@@ -431,12 +473,12 @@ class JSObject() : JSDynamic, JSSymbolKeyed, JSAccessorKeyed, JSReactiveConverti
 
     /** `delete object[key]`. */
     fun delete(key: String): Boolean {
-        slots[key]?.let { if (!it.configurable) return false }
-        slots.remove(key)
+        slots?.get(key)?.let { if (!it.configurable) return false }
+        slots?.remove(key)
         if (!storage.containsKey(key)) return true
         storage.remove(key)
         val index = jsArrayIndex(key)
-        if (index != null) indexKeys.remove(index) else namedKeys.remove(key)
+        if (index != null) indexKeys?.remove(index) else namedKeys.remove(key)
         jsTracker?.trigger()
         return true
     }
@@ -444,14 +486,18 @@ class JSObject() : JSDynamic, JSSymbolKeyed, JSAccessorKeyed, JSReactiveConverti
     val keys: List<String>
         get() {
             jsTracker?.track()
-            val all = indexKeys.map { it.toString() } + namedKeys.filter { !jsIsSymbolKey(it) }
-            return if (slots.isEmpty()) all else all.filter { slots[it]?.enumerable ?: true }
+            val idx = indexKeys
+            val s = slots
+            if ((idx == null || idx.isEmpty()) && !hasSymbols && (s == null || s.isEmpty())) return namedKeys
+            val names = if (hasSymbols) namedKeys.filter { !jsIsSymbolKey(it) } else namedKeys
+            val all = if (idx == null || idx.isEmpty()) names else idx.map { it.toString() } + names
+            return if (s == null || s.isEmpty()) all else all.filter { s[it]?.enumerable ?: true }
         }
 
     override val jsSymbolKeys: List<String>
         get() {
             jsTracker?.track()
-            return namedKeys.filter { jsIsSymbolKey(it) }
+            return if (!hasSymbols) emptyList() else namedKeys.filter { jsIsSymbolKey(it) }
         }
 
     override fun jsGet(key: String): Any? = this[key]
@@ -540,6 +586,69 @@ fun jsSet(target: Any?, key: String, value: Any?) {
         is String, is Double, is Boolean, is JSSymbol, is JSBigInt, Unit -> {}
         else -> jsJavaSet(target, key, value)
     }
+}
+
+internal val JS_EMPTY_ARGS: Array<Any?> = emptyArray()
+
+/** Zero-vararg exact-arity fast paths for `jsCall` (0–3 arguments), avoiding `Object[]` allocation per call. */
+@Suppress("UNCHECKED_CAST")
+fun jsCall(function: Any?): Any? {
+    val result = when (function) {
+        is Function0<*> -> (function as () -> Any?)()
+        is Function1<*, *> -> (function as (Any?) -> Any?)(null)
+        is Function2<*, *, *> -> (function as (Any?, Any?) -> Any?)(null, null)
+        is Function3<*, *, *, *> -> (function as (Any?, Any?, Any?) -> Any?)(null, null, null)
+        is JSFunction -> function.body(emptyList())
+        is JSMethod -> function.call(null, JS_EMPTY_ARGS)
+        is JavaMethodRef -> function.call(emptyList())
+        else -> return jsCall(function, *JS_EMPTY_ARGS)
+    }
+    return jsBox(result)
+}
+
+@Suppress("UNCHECKED_CAST")
+fun jsCall(function: Any?, a0: Any?): Any? {
+    val result = when (function) {
+        is Function0<*> -> (function as () -> Any?)()
+        is Function1<*, *> -> (function as (Any?) -> Any?)(a0)
+        is Function2<*, *, *> -> (function as (Any?, Any?) -> Any?)(a0, null)
+        is Function3<*, *, *, *> -> (function as (Any?, Any?, Any?) -> Any?)(a0, null, null)
+        is JSFunction -> function.body(listOf(a0))
+        is JSMethod -> function.call(null, arrayOf(a0))
+        is JavaMethodRef -> function.call(listOf(a0))
+        else -> return jsCall(function, *arrayOf(a0))
+    }
+    return jsBox(result)
+}
+
+@Suppress("UNCHECKED_CAST")
+fun jsCall(function: Any?, a0: Any?, a1: Any?): Any? {
+    val result = when (function) {
+        is Function0<*> -> (function as () -> Any?)()
+        is Function1<*, *> -> (function as (Any?) -> Any?)(a0)
+        is Function2<*, *, *> -> (function as (Any?, Any?) -> Any?)(a0, a1)
+        is Function3<*, *, *, *> -> (function as (Any?, Any?, Any?) -> Any?)(a0, a1, null)
+        is JSFunction -> function.body(listOf(a0, a1))
+        is JSMethod -> function.call(null, arrayOf(a0, a1))
+        is JavaMethodRef -> function.call(listOf(a0, a1))
+        else -> return jsCall(function, *arrayOf(a0, a1))
+    }
+    return jsBox(result)
+}
+
+@Suppress("UNCHECKED_CAST")
+fun jsCall(function: Any?, a0: Any?, a1: Any?, a2: Any?): Any? {
+    val result = when (function) {
+        is Function0<*> -> (function as () -> Any?)()
+        is Function1<*, *> -> (function as (Any?) -> Any?)(a0)
+        is Function2<*, *, *> -> (function as (Any?, Any?) -> Any?)(a0, a1)
+        is Function3<*, *, *, *> -> (function as (Any?, Any?, Any?) -> Any?)(a0, a1, a2)
+        is JSFunction -> function.body(listOf(a0, a1, a2))
+        is JSMethod -> function.call(null, arrayOf(a0, a1, a2))
+        is JavaMethodRef -> function.call(listOf(a0, a1, a2))
+        else -> return jsCall(function, *arrayOf(a0, a1, a2))
+    }
+    return jsBox(result)
 }
 
 /** Calls a function stored in a dynamic value with JavaScript's argument rules. Anything else throws a TypeError. */

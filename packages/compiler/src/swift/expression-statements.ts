@@ -239,6 +239,13 @@ export const exprStatementsMethods = {
 				const call = `({ () ${tp ? 'throws ' : ''}-> ${v.type} in ${v.code} }())`;
 				return this.marks.assignedCode('_', tp ? this.marks.tryCode(call) : call);
 			}
+			if (step && ts.isIdentifier(e.operand)) {
+				const top = this.resolve(e.operand)?.valueDeclaration;
+				if (top && ts.isVariableDeclaration(top) && this.facts.tdzBindings().has(top) && !(top.parent.flags & ts.NodeFlags.Const)) {
+					const raw = (this.globalAlias(e.operand) ?? this.refName(e.operand)).replace(/`/g, '');
+					return this.marks.tryCode(`__tdz_set_${raw}(try __tdz_get_${raw}() ${step} 1)`);
+				}
+			}
 			if (step && (this.isAny(e.operand) || isUntyped(spelledType(this.declaredTypeOf(e.operand))))) return `${this.lvalue(e.operand)} = ${RT.jsToNumber}(${this.expr(e.operand)}) ${step} 1`;
 			const held = step ? this.optionalNumberOperand(e.operand) : null;
 			if (held !== null) return `${this.lvalue(e.operand)} = ${held} ${step} 1`;
