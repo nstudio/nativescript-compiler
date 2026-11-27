@@ -9,15 +9,15 @@ import { mathFunctionValue } from '../semantics/apis/math.ts';
 import { CONSOLE } from '../semantics/apis/console.ts';
 import { libFunctionValueKind } from '../semantics/apis/statics.ts';
 import { ERRORS, isLibGlobal } from '../semantics/globals.ts';
-import { spell, ident, isCompared, isNullable, isThisParameter, kotlinString, numberLiteral, optionalType, testsMissing, scriptPrimitive, RT, assertedReader } from './syntax.ts';
+import { ident, isCompared, isNullable, isThisParameter, kotlinString, numberLiteral, optionalType, testsMissing, scriptPrimitive, RT, assertedReader } from './syntax.ts';
 import type { Translator } from './translator.ts';
-import { receiverCell, receiverSlot, isEnumObject, nullishField, type ReceiverCell } from '../semantics/placement.ts';
+import { elementReceiverCell, keyName, receiverCell, receiverSlot, isEnumObject, nullishField, type ReceiverCell } from '../semantics/placement.ts';
 import { accessedDeclaration, augmentedPropertyRead, functionProperty, wellKnownMember, isSelf, literalMethod, uncheckedMatch } from '../semantics/lang.ts';
 import { convertedRead, onlyNull } from '../semantics/states/predicates.ts';
 import { isLibDeclaration, isWriteTarget, notIterable } from '../semantics/ast.ts';
 import { isStatic } from '../semantics/throws.ts';
 import { constClassExpr, declaredClassName } from '../semantics/classes.ts';
-import { isKit, isNamed, isUntyped, iterableAssertion, spelledType, type NativeType } from '../semantics/types.ts';
+import { isKit, isNamed, isUntyped, iterableAssertion, spelledType } from '../semantics/types.ts';
 import { definedField } from '../semantics/shapes.ts';
 import { programSymbolKey } from '../program/stable-names.ts';
 import { byKey, symbolField } from '../semantics/spelled.ts';
@@ -476,6 +476,12 @@ export const accessMethods = {
 			// An untyped element the checker narrows (`Array.isArray(xs[0])`): read as the narrowed type.
 			const rt = this.typeOf(e);
 			if (t === 'JSArray<Any?>' && !isUntyped(spelledType(rt))) return this.fromAny(this.maybeUndefined(e)!, rt);
+			if (t === 'JSArray<Double>' && rt === 'Double' && !q && !(e.flags & ts.NodeFlags.OptionalChain) && (!this.typeOf(e.expression).endsWith('?') || !this.library)) {
+				const cell = elementReceiverCell(this.receivers, e);
+				const missing = !this.library && this.typeOf(e.expression).endsWith('?');
+				const recv = cell.cell === 'present' ? this.receiverCode(cell, keyName(key))! : missing ? this.present(target, key, e.expression) : target;
+				return `${recv}.numberAt(${this.toNumber(key)})`;
+			}
 			return this.undefinedAs(this.maybeUndefined(e)!, rt);
 		}
 		if (t === 'JSMatch') {
@@ -536,12 +542,6 @@ export const accessMethods = {
 			return isUntyped(spelledType(rt)) || isWriteTarget(e) ? code : this.fromAnyCode(code, rt, true);
 		}
 		throw this.error(e, 'indexing this type', 'index-type');
-	},
-
-	/** `assertedUntyped`'s cast: to an object type other than the kit's own containers, promises, dates and errors. */
-	untypedCastChecks(this: Translator, _e: ts.Expression, t: NativeType): boolean {
-		const type = spell(t);
-		return this.isObjectType(type) && !/^JS(Array|Record|Promise|Date|Error)\b/.test(type);
 	},
 
 	/** An `assertedUntyped` assertion read as the nullable it may be: null where the value is undefined or null. */

@@ -4,7 +4,7 @@ import { nullishPart, nullishWrite } from '../semantics/placement.ts';
 import { ident, isNullable, kotlinString, oneExpression, optionalType, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { reassignedBase } from '../semantics/ast.ts';
-import { readWrite } from '../semantics/lang.ts';
+import { readWrite, unsafeReceiver } from '../semantics/lang.ts';
 import { isKit, isUntyped, spelledType } from '../semantics/types.ts';
 
 export const exprStatementsMethods = {
@@ -72,6 +72,20 @@ export const exprStatementsMethods = {
 		if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.CommaToken) return `${this.exprStatement(e.left)}; ${this.exprStatement(e.right)}`;
 		if (ts.isVoidExpression(e)) return this.exprStatement(e.expression);
 		if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.EqualsToken && !this.subst.has(e)) return this.binary(e);
+		if (
+			ts.isBinaryExpression(e) &&
+			e.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken &&
+			!this.subst.has(e) &&
+			ts.isElementAccessExpression(e.left) &&
+			!e.left.questionDotToken &&
+			!(e.left.flags & ts.NodeFlags.OptionalChain) &&
+			this.typeOf(e.left.expression) === 'JSArray<Double>' &&
+			!this.states.heldOptional(e.left.expression) &&
+			!unsafeReceiver(e.left.expression, this.checker) &&
+			!this.isAny(e.right)
+		) {
+			return `${this.expr(e.left.expression)}.addDoubleAt(${this.toNumber(e.left.argumentExpression)}, ${this.toNumber(e.right)})`;
+		}
 		const code = this.expr(e);
 		// A value converted to nothing (`run { call(); Unit }`) where nothing reads it: what gives the value, alone.
 		const m = ts.isCallExpression(e) ? this.marks.markOf(code) : undefined;

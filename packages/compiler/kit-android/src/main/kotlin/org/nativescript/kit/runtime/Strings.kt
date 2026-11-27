@@ -6,22 +6,29 @@ import java.util.Locale
 // String and Math members whose JavaScript behavior differs from Kotlin's. Kotlin strings
 // index UTF-16 code units, as JavaScript's do.
 
-private fun clampIndex(v: Double, count: Int): Int = if (v.isNaN()) 0 else maxOf(0.0, minOf(count.toDouble(), jsToIntegerOrInfinity(v))).toInt()
+private val ASCII_CHARS = Array(128) { it.toChar().toString() }
+
+private inline fun singleChar(c: Char): String = if (c.code < 128) ASCII_CHARS[c.code] else c.toString()
+
+private fun clampIndex(v: Double, count: Int): Int {
+    val k = v.toInt()
+    return if (k <= 0) 0 else if (k >= count) count else k
+}
 
 /** Compares strings by UTF-16 code units, as JavaScript's `<` does: -1, 0 or 1. */
 fun jsCompare(a: String, b: String): Int = a.compareTo(b).let { if (it < 0) -1 else if (it > 0) 1 else 0 }
 
-fun jsIncludes(s: String, search: String, position: Double? = null): Boolean = s.indexOf(search, clampIndex(position ?: 0.0, s.length)) >= 0
+fun jsIncludes(s: String, search: String, position: Double? = null): Boolean = s.indexOf(search, if (position == null) 0 else clampIndex(position, s.length)) >= 0
 
-fun jsStartsWith(s: String, search: String, position: Double? = null): Boolean = s.startsWith(search, clampIndex(position ?: 0.0, s.length))
+fun jsStartsWith(s: String, search: String, position: Double? = null): Boolean = s.startsWith(search, if (position == null) 0 else clampIndex(position, s.length))
 
 fun jsEndsWith(s: String, search: String, endPosition: Double? = null): Boolean {
-    val end = clampIndex(endPosition ?: s.length.toDouble(), s.length)
+    val end = if (endPosition == null) s.length else clampIndex(endPosition, s.length)
     return search.length <= end && s.regionMatches(end - search.length, search, 0, search.length)
 }
 
 fun jsIndexOf(s: String, search: String, position: Double? = null): Double {
-    val start = clampIndex(position ?: 0.0, s.length)
+    val start = if (position == null) 0 else clampIndex(position, s.length)
     if (search.isEmpty()) return start.toDouble()
     return s.indexOf(search, start).toDouble()
 }
@@ -35,15 +42,16 @@ fun jsLastIndexOf(s: String, search: String, fromIndex: Double? = null): Double 
 
 /** `s.slice(start, end)`: negative indexes count from the end; out-of-range clamps. */
 fun jsSlice(s: String, start: Double = 0.0, end: Double? = null): String {
-    val a = jsRelativeIndex(start, s.length)
-    val b = if (end == null) s.length else jsRelativeIndex(end, s.length)
+    val len = s.length
+    val a = if (start >= 0.0) { val k = start.toInt(); if (k >= len) len else k } else jsRelativeIndex(start, len)
+    val b = if (end == null) len else if (end >= 0.0) { val k = end.toInt(); if (k >= len) len else k } else jsRelativeIndex(end, len)
     return if (a < b) s.substring(a, b) else ""
 }
 
 /** `s.substring(a, b)`: negative and NaN are 0, and the bounds swap if reversed. */
 fun jsSubstring(s: String, start: Double, end: Double? = null): String {
     var a = clampIndex(start, s.length)
-    var b = clampIndex(end ?: s.length.toDouble(), s.length)
+    var b = if (end == null) s.length else clampIndex(end, s.length)
     if (a > b) { val t = a; a = b; b = t }
     return s.substring(a, b)
 }
@@ -56,31 +64,37 @@ fun jsSubstr(s: String, start: Double, length: Double? = null): String {
 }
 
 fun jsCharAt(s: String, index: Double): String {
-    val i = jsToIntegerOrInfinity(index)
-    return if (i >= 0 && i < s.length) s[i.toInt()].toString() else ""
+    val i = index.toInt()
+    return if (i >= 0 && i < s.length) singleChar(s[i]) else ""
 }
 
 /** `s[index]`: undefined (null) past either end or at a fractional index, where `charAt` gives "". */
 fun jsCharAtOrNull(s: String, index: Double): String? {
     val i = index.toInt()
-    return if (i >= 0 && i < s.length && i.toDouble() == index) s[i].toString() else null
+    return if (i >= 0 && i < s.length && i.toDouble() == index) singleChar(s[i]) else null
 }
 
 fun jsCharCodeAt(s: String, index: Double): Double {
-    val i = jsToIntegerOrInfinity(index)
-    return if (i >= 0 && i < s.length) s[i.toInt()].code.toDouble() else Double.NaN
+    val i = index.toInt()
+    return if (i >= 0 && i < s.length) s[i].code.toDouble() else Double.NaN
 }
 
 fun jsCodePointAt(s: String, index: Double): Double? {
-    val i = jsToIntegerOrInfinity(index)
+    val i = index.toInt()
     if (i < 0 || i >= s.length) return null
-    return s.codePointAt(i.toInt()).toDouble()
+    val c = s[i]
+    if (!Character.isHighSurrogate(c) || i + 1 >= s.length) return c.code.toDouble()
+    val lo = s[i + 1]
+    return (if (Character.isLowSurrogate(lo)) Character.toCodePoint(c, lo) else c.code).toDouble()
 }
 
 fun jsStringAt(s: String, index: Double): String? {
-    var i = jsToIntegerOrInfinity(index)
-    if (i < 0) i += s.length
-    return if (i >= 0 && i < s.length) s[i.toInt()].toString() else null
+    var i = index.toInt()
+    if (i < 0) {
+        if (index <= -2_147_483_648.0) return null
+        i += s.length
+    }
+    return if (i >= 0 && i < s.length) singleChar(s[i]) else null
 }
 
 fun jsFromCharCode(vararg codes: Double): String = String(CharArray(codes.size) { (jsToUint32(codes[it]).toInt() and 0xFFFF).toChar() })

@@ -85,7 +85,7 @@ export const callsMethods = {
 		}
 		if (!e.arguments.length && callableSignal(this.framework.signalKind(this.symbolName(callee)))) {
 			if (ts.isPropertyAccessExpression(callee) && isSelf(callee.expression, this.subst) && this.props.has(callee.name.text)) return `this.${ident(callee.name.text)}.value`;
-			return this.framework.signalKind(this.symbolName(callee)) === 'computed' && this.isComputedProperty(callee) ? this.expr(callee) : `${this.expr(callee)}.value`;
+			return this.framework.signalKind(this.symbolName(callee)) === 'computed' && this.isKotlinComputedProperty(callee) ? this.expr(callee) : `${this.expr(callee)}.value`;
 		}
 		if (callee.kind === ts.SyntaxKind.SuperKeyword) throw this.error(e, 'super() outside the start of a constructor');
 		const dynImport = hookedDynamicImport(e, this.framework.hooks);
@@ -268,7 +268,8 @@ export const callsMethods = {
 				q = '';
 			}
 			if (method === 'fill' && (ts.isNewExpression(target) || ts.isCallExpression(target)) && ts.isIdentifier(target.expression) && target.expression.text === 'Array' && target.arguments?.length === 1 && e.arguments.length === 1) {
-				return `${RT.jsArrayFilled}<${t.replace(/^JSArray<(.*)>$/, '$1')}>(${this.toNumber(target.arguments[0])}, ${this.coerce(e.arguments[0], t.replace(/^JSArray<(.*)>$/, '$1'))})`;
+				const el = t.replace(/^JSArray<(.*)>$/, '$1');
+				return el === 'Double' ? `JSArray.doublesFilled(${this.toNumber(target.arguments[0])}, ${this.coerce(e.arguments[0], 'Double')})` : `${RT.jsArrayFilled}<${el}>(${this.toNumber(target.arguments[0])}, ${this.coerce(e.arguments[0], el)})`;
 			}
 			if (method === 'join' && TYPED_ARRAYS.includes(t.replace(/^JS/, '')) && !q && e.arguments.length === 1 && !ts.isSpreadElement(e.arguments[0])) return `${this.expr(target)}.join(${this.joinSeparator(e.arguments[0])})`;
 			const typedThisArg = TYPED_ARRAYS.includes(t.replace(/^JS/, '')) ? this.typedArrayThisArgCall(e) : null;

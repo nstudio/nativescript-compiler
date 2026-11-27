@@ -413,7 +413,11 @@ private class JSONWriter(val gap: String?) {
                 val n = jsNumeric(v)
                 if (n != null) number(n)
                 else when (v) {
-                    is JSArray<*> -> array(v, key ?: index.toString(), v.storage, depth)
+                    is JSArray<*> -> {
+                        val d = v.doubles
+                        if (d != null && replacer == null) doubleArray(v, key ?: index.toString(), d, v.dSize, depth)
+                        else array(v, key ?: index.toString(), v.storage, depth)
+                    }
                     is JSMatch -> array(v, key ?: index.toString(), v.values.storage, depth)
                     is JSMatchIndices -> array(v, key ?: index.toString(), v.values.storage, depth)
                     is Pair<*, *> -> array(v, key ?: index.toString(), listOf(v.first, v.second), depth)
@@ -484,6 +488,22 @@ private class JSONWriter(val gap: String?) {
     private fun leave() {
         holders.removeAt(holders.size - 1)
         holderKeys.removeAt(holderKeys.size - 1)
+    }
+
+    private fun doubleArray(owner: Any, key: String, elements: DoubleArray, count: Int, depth: Int) {
+        enter(key, owner)
+        if (count == 0) out.append("[]")
+        else {
+            out.append('[')
+            for (i in 0 until count) {
+                if (i > 0) out.append(',')
+                newline(depth + 1)
+                number(elements[i])
+            }
+            newline(depth)
+            out.append(']')
+        }
+        leave()
     }
 
     private fun array(owner: Any, key: String, elements: List<Any?>, depth: Int) {

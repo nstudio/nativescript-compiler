@@ -100,6 +100,9 @@ export const builtinMethods = {
 		);
 		switch (arrayMember(name)?.op) {
 			case 'push':
+				if (e.arguments.some(ts.isSpreadElement)) return `${t}.pushAll(${this.packed(e.arguments, `JSArray<${element}>`, this.elementSlot(e, element))})`;
+				if (element === 'Double' && !q && e.arguments.length === 1) return `${t}.pushDouble(${this.elementArgument(e, e.arguments[0], 'Double')})`;
+				return `${t}.push(${e.arguments.map((x) => this.elementArgument(e, x, element)).join(', ')})`;
 			case 'unshift':
 				if (e.arguments.some(ts.isSpreadElement)) return `${t}.${name}All(${this.packed(e.arguments, `JSArray<${element}>`, this.elementSlot(e, element))})`;
 				return `${t}.${name}(${e.arguments.map((x) => this.elementArgument(e, x, element)).join(', ')})`;
@@ -207,6 +210,10 @@ export const builtinMethods = {
 						f.parameters.filter((q) => !isThisParameter(q)).map((p) => spelledType(this.paramType(p))),
 					) === 'adapt';
 				const slot = ret || adapts ? `(${params.join(', ')}) -> ${ret ?? out}` : undefined;
+				if (element === 'Double' && !q && literal && arity === 1 && !adapted && this.thisArgUse(e, target).kind === 'plain') {
+					if (name === 'map' && out === 'Double') return `${t}.mapDouble(${this.fn(f, '(Double) -> Double')})`;
+					if (name === 'filter') return `${t}.filterDouble(${this.fn(f, '(Double) -> Boolean')})`;
+				}
 				const code = this.ignoringThisArg(e, target, () => `${t}.${name}(${this.fn(f, slot)})`);
 				// A type-guard filter or find (`(s): s is Circle => …`): its elements as the guard narrows them.
 				const own = this.typeOf(e);
@@ -215,6 +222,7 @@ export const builtinMethods = {
 				return code;
 			}
 			case 'sort':
+				if (element === 'Double' && !q && e.arguments[0] && (ts.isArrowFunction(e.arguments[0]) || ts.isFunctionExpression(e.arguments[0]))) return `${t}.sortDouble(${this.fn(e.arguments[0], '(Double, Double) -> Double')})`;
 				return e.arguments[0] ? `${t}.sort(${this.fn(e.arguments[0], `(${element}, ${element}) -> Double`)})` : `${t}.sort()`;
 			case 'toSorted':
 				return e.arguments[0] ? `${t}.toSorted(${this.fn(e.arguments[0], `(${element}, ${element}) -> Double`)})` : `${t}.toSorted()`;
@@ -253,6 +261,9 @@ export const builtinMethods = {
 						) === 'adapt'
 							? `<${acc}>`
 							: '';
+					if (element === 'Double' && !q && name === 'reduce' && literal && arity <= 2 && acc === 'Double' && !adapted) {
+						return `${t}.reduceDouble(${this.fn(f, '(Double, Double) -> Double')}, ${this.coerce(init, 'Double')})`;
+					}
 					return `${t}.${name}${named}(${adapted ?? this.fn(f, `(${types(acc).join(', ')}) -> ${acc}`)}, ${this.coerce(init, acc)})`;
 				}
 				return `${t}.${name}(${this.fn(f, `(${this.library ? types(element).join(', ') : `${element}, ${element}`}) -> ${element}`)})`;

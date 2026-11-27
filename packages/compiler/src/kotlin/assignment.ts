@@ -3,7 +3,7 @@ import ts from 'typescript';
 import { TYPED_ARRAYS } from '../semantics/globals.ts';
 import { functionTypeParts, ident, isNullable, kotlinString, lambda, negated, setterMethod, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
-import { asOperation, type ReadWrite } from '../semantics/lang.ts';
+import { asOperation, unsafeReceiver, type ReadWrite } from '../semantics/lang.ts';
 import { notedField } from '../semantics/shapes.ts';
 import { isNamed, isUntyped, spelledType } from '../semantics/types.ts';
 import { assignedTo, negatedCell } from '../semantics/placement.ts';
@@ -206,6 +206,9 @@ export const assignmentMethods = {
 			return `${RT.jsSet}(${this.expr(left.expression)}, ${this.propertyKey(left.argumentExpression)}, ${this.stored(right, left, 'Any?', checks)})`;
 		}
 		const element = ts.isElementAccessExpression(left) && this.states.nullishElements(left.expression) ? this.elementTypeOf(left.expression) : null;
+		if (ts.isElementAccessExpression(left) && !element && !left.questionDotToken && !(left.flags & ts.NodeFlags.OptionalChain) && this.typeOf(left.expression) === 'JSArray<Double>' && !this.states.heldOptional(left.expression) && !unsafeReceiver(left.expression, this.checker)) {
+			return `${this.expr(left.expression)}.setDouble(${this.toNumber(left.argumentExpression)}, ${this.stored(right, left, 'Double', checks)})`;
+		}
 		return `${this.lvalue(left)} = ${this.stored(right, left, element ?? this.declaredTypeOf(left) ?? this.typeOf(left), checks)}`;
 	},
 };

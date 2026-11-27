@@ -2,7 +2,7 @@
 import ts from 'typescript';
 import { cast, destructuringSource, ident, isNullable, jsObjectCode, kotlinString, optionalType, splitTopLevel, spell, RT } from './syntax.ts';
 import type { ShapeField, Translator } from './translator.ts';
-import { assertedOperand, evolvingElementContext, intersectionAliasMembers, isTypeParameterType, literalKey, openSpreadType, spreadOperand, unquoted, untypedVariableInitializer, wellKnownMember } from '../semantics/lang.ts';
+import { assertedOperand, evolvingElementContext, intersectionAliasMembers, isTypeParameterType, literalKey, openSpreadType, spreadOperand, unquoted, wellKnownMember } from '../semantics/lang.ts';
 import { holdsNil, literalNotes, signatureField, shapePlanOfLiteral, spelledOptional, spreadElementNeedsMap, resultShapeNamed } from '../semantics/shapes.ts';
 import { structural, type Structural, type StructuralFacts } from '../semantics/conversion.ts';
 import { heldOf, isKit, isUntyped, parseNativeType, spelledType } from '../semantics/types.ts';
@@ -78,14 +78,15 @@ export const literalsMethods = {
 			return `${t.replace(/<.*/, '')}(${[...e.elements.map((x, k) => this.coerce(x, types[k])), ...missing].join(', ')})`;
 		}
 		const el = t.replace(/^JSArray<(.*)>$/, '$1');
-		if (!e.elements.length) return /^JSArray</.test(t) ? this.construction(`${t}()`, t) : `${t}()`;
+		if (!e.elements.length) return t === 'JSArray<Double>' ? this.construction('JSArray.doubles()', t) : /^JSArray</.test(t) ? this.construction(`${t}()`, t) : `${t}()`;
 		// An array of objects holds a Kotlin null, which reads as undefined.
 		const nulled = !isNullable(el) && e.elements.find((x) => !ts.isSpreadElement(x) && this.states.nullResult(ts.skipOuterExpressions(x, ts.OuterExpressionKinds.Parentheses)));
 		if (nulled) throw this.error(nulled, `the null a non-strict function may give, in an array of ${el}`);
 		if (!e.elements.some(ts.isSpreadElement)) {
 			if (e.elements.some(ts.isOmittedExpression)) throw this.error(e, 'an array hole', 'array-hole');
 			const slot = this.elementSlot(e, el);
-			return this.marks.marked(`${RT.jsArrayOf}<${el}>(${e.elements.map((x) => place(this.placement, x, slot(x))).join(', ')})`, { op: 'array', element: el });
+			const ctor = el === 'Double' ? 'JSArray.doublesOf' : `${RT.jsArrayOf}<${el}>`;
+			return this.marks.marked(`${ctor}(${e.elements.map((x) => place(this.placement, x, slot(x))).join(', ')})`, { op: 'array', element: el });
 		}
 		const parts: string[] = [];
 		let run: string[] = [];
@@ -566,11 +567,5 @@ export const literalsMethods = {
 		if (!made || !ts.isCallExpression(made) || this.calleeName(made) !== 'signal' || !this.resolve(made.expression)?.declarations?.[0]?.getSourceFile().isDeclarationFile) return false;
 		const value = made.arguments[0];
 		return !!value && (value.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(value) && value.text === 'undefined'));
-	},
-
-	/** A variable declared without a type whose value is a read of a signal holding null (`const card = this.morning()`). */
-	givenNullSignalValue(this: Translator, n: ts.Node): boolean {
-		const read = untypedVariableInitializer(n, (id) => this.resolve(id));
-		return !!read && ts.isCallExpression(read) && !read.arguments.length && /^Signal<.*\?>$/.test(this.typeOf(read.expression));
 	},
 };

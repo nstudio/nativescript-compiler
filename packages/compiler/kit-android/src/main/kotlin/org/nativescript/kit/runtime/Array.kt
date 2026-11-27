@@ -1,22 +1,63 @@
 package org.nativescript.kit
 
+private val EMPTY_ARRAY_STORAGE = ArrayList<Any?>(0)
+
 /**
  * A JavaScript array: reference semantics, JavaScript method names, `Double` indexes and lengths.
  * Reading past the end is undefined through `element`, which translated code uses for `a[i]`.
  */
 open class JSArray<T>(storage: ArrayList<T>) : Iterable<T>, JSReactiveConvertible {
-    var storage: ArrayList<T> = storage
-        internal set
+    @PublishedApi internal var _storage: ArrayList<T>? = storage
+    @PublishedApi internal var doubles: DoubleArray? = null
+    @PublishedApi internal var dSize: Int = 0
+
+    var storage: ArrayList<T>
+        get() {
+            val d = doubles
+            if (d != null) return materializeDoubles(d)
+            return _storage!!
+        }
+        internal set(value) {
+            doubles = null
+            dSize = 0
+            _storage = value
+        }
     var jsTracker: JSTracker? = null
 
     constructor() : this(ArrayList())
     constructor(items: Collection<T>) : this(ArrayList(items))
 
+    @Suppress("UNCHECKED_CAST")
+    @PublishedApi internal fun materializeDoubles(d: DoubleArray): ArrayList<T> {
+        val n = dSize
+        val list = ArrayList<T>(n)
+        var i = 0
+        while (i < n) { list.add(d[i] as T); i++ }
+        _storage = list
+        doubles = null
+        dSize = 0
+        return list
+    }
+
+    @PublishedApi internal fun appendDouble(v: Double) {
+        var d = doubles!!
+        val n = dSize
+        if (n == d.size) {
+            d = d.copyOf(if (n == 0) 8 else n shl 1)
+            doubles = d
+        }
+        d[n] = v
+        dSize = n + 1
+    }
+
     private fun track() { jsTracker?.track() }
     private fun trigger() { jsTracker?.trigger() }
 
-    private fun read(i: Int): T {
-        val v = storage[i]
+    @Suppress("UNCHECKED_CAST")
+    @PublishedApi internal fun read(i: Int): T {
+        val d = doubles
+        if (d != null) return d[i] as T
+        val v = _storage!![i]
         if (jsTracker != null) jsReactiveAny(v)
         return v
     }
@@ -24,19 +65,20 @@ open class JSArray<T>(storage: ArrayList<T>) : Iterable<T>, JSReactiveConvertibl
     // Elements
 
     val size: Int
-        get() { track(); return storage.size }
+        get() { track(); return if (doubles != null) dSize else _storage!!.size }
 
     /** The elements as a list, read through the tracker. */
     val elements: List<T>
         get() {
             track()
-            if (jsTracker != null) storage.forEach { jsReactiveAny(it) }
-            return storage
+            val list = storage
+            if (jsTracker != null) list.forEach { jsReactiveAny(it) }
+            return list
         }
 
     /** `array.length`. Setting it shorter truncates; longer adds holes. */
     var length: Double
-        get() { track(); return storage.size.toDouble() }
+        get() { track(); return (if (doubles != null) dSize else _storage!!.size).toDouble() }
         set(value) {
             if (value < 0 || value > 4_294_967_295.0 || value != Math.floor(value)) throw JSException(JSRangeError("Invalid array length"))
             setLength(value.toInt())
@@ -44,13 +86,18 @@ open class JSArray<T>(storage: ArrayList<T>) : Iterable<T>, JSReactiveConvertibl
 
     @Suppress("UNCHECKED_CAST")
     internal fun setLength(n: Int) {
-        if (n < storage.size) {
-            while (storage.size > n) storage.removeAt(storage.size - 1)
+        if (doubles != null) {
+            if (n < dSize) { dSize = n; return }
+            if (n == dSize) return
+        }
+        val list = storage
+        if (n < list.size) {
+            while (list.size > n) list.removeAt(list.size - 1)
             jsHoles?.clear(n, Int.MAX_VALUE)
             trigger()
-        } else if (n > storage.size) {
-            (jsHoles ?: java.util.BitSet().also { jsHoles = it }).set(storage.size, n)
-            while (storage.size < n) storage.add(null as T)
+        } else if (n > list.size) {
+            (jsHoles ?: java.util.BitSet().also { jsHoles = it }).set(list.size, n)
+            while (list.size < n) list.add(null as T)
             trigger()
         }
     }
@@ -61,22 +108,35 @@ open class JSArray<T>(storage: ArrayList<T>) : Iterable<T>, JSReactiveConvertibl
     /** `a[i]` as JavaScript reads it: undefined unless `i` is an integer index in range, or a key the array was given. */
     @Suppress("UNCHECKED_CAST")
     fun element(i: Double): T? {
+        val d = doubles
+        if (d != null) {
+            val k = i.toInt()
+            if (k >= 0 && k.toDouble() == i) return if (k < dSize) d[k] as T else null
+            if (i != Math.floor(i) || i < 0 || i >= 4_294_967_295.0) return jsProperties?.get(jsNumberToString(i), this) as T?
+            return null
+        }
         track()
+        val list = _storage!!
         val k = i.toInt()
-        if (k >= 0 && k.toDouble() == i) return if (k < storage.size) read(k) else null
+        if (k >= 0 && k.toDouble() == i) return if (k < list.size) read(k) else null
         if (i != Math.floor(i) || i < 0 || i >= 4_294_967_295.0) return jsProperties?.get(jsNumberToString(i), this) as T?
-        if (i >= storage.size) return null
+        if (i >= list.size) return null
         return read(i.toInt())
     }
 
     private fun readTracked(i: Int): T {
         jsTracker!!.track()
-        val v = storage[i]
+        val v = _storage!![i]
         jsReactiveAny(v)
         return v
     }
 
-    operator fun get(i: Int): T = if (jsTracker == null) storage[i] else readTracked(i)
+    @Suppress("UNCHECKED_CAST")
+    operator fun get(i: Int): T {
+        val d = doubles
+        if (d != null) return d[i] as T
+        return if (jsTracker == null) _storage!![i] else readTracked(i)
+    }
 
     operator fun get(i: Double): T = get(i.toInt())
 
@@ -85,21 +145,33 @@ open class JSArray<T>(storage: ArrayList<T>) : Iterable<T>, JSReactiveConvertibl
 
     @Suppress("UNCHECKED_CAST")
     operator fun set(i: Int, value: T) {
+        val d = doubles
+        if (d != null && value is Double) {
+            if (i >= 0 && i < dSize) { d[i] = value; return }
+            if (i == dSize) { appendDouble(value); return }
+        }
+        val list = storage
         when {
-            i < storage.size -> { storage[i] = value; jsHoles?.clear(i) }
+            i < list.size -> { list[i] = value; jsHoles?.clear(i) }
             else -> {
-                if (storage.size < i) (jsHoles ?: java.util.BitSet().also { jsHoles = it }).set(storage.size, i)
-                while (storage.size < i) storage.add(null as T)
-                storage.add(value)
+                if (list.size < i) (jsHoles ?: java.util.BitSet().also { jsHoles = it }).set(list.size, i)
+                while (list.size < i) list.add(null as T)
+                list.add(value)
             }
         }
         trigger()
     }
 
     operator fun set(i: Double, value: T) {
+        val d = doubles
         val k = i.toInt()
-        if (k >= 0 && k.toDouble() == i && k < storage.size) {
-            storage[k] = value
+        if (d != null && value is Double && k >= 0 && k.toDouble() == i) {
+            if (k < dSize) { d[k] = value; return }
+            if (k == dSize) { appendDouble(value); return }
+        }
+        val list = storage
+        if (k >= 0 && k.toDouble() == i && k < list.size) {
+            list[k] = value
             jsHoles?.clear(k)
             trigger()
             return
@@ -133,6 +205,13 @@ open class JSArray<T>(storage: ArrayList<T>) : Iterable<T>, JSReactiveConvertibl
     }
 
     fun at(i: Double): T? {
+        val d = doubles
+        if (d != null) {
+            var k = jsToIntegerOrInfinity(i)
+            if (k < 0) k += dSize
+            @Suppress("UNCHECKED_CAST")
+            return if (k >= 0 && k < dSize) d[k.toInt()] as T else null
+        }
         track()
         var k = jsToIntegerOrInfinity(i)
         if (k < 0) k += storage.size
@@ -142,7 +221,12 @@ open class JSArray<T>(storage: ArrayList<T>) : Iterable<T>, JSReactiveConvertibl
     override fun iterator(): Iterator<T> {
         var i = 0
         return object : Iterator<T> {
-            override fun hasNext(): Boolean { track(); return i < storage.size }
+            override fun hasNext(): Boolean {
+                val d = doubles
+                if (d != null) return i < dSize
+                track()
+                return i < _storage!!.size
+            }
             override fun next(): T = read(i++)
         }
     }
@@ -165,16 +249,28 @@ open class JSArray<T>(storage: ArrayList<T>) : Iterable<T>, JSReactiveConvertibl
     // Mutation
 
     fun push(item: T): Double {
-        storage.add(item)
+        val d = doubles
+        if (d != null && item is Double) {
+            appendDouble(item)
+            return dSize.toDouble()
+        }
+        val list = storage
+        list.add(item)
         trigger()
-        return storage.size.toDouble()
+        return list.size.toDouble()
     }
 
     fun push(vararg items: T): Double {
-        storage.ensureCapacity(storage.size + items.size)
-        for (item in items) storage.add(item)
+        val d = doubles
+        if (d != null && items.all { it is Double }) {
+            for (item in items) appendDouble(item as Double)
+            return dSize.toDouble()
+        }
+        val list = storage
+        list.ensureCapacity(list.size + items.size)
+        for (item in items) list.add(item)
         trigger()
-        return storage.size.toDouble()
+        return list.size.toDouble()
     }
 
     /** `a.push(...items)`. */
@@ -184,9 +280,16 @@ open class JSArray<T>(storage: ArrayList<T>) : Iterable<T>, JSReactiveConvertibl
         return storage.size.toDouble()
     }
 
+    @Suppress("UNCHECKED_CAST")
     fun pop(): T? {
-        if (storage.isEmpty()) return null
-        val v = storage.removeAt(storage.size - 1)
+        val d = doubles
+        if (d != null) {
+            if (dSize == 0) return null
+            return d[--dSize] as T
+        }
+        val list = storage
+        if (list.isEmpty()) return null
+        val v = list.removeAt(list.size - 1)
         trigger()
         return v
     }
@@ -227,6 +330,19 @@ open class JSArray<T>(storage: ArrayList<T>) : Iterable<T>, JSReactiveConvertibl
     }
 
     fun reverse(): JSArray<T> {
+        val d = doubles
+        if (d != null) {
+            var lo = 0
+            var hi = dSize - 1
+            while (lo < hi) {
+                val tmp = d[lo]
+                d[lo] = d[hi]
+                d[hi] = tmp
+                lo++
+                hi--
+            }
+            return this
+        }
         storage.reverse()
         trigger()
         return this
@@ -283,22 +399,40 @@ open class JSArray<T>(storage: ArrayList<T>) : Iterable<T>, JSReactiveConvertibl
     }
 
     fun fill(value: T, start: Double = 0.0, end: Double? = null): JSArray<T> {
-        val n = storage.size
+        val d = doubles
+        if (d != null && value is Double) {
+            val n = dSize
+            val s = jsRelativeIndex(start, n)
+            val e = if (end == null) n else jsRelativeIndex(end, n)
+            if (s < e) java.util.Arrays.fill(d, s, e, value)
+            return this
+        }
+        val list = storage
+        val n = list.size
         val s = jsRelativeIndex(start, n)
         val e = if (end == null) n else jsRelativeIndex(end, n)
-        for (i in s until e) storage[i] = value
+        for (i in s until e) list[i] = value
         trigger()
         return this
     }
 
     // Copies and searches
 
+    @Suppress("UNCHECKED_CAST")
     fun slice(start: Double = 0.0, end: Double? = null): JSArray<T> {
+        val d = doubles
+        if (d != null) {
+            val n = dSize
+            val s = jsRelativeIndex(start, n)
+            val e = if (end == null) n else jsRelativeIndex(end, n)
+            return (if (s < e) ofDoubles(d.copyOfRange(s, e), e - s) else ofDoubles(DoubleArray(0), 0)) as JSArray<T>
+        }
         track()
-        val n = storage.size
+        val list = storage
+        val n = list.size
         val s = jsRelativeIndex(start, n)
         val e = if (end == null) n else jsRelativeIndex(end, n)
-        return if (s < e) JSArray(ArrayList(storage.subList(s, e))) else JSArray()
+        return if (s < e) JSArray(ArrayList(list.subList(s, e))) else JSArray()
     }
 
     /** `array.concat(...items)`: an item that is an array adds its elements. */
@@ -427,7 +561,7 @@ open class JSArray<T>(storage: ArrayList<T>) : Iterable<T>, JSReactiveConvertibl
         return true
     }
 
-    fun forEach(f: (T) -> Unit) {
+    inline fun forEach(f: (T) -> Unit) {
         val list = storage
         val n = size
         var i = 0
@@ -438,7 +572,7 @@ open class JSArray<T>(storage: ArrayList<T>) : Iterable<T>, JSReactiveConvertibl
         }
     }
 
-    fun forEach(f: (T, Double) -> Unit) {
+    inline fun forEach(f: (T, Double) -> Unit) {
         val list = storage
         val n = size
         var i = 0
@@ -456,7 +590,7 @@ open class JSArray<T>(storage: ArrayList<T>) : Iterable<T>, JSReactiveConvertibl
         while (i < n && i < list.size) { f(read(i), i.toDouble(), this); i++ }
     }
 
-    fun <U> map(f: (T) -> U): JSArray<U> {
+    inline fun <U> map(f: (T) -> U): JSArray<U> {
         val list = storage
         val n = size
         val out = ArrayList<U>(n)
@@ -469,7 +603,7 @@ open class JSArray<T>(storage: ArrayList<T>) : Iterable<T>, JSReactiveConvertibl
         return JSArray(out)
     }
 
-    fun <U> map(f: (T, Double) -> U): JSArray<U> {
+    inline fun <U> map(f: (T, Double) -> U): JSArray<U> {
         val list = storage
         val n = size
         val out = ArrayList<U>(n)
@@ -491,7 +625,7 @@ open class JSArray<T>(storage: ArrayList<T>) : Iterable<T>, JSReactiveConvertibl
         return JSArray(out)
     }
 
-    fun filter(f: (T) -> Boolean): JSArray<T> {
+    inline fun filter(f: (T) -> Boolean): JSArray<T> {
         val list = storage
         val n = size
         val out = ArrayList<T>()
@@ -504,7 +638,7 @@ open class JSArray<T>(storage: ArrayList<T>) : Iterable<T>, JSReactiveConvertibl
         return JSArray(out)
     }
 
-    fun filter(f: (T, Double) -> Boolean): JSArray<T> {
+    inline fun filter(f: (T, Double) -> Boolean): JSArray<T> {
         val list = storage
         val n = size
         val out = ArrayList<T>()
@@ -541,7 +675,7 @@ open class JSArray<T>(storage: ArrayList<T>) : Iterable<T>, JSReactiveConvertibl
         return JSArray(out)
     }
 
-    fun <U> reduce(f: (U, T) -> U, initial: U): U {
+    inline fun <U> reduce(f: (U, T) -> U, initial: U): U {
         var acc = initial
         val list = storage
         val n = size
@@ -645,18 +779,251 @@ open class JSArray<T>(storage: ArrayList<T>) : Iterable<T>, JSReactiveConvertibl
     }
 
     override fun jsMakeReactive() {
+        val d = doubles
+        if (d != null) materializeDoubles(d)
         if (jsTracker == null) jsTracker = JSTracker()
     }
 
     override fun toString(): String = jsInspect(this)
 
     companion object {
+        @Suppress("UNCHECKED_CAST")
+        @PublishedApi internal fun ofDoubles(data: DoubleArray, count: Int): JSArray<Double> {
+            val a = JSArray<Double>(EMPTY_ARRAY_STORAGE as ArrayList<Double>)
+            a._storage = null
+            a.doubles = data
+            a.dSize = count
+            return a
+        }
+
+        fun doubles(): JSArray<Double> = ofDoubles(DoubleArray(0), 0)
+        fun doublesOf(vararg items: Double): JSArray<Double> = ofDoubles(items, items.size)
+        fun doublesFilled(length: Double, value: Double): JSArray<Double> {
+            val n = length.toInt()
+            val data = DoubleArray(n)
+            if (value != 0.0) java.util.Arrays.fill(data, value)
+            return ofDoubles(data, n)
+        }
+
         fun <T> of(vararg items: T): JSArray<T> = JSArray(items.toList())
         fun <T> from(items: Iterable<T>): JSArray<T> = JSArray(ArrayList(items.toList()))
         fun <T> from(items: Iterable<T>, f: (T, Double) -> T): JSArray<T> = JSArray(ArrayList(items.mapIndexed { i, v -> f(v, i.toDouble()) }))
         fun <T> fromLength(length: Double, f: (Double) -> T): JSArray<T> = JSArray(ArrayList((0 until jsToIntegerOrInfinity(length).clampToInt()).map { f(it.toDouble()) }))
         fun isArray(value: Any?): Boolean = value is JSArray<*>
     }
+}
+
+/** Unboxed numeric element read (`a[i]` as `Double`): `NaN` past the end, matching `(element(i) ?: Double.NaN)`. */
+fun JSArray<Double>.numberAt(i: Double): Double {
+    val d = doubles
+    val k = i.toInt()
+    if (d != null && k >= 0 && k < dSize && k.toDouble() == i) return d[k]
+    return element(i) ?: Double.NaN
+}
+
+/** Unboxed numeric element write (`a[i] = v`). */
+fun JSArray<Double>.setDouble(i: Double, value: Double) {
+    val d = doubles
+    val k = i.toInt()
+    if (d != null && k >= 0 && k.toDouble() == i) {
+        if (k < dSize) { d[k] = value; return }
+        if (k == dSize) { appendDouble(value); return }
+    }
+    set(i, value)
+}
+
+/** Unboxed numeric compound addition (`a[i] += delta`). */
+fun JSArray<Double>.addDoubleAt(i: Double, delta: Double) {
+    val d = doubles
+    val k = i.toInt()
+    if (d != null && k >= 0 && k < dSize && k.toDouble() == i) {
+        d[k] += delta
+        return
+    }
+    set(i, (element(i) ?: Double.NaN) + delta)
+}
+
+/** Unboxed single-element push onto a numeric array. */
+fun JSArray<Double>.pushDouble(value: Double): Double {
+    if (doubles != null) {
+        appendDouble(value)
+        return dSize.toDouble()
+    }
+    return push(value)
+}
+
+/** Unboxed `number[].map((x) => ...): number[]`. */
+inline fun JSArray<Double>.mapDouble(f: (Double) -> Double): JSArray<Double> {
+    val d = doubles
+    if (d != null) {
+        val n = dSize
+        val out = DoubleArray(n)
+        var i = 0
+        while (i < n && i < dSize) { out[i] = f(d[i]); i++ }
+        return JSArray.ofDoubles(out, i)
+    }
+    val list = storage
+    val n = size
+    val out = DoubleArray(n)
+    var i = 0
+    if (jsTracker == null) {
+        while (i < n && i < list.size) { out[i] = f(list[i]); i++ }
+    } else {
+        while (i < n && i < list.size) { out[i] = f(read(i)); i++ }
+    }
+    return JSArray.ofDoubles(out, i)
+}
+
+/** Unboxed `number[].filter((x) => ...): number[]`. */
+inline fun JSArray<Double>.filterDouble(f: (Double) -> Boolean): JSArray<Double> {
+    val d = doubles
+    if (d != null) {
+        val n = dSize
+        var out = DoubleArray(if (n > 16) n ushr 1 else n)
+        var count = 0
+        var i = 0
+        while (i < n && i < dSize) {
+            val v = d[i]
+            if (f(v)) {
+                if (count == out.size) out = out.copyOf(if (count == 0) 8 else count shl 1)
+                out[count++] = v
+            }
+            i++
+        }
+        return JSArray.ofDoubles(out, count)
+    }
+    val list = storage
+    val n = size
+    var out = DoubleArray(if (n > 16) n ushr 1 else n)
+    var count = 0
+    var i = 0
+    if (jsTracker == null) {
+        while (i < n && i < list.size) {
+            val v = list[i]
+            if (f(v)) {
+                if (count == out.size) out = out.copyOf(if (count == 0) 8 else count shl 1)
+                out[count++] = v
+            }
+            i++
+        }
+    } else {
+        while (i < n && i < list.size) {
+            val v = read(i)
+            if (f(v)) {
+                if (count == out.size) out = out.copyOf(if (count == 0) 8 else count shl 1)
+                out[count++] = v
+            }
+            i++
+        }
+    }
+    return JSArray.ofDoubles(out, count)
+}
+
+/** Unboxed `number[].reduce((a, b) => ..., initial): number`. */
+inline fun JSArray<Double>.reduceDouble(f: (Double, Double) -> Double, initial: Double): Double {
+    var acc = initial
+    val d = doubles
+    if (d != null) {
+        val n = dSize
+        var i = 0
+        while (i < n && i < dSize) { acc = f(acc, d[i]); i++ }
+        return acc
+    }
+    val list = storage
+    val n = size
+    var i = 0
+    if (jsTracker == null) {
+        while (i < n && i < list.size) { acc = f(acc, list[i]); i++ }
+    } else {
+        while (i < n && i < list.size) { acc = f(acc, read(i)); i++ }
+    }
+    return acc
+}
+
+/** Unboxed in-place stable merge sort for `number[].sort((a, b) => ...)`. */
+inline fun JSArray<Double>.sortDouble(compare: (Double, Double) -> Double): JSArray<Double> {
+    val d = doubles
+    if (d != null) {
+        val n = dSize
+        if (n >= 2) {
+            var src: DoubleArray = d
+            var dst = DoubleArray(n)
+            var width = 1
+            while (width < n) {
+                var lo = 0
+                while (lo < n) {
+                    val mid = minOf(lo + width, n)
+                    val hi = minOf(lo + 2 * width, n)
+                    if (mid >= hi || !(compare(src[mid], src[mid - 1]) < 0.0)) {
+                        System.arraycopy(src, lo, dst, lo, hi - lo)
+                    } else {
+                        var i = lo
+                        var j = mid
+                        var k = lo
+                        while (i < mid && j < hi) {
+                            if (compare(src[j], src[i]) < 0.0) dst[k++] = src[j++] else dst[k++] = src[i++]
+                        }
+                        while (i < mid) dst[k++] = src[i++]
+                        while (j < hi) dst[k++] = src[j++]
+                    }
+                    lo += 2 * width
+                }
+                val t = src
+                src = dst
+                dst = t
+                width *= 2
+            }
+            if (src !== d) System.arraycopy(src, 0, d, 0, n)
+        }
+        return this
+    }
+    val list = storage
+    val n = list.size
+    val values = arrayOfNulls<Any?>(n)
+    var undefineds: ArrayList<Double>? = null
+    var defined = 0
+    for (e in list) {
+        if (e == null) (undefineds ?: ArrayList<Double>().also { undefineds = it }).add(e)
+        else values[defined++] = e
+    }
+    if (defined >= 2) {
+        var src = values
+        var dst = arrayOfNulls<Any?>(defined)
+        var width = 1
+        while (width < defined) {
+            var lo = 0
+            while (lo < defined) {
+                val mid = minOf(lo + width, defined)
+                val hi = minOf(lo + 2 * width, defined)
+                if (mid >= hi || !(compare(src[mid] as Double, src[mid - 1] as Double) < 0.0)) {
+                    System.arraycopy(src, lo, dst, lo, hi - lo)
+                } else {
+                    var i = lo
+                    var j = mid
+                    var k = lo
+                    while (i < mid && j < hi) {
+                        if (compare(src[j] as Double, src[i] as Double) < 0.0) dst[k++] = src[j++] else dst[k++] = src[i++]
+                    }
+                    while (i < mid) dst[k++] = src[i++]
+                    while (j < hi) dst[k++] = src[j++]
+                }
+                lo += 2 * width
+            }
+            val t = src
+            src = dst
+            dst = t
+            width *= 2
+        }
+        if (src !== values) System.arraycopy(src, 0, values, 0, defined)
+    }
+    val out = ArrayList<Double>(n)
+    for (k in 0 until defined) out.add(values[k] as Double)
+    if (undefineds != null) out.addAll(undefineds)
+    _storage = out
+    doubles = null
+    dSize = 0
+    jsTracker?.trigger()
+    return this
 }
 
 /** `[a, b, c]`. */
