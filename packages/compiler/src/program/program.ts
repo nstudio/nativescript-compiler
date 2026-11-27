@@ -442,7 +442,7 @@ export function createProgram(roots: string[], virtual: Map<string, string>, pla
 				}
 			}
 			// A package the app replaces for the native build is the app's module.
-			const replacement = !m.startsWith('.') && !m.startsWith('/') ? replacements[packageOf(m)] : undefined;
+			const replacement = !m.startsWith('.') && !isAbsolute(m) ? replacements[packageOf(m)] : undefined;
 			if (replacement) return { resolvedModule: { resolvedFileName: replacement, extension: ts.Extension.Ts } };
 			// A plugin is compiled from its source: an import that reaches its code resolves to the file it was built from,
 			// from the app or from another plugin's source (one shipped in its package sits under node_modules).
@@ -453,7 +453,7 @@ export function createProgram(roots: string[], virtual: Map<string, string>, pla
 			const augments = ts.isModuleDeclaration(lit.parent) && lit.parent.name === lit && !!plugins?.all().some((p) => containing.startsWith(p.root + '/'));
 			// Every import of `rxjs` (including `import type` and `.d.ts` files like `@angular/cdk`) must resolve to the same compiled `rxjs` source so Observable/OperatorFunction types match across the whole program.
 			const sharedRxjs = m === 'rxjs' || m.startsWith('rxjs/');
-			if (plugins && (isSource(containing) || pluginFiles.has(containing) || augments || containing.startsWith('/__shims__/') || (containing.endsWith('.d.ts') && sharedRxjs)) && !m.startsWith('.') && !m.startsWith('/') && !notPlugin(packageOf(m)) && (!typeOnly || sharedRxjs)) {
+			if (plugins && (isSource(containing) || pluginFiles.has(containing) || augments || containing.startsWith('/__shims__/') || (containing.endsWith('.d.ts') && sharedRxjs)) && !m.startsWith('.') && !isAbsolute(m) && !notPlugin(packageOf(m)) && (!typeOnly || sharedRxjs)) {
 				const js = runtimeFile(m, modules, platform, localPackages);
 				if (js) {
 					plugins.get(js.packageDir);
@@ -474,7 +474,7 @@ export function createProgram(roots: string[], virtual: Map<string, string>, pla
 				}
 			}
 			// Type-only imports of local `file:` packages (outside node_modules): resolve to the package's typings.
-			if (!m.startsWith('.') && !m.startsWith('/')) {
+			if (!m.startsWith('.') && !isAbsolute(m)) {
 				const localDir = localPackages.get(packageOf(m));
 				if (localDir) {
 					const deep = m.slice(packageOf(m).length).replace(/^\//, '');

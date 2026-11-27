@@ -179,7 +179,7 @@ jobs:
           NS_COMPILER_ADAPTERS: ${{ github.workspace }}/packages
         run: |
           npm run kit
-          npm run kit:android
+          npm run kit:android -- --gradle
 
       - name: Verify compiler & adapter typechecks, layers, CLI extension & kit manifest
         env:

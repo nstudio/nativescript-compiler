@@ -85,7 +85,7 @@ if (gradle) {
 	mkdirSync(project, { recursive: true });
 	writeFileSync(join(project, 'settings.gradle.kts'), `pluginManagement {\n    repositories {\n        google()\n        mavenCentral()\n        gradlePluginPortal()\n    }\n}\ndependencyResolutionManagement {\n    repositories {\n        google()\n        mavenCentral()\n    }\n}\nrootProject.name = "kit-check"\ninclude(":kit")\nproject(":kit").projectDir = file(${JSON.stringify(kit)})\n`);
 	writeFileSync(join(project, 'build.gradle.kts'), `plugins {\n    id("com.android.library") version "8.12.1" apply false\n    id("org.jetbrains.kotlin.android") version "2.2.20" apply false\n}\n`);
-	writeFileSync(join(project, 'gradle.properties'), `org.gradle.jvmargs=-Xmx6g -Dfile.encoding=UTF-8\nkotlin.daemon.jvmargs=-Xmx6g\nandroid.useAndroidX=true\nnativescriptWidgetsAar=${join(declarations, 'platforms/android/widgets-release.aar')}\n`);
+	writeFileSync(join(project, 'gradle.properties'), `org.gradle.jvmargs=-Xmx6g -Dfile.encoding=UTF-8\nkotlin.daemon.jvmargs=-Xmx6g\nandroid.useAndroidX=true\nnativescriptWidgetsAar=${join(declarations, 'platforms/android/widgets-release.aar').replace(/\\/g, '/')}\n`);
 	const started = Date.now();
 	const r = spawnSync(join(kit, 'gradlew'), ['-p', project, ':kit:compileReleaseKotlin', '--console=plain'], { encoding: 'utf8', maxBuffer: 1 << 30 });
 	const lines = (r.stdout + r.stderr).split('\n').filter((l) => /^e: /.test(l));
@@ -114,4 +114,5 @@ if (gradle) {
 				.slice(0, 30)
 				.join('\n'),
 		);
+	if (r.status) process.exit(r.status);
 }

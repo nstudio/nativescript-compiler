@@ -83,7 +83,7 @@ export function allRefusals(adapter?: ActiveAdapter): Readonly<Record<string, Re
 }
 
 export const REPORT_HEADER = 'Constructs a compiled release does not run, with a rewrite for each:';
-export const ISSUES_URL = 'https://github.com/NativeScript/NativeScript/issues';
+export const ISSUES_URL = 'https://github.com/nstudio/nativescript-compiler/issues';
 const GAP_NOTE = `This is a compiler gap, not your code: please report it at ${ISSUES_URL}`;
 
 export interface Site {
