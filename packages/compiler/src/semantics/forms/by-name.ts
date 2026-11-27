@@ -5,6 +5,7 @@ import type { Forms } from './forms.ts';
 import { LIB_FILE, isTemplateMethod } from '../trust.ts';
 import { implementedInterfaces, literalKey, mergedInterfaceMemberOf } from '../lang.ts';
 import { programBase } from '../classes.ts';
+import { hasMappedIntersection } from '../types.ts';
 
 export const byNameCallsMethods = {
 	/**
@@ -118,12 +119,19 @@ export const byNameCallsMethods = {
 				}
 			}
 		};
+		const erasedUntyped = (t: ts.Type): boolean => {
+			if (untyped(t)) return true;
+			const n = c.getNonNullableType(t);
+			return untyped(n) || (n.isIntersection() && hasMappedIntersection(n));
+		};
 		const open = (slots: Slot[]) =>
 			slots.filter((s) => {
 				const r = this.find(s);
 				// A part's type is the value's own (an array literal's elements), not the type its holder declares.
-				return !!r.type && (untyped(r.type) || (!!r.decl && unionOfObjects(r.type))) && !(r.decl && LIB_FILE.test(r.decl.getSourceFile().fileName));
+				return !!r.type && (erasedUntyped(r.type) || (!!r.decl && unionOfObjects(r.type))) && !(r.decl && LIB_FILE.test(r.decl.getSourceFile().fileName));
 			});
+		// A class implementing a mapped-type intersection erased to Any? (`implements Ds3ControllerAsync`) is called dynamically by name.
+		for (const cls of this.classes) if (implementedInterfaces(c, cls).some((i) => erasedUntyped(c.getTypeAtLocation(i)))) found.add(cls);
 		// Placed by generated code, or only into `bindingContext`s and the generated code's own slots.
 		const byKeys = (x: ts.Expression, slots: Slot[]) => !!keyedFile && (keyedFile(x.getSourceFile()) || (!this.heldUntyped.has(x) && slots.every((s) => keyedSlot(s.decl))));
 		for (const [x, slots] of this.placed) {
@@ -132,7 +140,7 @@ export const byNameCallsMethods = {
 		}
 		for (const x of this.placedUntyped) classOf(x, byKeys(x, open(this.placed.get(x) ?? [])));
 		const visit = (n: ts.Node): void => {
-			if ((ts.isAsExpression(n) || ts.isTypeAssertionExpression(n)) && untyped(c.getTypeAtLocation(n))) classOf(n.expression);
+			if ((ts.isAsExpression(n) || ts.isTypeAssertionExpression(n)) && erasedUntyped(c.getTypeAtLocation(n))) classOf(n.expression);
 			if (ts.isElementAccessExpression(n)) {
 				const key = ts.skipOuterExpressions(n.argumentExpression);
 				if (!ts.isStringLiteralLike(key) && !ts.isNumericLiteral(key) && c.getTypeAtLocation(key).flags & ts.TypeFlags.StringLike) {
@@ -293,14 +301,16 @@ export const byNameCallsMethods = {
 			for (const raw of rawTypes) {
 				const wt = c.getNonNullableType(raw);
 				const wanted = wt.getSymbol();
-				if (!wanted || !(wanted.flags & (ts.SymbolFlags.TypeLiteral | ts.SymbolFlags.Interface)) || wanted.flags & ts.SymbolFlags.Class || wt.getCallSignatures().length || wt.getConstructSignatures().length || !wt.getProperties().length) continue;
+				const intersection = wt.isIntersection() && !wt.types.some((u) => (u.getSymbol()?.flags ?? 0) & ts.SymbolFlags.Class);
+				if (!intersection && (!wanted || !(wanted.flags & (ts.SymbolFlags.TypeLiteral | ts.SymbolFlags.Interface)) || wanted.flags & ts.SymbolFlags.Class)) continue;
+				if (wt.getCallSignatures().length || wt.getConstructSignatures().length || !wt.getProperties().length) continue;
 				for (const part of t.isUnion() ? t.types : [t]) {
 					const cls = part.getSymbol()?.declarations?.find((d): d is ts.ClassLikeDeclaration => ts.isClassLike(d) && !declarationFile(d));
 					if (cls && part.getConstructSignatures().length) {
 						for (let b: ts.ClassLikeDeclaration | undefined = cls; b; b = programBase(b, c)) this.viewedStatic.add(b);
 						continue;
 					}
-					if (!cls || names(cls, wanted)) continue;
+					if (!cls || (wanted && names(cls, wanted))) continue;
 					const keys = wt.getProperties().map((p) => p.name);
 					for (let b: ts.ClassLikeDeclaration | undefined = cls; b; b = programBase(b, c)) {
 						const into = viewed.get(b) ?? viewed.set(b, new Set()).get(b)!;

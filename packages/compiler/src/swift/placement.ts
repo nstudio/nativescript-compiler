@@ -621,6 +621,12 @@ export const placementMethods = {
 		// A class's object, or a class, that an object type reads by name (`ValueStates.viewedClass`, `viewedStatics`): a view of it.
 		const viewedFrom = this.classNamed(source.replace(/[?!]$/, ''));
 		if (viewedFrom && this.states.viewedClass(viewedFrom) && source.replace(/[?!]$/, '') !== target.replace(/[?!]$/, '') && this.isObjectShape(target.replace(/[?!]$/, ''))) return this.convert(this.expr(e), source, target);
+		// A class whose declared protocol was dropped by `protocolWitnesses`: wrap through `IFaceObject(jsObject:)`.
+		const targetProto = target.replace(/[?!]$/, '');
+		if (!this.library && viewedFrom && source.replace(/[?!]$/, '') !== targetProto && this.protocols.has(targetProto) && this.facts.hasInterface(this, this.interfaces, (d, s) => this.topName(d, s), targetProto) && !this.conformsToProtocol(viewedFrom, targetProto)) {
+			const wrapped = `${targetProto}Object(jsObject: ${this.expr(e)})`;
+			return isOptional(source) || source.endsWith('!') ? this.marks.unwrappedIf(`(${this.expr(e)}).map { ${targetProto}Object(jsObject: $0) }`, !(isOptional(target) || target.endsWith('!'))) : wrapped;
+		}
 		const viewedStatics = /^(\w+)\.Type$/.exec(source)?.[1];
 		if (viewedStatics && this.classNamed(viewedStatics) && this.states.viewedStatics(this.classNamed(viewedStatics)!) && /^\w+$/.test(target) && this.isObjectShape(target)) return this.viewOf(target, this.expr(e));
 		// Interfaces structurally equal (`DuoFold` for `StageFold`), or a tuple where an array is wanted.

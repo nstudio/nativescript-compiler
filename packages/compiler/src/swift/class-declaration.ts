@@ -7,7 +7,7 @@ import { NONISOLATED_DEINIT, ident, swiftString, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import type { SymbolMethod } from './translator-types.ts';
 import { UNKEYED, memberPlanOf, notesNull, nullNames, definedNamesOf } from '../semantics/shapes.ts';
-import { initializedNull } from '../semantics/lang.ts';
+import { droppedProtocolMemberNames, initializedNull } from '../semantics/lang.ts';
 import { isStatic } from '../semantics/throws.ts';
 import { isCoreDeclaration, isShimDeclaration } from '../program/core-facts.ts';
 import { classExprCaptures, classExprScriptName, programBase } from '../semantics/classes.ts';
@@ -27,6 +27,7 @@ export interface ClassParts {
 	expando: boolean;
 	isView: boolean;
 	implemented: string[];
+	droppedProtocolMembers: Set<string>;
 	witnesses: string[];
 	required: Set<string>;
 	conformances: string[];
@@ -135,6 +136,7 @@ export const classDeclMethods = {
 		// The library's interfaces (`Iterable<T>`, `Iterator<T>`) are protocols of the kit's, conformed to below.
 		const witnesses: string[] = [];
 		const { named, met, implemented } = this.implementedProtocols(cls, kitRoot, witnesses);
+		const droppedProtocolMembers = droppedProtocolMemberNames(c, cls, this.protocols, implemented, (i) => this.heritageName(i), (_, t, n) => this.uncompiledType(t) || (t.getSymbol()?.declarations ?? []).every((d) => d.getSourceFile().isDeclarationFile && (this.library || !isCoreDeclaration(d) || !this.core.has(n))) || this.conformsToProtocol(cls, n));
 		// What a protocol requires the class reads without throwing: a getter that throws reports instead.
 		const required = new Set([...named, ...met].filter((i) => implemented.includes(i.name)).flatMap((i) => i.type.getProperties().map((p) => p.name)));
 		const conformances = [...(base ? [base] : []), ...(collection && !appBase && !implemented.length ? ['JSDynamic'] : []), ...implemented];
@@ -153,7 +155,7 @@ export const classDeclMethods = {
 			conformances.push('JSToJSONConvertible');
 			implicitlyCalled.add('toJSON');
 		}
-		return { cls, name, layout, heritage, appBase, base, kitRoot, collection, isError, expando, isView, implemented, witnesses, required, conformances, implicitlyCalled, lines: [''], fieldInits: [], fields: [], paramPropValues: new Map(), symbolFields: [], symbolMethods: [], keyInits: [], symKeyCount: 0, dynAccessors: [], dynMethods: [] };
+		return { cls, name, layout, heritage, appBase, base, kitRoot, collection, isError, expando, isView, implemented, droppedProtocolMembers, witnesses, required, conformances, implicitlyCalled, lines: [''], fieldInits: [], fields: [], paramPropValues: new Map(), symbolFields: [], symbolMethods: [], keyInits: [], symKeyCount: 0, dynAccessors: [], dynMethods: [] };
 	},
 
 	conversionMembers(this: Translator, k: ClassParts): void {

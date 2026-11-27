@@ -177,22 +177,28 @@ export const classMethodsMethods = {
 	},
 
 	methodsByNameCode(this: Translator, k: ClassParts): void {
-		const { cls, plugin, kitRoot, byName, dynMethods } = k;
+		const { cls, plugin, kitRoot, byName, droppedProtocolMembers, dynMethods } = k;
 		const { inherited } = k.layout;
 		// Library mode: every method of the class is read by name as well (`font.getAndroidTypeface()` on an untyped font), overrides included.
-		if (this.library || byName || this.membersByName(cls) || this.states.downcastClass(cls) || this.states.byNameClass(cls)) {
-			for (const m of cls.members) {
-				if (!ts.isMethodDeclaration(m) || !m.body || isStatic(m) || ts.isComputedPropertyName(m.name) || ts.isPrivateIdentifier(m.name) || m.parameters.some((p) => p.dotDotDotToken) || this.readsArguments(m)) continue;
+		if (this.library || byName || droppedProtocolMembers.size > 0 || this.membersByName(cls) || this.states.downcastClass(cls) || this.states.byNameClass(cls)) {
+			const addMethod = (m: ts.MethodDeclaration) => {
+				if (!m.body || isStatic(m) || ts.isComputedPropertyName(m.name) || ts.isPrivateIdentifier(m.name) || m.parameters.some((p) => p.dotDotDotToken) || this.readsArguments(m)) return;
 				const n = m.name.getText();
-				if (dynMethods.some((d) => d.name === n && !d.key) || n === 'toString' || n === 'equals') continue;
-				if (!this.memberByName(cls, n) && !this.states.byNameMember(cls, n)) continue;
+				if (dynMethods.some((d) => d.name === n && !d.key) || n === 'toString' || n === 'equals') return;
+				if (!droppedProtocolMembers.has(n) && !this.memberByName(cls, n) && !this.states.byNameMember(cls, n)) return;
 				// A plugin's method nothing names is not compiled; one overriding the kit's is read through the kit's own table.
-				if (plugin && !this.library && !inherited.has(n) && !(kitRoot && this.core?.kitMember(kitRoot, n)) && !this.facts.isNamed(n)) continue;
-				if (!this.library && kitRoot && this.core?.kitMember(kitRoot, n)) continue;
+				if (plugin && !this.library && !inherited.has(n) && !(kitRoot && this.core?.kitMember(kitRoot, n)) && !this.facts.isNamed(n)) return;
+				if (!this.library && kitRoot && this.core?.kitMember(kitRoot, n)) return;
 				let root: ts.MethodDeclaration = m;
 				for (let up = this.inheritedMethod(cls, n); up; up = this.inheritedMethod(up.parent as ts.ClassLikeDeclaration, n)) root = up;
-				if (root.parameters.length !== m.parameters.length) continue;
+				if (root.parameters.length !== m.parameters.length) return;
 				dynMethods.push({ name: n, params: root.parameters.map((p) => this.paramType(p)), defaults: root.parameters.map((p) => (this.constantDefault(p) ? this.stored(p.initializer!, p, this.paramType(p)) : undefined)), ret: this.returnTypeOf(root) });
+			};
+			for (const m of cls.members) if (ts.isMethodDeclaration(m)) addMethod(m);
+			for (const n of droppedProtocolMembers) {
+				if (dynMethods.some((d) => d.name === n && !d.key)) continue;
+				const inh = this.inheritedMethod(cls, n);
+				if (inh) addMethod(inh);
 			}
 		}
 	},

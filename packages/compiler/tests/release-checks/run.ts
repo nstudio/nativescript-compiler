@@ -2462,7 +2462,54 @@ export async function readLed(ds3: Ds3ControllerAsync): Promise<string> {
   return a + ',' + b;
 }
 
-async function run22To26() {
+// #27: Mapped-type intersection erased to Any? ({ [K in keyof SyncRest]: ... } & { send(...): Promise<void> })
+class RawDs3Client {
+  sent = 0;
+  getCurrentUacMode(): number { return 2; }
+  send(command: number, payload?: Uint8Array): void { this.sent += command + (payload ? payload.length : 0); }
+}
+type SyncCtrl27 = Pick<RawDs3Client, 'getCurrentUacMode' | 'send'>;
+type SyncRest27 = Omit<SyncCtrl27, 'send'>;
+export type MappedIntersectionCtrl = {
+  [K in keyof SyncRest27]: SyncRest27[K] extends (...args: infer A) => infer R ? (...args: A) => Promise<R> : SyncRest27[K];
+} & {
+  send(command: number, payload?: Uint8Array): Promise<void>;
+};
+class PromisifiedMappedCtrl implements MappedIntersectionCtrl {
+  constructor(private readonly controller: SyncCtrl27) {}
+  send(command: number, payload?: Uint8Array) { this.controller.send(command, payload); return Promise.resolve(); }
+  getCurrentUacMode() { return Promise.resolve(this.controller.getCurrentUacMode()); }
+}
+class WorkerMappedCtrl implements MappedIntersectionCtrl {
+  calls = 0;
+  send(command: number) { this.calls += command; return Promise.resolve(); }
+  getCurrentUacMode() { return Promise.resolve(3); }
+}
+export function promisifyMapped(c: SyncCtrl27): MappedIntersectionCtrl {
+  return new PromisifiedMappedCtrl(c);
+}
+
+// #28: Class whose declared interface is dropped by protocolWitnesses (distinct inline object shapes) falls back to IFaceObject.fromJS/init(jsObject:)
+class SyncClient28 {
+  getCurrentUacMode(): { mode: number; name: string } {
+    return { mode: 1, name: 'UAC 1.0' };
+  }
+}
+export interface AsyncController28 {
+  // Optional name gives a distinct generated shape class (Object_mode_name_), forcing protocolWitnesses to drop : AsyncController28
+  getCurrentUacMode(): Promise<{ mode: number; name?: string }>;
+}
+class PromisifiedController28 implements AsyncController28 {
+  constructor(private readonly client: SyncClient28) {}
+  getCurrentUacMode() {
+    return Promise.resolve(this.client.getCurrentUacMode());
+  }
+}
+export function wrap28(client: SyncClient28): AsyncController28 {
+  return new PromisifiedController28(client);
+}
+
+async function run22To28() {
   const holder = new ContextHolder();
   holder.ds3 = new PromisifiedController(new RealClient());
   const r22 = await readUacMode(holder.ds3);
@@ -2479,12 +2526,21 @@ async function run22To26() {
   const fnBands = rec['getEqBands'] as (...args: unknown[]) => unknown;
   const r25 = [fnMode.apply(ds3, [7]), fnMode.apply(ds3, [null]), fnMode.apply(ds3, []), fnBands.apply(ds3, [7, 32]), fnBands.apply(ds3, [7])].join(',');
   const r26 = await readLed(new LedImpl());
-  console.log([r22, r23, r24, r25, r26].join('|'));
+  const raw27 = new RawDs3Client();
+  const m27: MappedIntersectionCtrl = promisifyMapped(raw27);
+  await m27.send(4, new Uint8Array([1, 2]));
+  const w27: MappedIntersectionCtrl = new WorkerMappedCtrl();
+  await w27.send(5);
+  const r27 = [await m27.getCurrentUacMode(), raw27.sent, await w27.getCurrentUacMode()].join(',');
+  const ctrl28 = wrap28(new SyncClient28());
+  const uac28 = await ctrl28.getCurrentUacMode();
+  const r28 = uac28.mode + ':' + uac28.name;
+  console.log([r22, r23, r24, r25, r26, r27, r28].join('|'));
 }
-run22To26();
+run22To28();
 `,
       );
-      const expected2226 = '1|42,52,true,99|320,-1,-1|7,null,255,732,708|1,5';
+      const expected2228 = '1|42,52,true,99|320,-1,-1|7,null,255,732,708|1,5|2,6,3|1:UAC 1.0';
       // Kotlin native execution
       {
         let ktGot = '';
@@ -2497,7 +2553,7 @@ run22To26();
           const runRes = errors ? null : spawnSync('java', ['-cp', [join(dir, 'classes-22-26'), runtime, kotlinStdlib()].join(':'), 'org.example.issues2226.entry.__MainKt'], { encoding: 'utf8' });
           ktGot = errors ? errors.slice(0, 3).join(' ; ') : runRes!.status ? `exit ${runRes!.status}: ${(runRes!.stderr || runRes!.stdout).trim()}` : runRes!.stdout.trim();
         } catch (e) { ktGot = String(e); }
-        check(ktGot === expected2226, `Issues #22, #23, #24, #25, #26 run natively (Kotlin${ktGot === expected2226 ? '' : `: ${ktGot.slice(0, 300)}`})`);
+        check(ktGot === expected2228, `Issues #22, #23, #24, #25, #26, #27, #28 run natively (Kotlin${ktGot === expected2228 ? '' : `: ${ktGot.slice(0, 300)}`})`);
       }
       // Swift native execution
       {
@@ -2509,7 +2565,7 @@ run22To26();
           const errors = swiftc(readdirSync(out).map((f) => join(out, f)), join(dir, 'main-22-26'), nativeBuild, '-Onone');
           swGot = errors ? errors.slice(0, 3).join(' ; ') : spawnSync(join(dir, 'main-22-26'), { encoding: 'utf8' }).stdout.trim();
         } catch (e) { swGot = String(e); }
-        check(swGot === expected2226, `Issues #22, #23, #24, #25, #26 run natively (Swift${swGot === expected2226 ? '' : `: ${swGot.slice(0, 300)}`})`);
+        check(swGot === expected2228, `Issues #22, #23, #24, #25, #26, #27, #28 run natively (Swift${swGot === expected2228 ? '' : `: ${swGot.slice(0, 300)}`})`);
       }
       // #24 Part 1 & Part 2 against @nativescript/core ViewBase.getViewById<View> and (view.parent as View | undefined)
       {

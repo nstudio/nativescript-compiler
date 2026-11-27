@@ -73,7 +73,7 @@ export const classAccessorsMethods = {
 		this.declare(n, { kind: 'var', mods, type: declared, throws: !!a.get && !reported && this.throwsInfo.fn(a.get) });
 		// A plugin's objects are read untyped too (`navigator.gpu.native`): their accessors by name.
 		const own = (a.get ?? a.set)!;
-		if (this.byNameAccessor(cls, own) && !ts.isPrivateIdentifier(own.name)) {
+		if ((this.byNameAccessor(cls, own) || k.droppedProtocolMembers.has(n)) && !ts.isPrivateIdentifier(own.name)) {
 			const getThrows = !!a.get && this.throwsInfo.fn(a.get) && !reported;
 			const read = getThrows ? this.marks.orNil(`${RT.jsReported} { try self.${ident(n)} }`) : `self.${ident(n)}`;
 			const stored = () => (declared.endsWith('!') ? this.fromAny('newValue', declared.replace(/!$/, '?')) : isKit(spelledType(declared), 'JSNullish') ? `(${RT.jsConverted}(newValue, to: ${declared}.self) ?? nil)` : this.fromAnyCode('newValue', declared, true));

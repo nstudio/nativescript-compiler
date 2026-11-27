@@ -51,6 +51,21 @@ export const protocolsMethods = {
 		return { named, met, implemented };
 	},
 
+	/** Whether `cls` (or an app base class) conforms natively to protocol `name` in Swift. */
+	conformsToProtocol(this: Translator, cls: ts.ClassLikeDeclaration, name: string): boolean {
+		for (let c: ts.ClassLikeDeclaration | undefined = cls; c; c = this.sourceBase(c)) {
+			const kitRoot = this.kitRootOf(c);
+			const named = implementedInterfaces(this.checker, c).map((i) => ({ name: this.heritageName(i), type: this.checker.getTypeAtLocation(i) }));
+			const met = [...(this.structural.get(c) ?? [])].map((d) => ({ name: this.topName(d, d.name.text), type: this.checker.getTypeAtLocation(d.name) }));
+			const hit = [...named, ...met].find((i) => i.name === name);
+			if (!hit || !isEmittedInterface(hit.type) || isLibDeclaration(hit.type.getSymbol()?.declarations?.[0]) || this.uncompiledType(hit.type)) continue;
+			if ((hit.type.getSymbol()?.declarations ?? []).every((d) => d.getSourceFile().isDeclarationFile && (this.library || !isCoreDeclaration(d) || !this.core.has(hit.name)))) continue;
+			if (kitRoot && hit.type.getProperties().some((p) => !!this.core.kitMember(kitRoot, p.name))) continue;
+			if (this.protocolWitnesses(c, hit.name, hit.type, [], false)) return true;
+		}
+		return false;
+	},
+
 	/**
 	 * A component class's conformance to the app interfaces it implements, as an extension of it. Every app protocol
 	 * refines JSDynamic, which here reads and writes the interfaces' fields only.
@@ -94,7 +109,7 @@ export const protocolsMethods = {
 	 * `handlerError(error: Error)`) conforms through a witness of the protocol's
 	 * signature that calls it; any other difference leaves the protocol out.
 	 */
-	protocolWitnesses(this: Translator, cls: ts.ClassLikeDeclaration, name: string, type: ts.Type, out: string[]): boolean {
+	protocolWitnesses(this: Translator, cls: ts.ClassLikeDeclaration, name: string, type: ts.Type, out: string[], record = true): boolean {
 		const decl = type.getSymbol()?.declarations?.find(ts.isInterfaceDeclaration);
 		if (!decl || !this.protocols.has(name)) return true;
 		const added: string[] = [];
@@ -134,10 +149,12 @@ export const protocolsMethods = {
 			const args = want.map((_, k) => `__p${k}`);
 			const call = this.marks.tryCode(`self.${ident(name)}(${args.map((a, k) => (have[k] === want[k] ? a : erased(have[k], k) ? this.marks.ownTried(`${RT.jsChecked}(${a}, ${metatype(have[k])})`) : `${a} as Any?`)).join(', ')})`);
 			const body = ret === 'Void' ? call : ownRet === 'Void' ? `${call}; return nil` : byResult ? `let __r: ${ownRet} = ${call}; return __r` : `return ${call}`;
-			added.push(`    func ${ident(name)}(${want.map((t, k) => `_ ${args[k]}: ${t}`).join(', ')}) throws${ret === 'Void' ? '' : ` -> ${ret}`} { ${body} }`);
-			this.declare(name, { kind: 'func', params: want.map((t, k) => `_ ${args[k]}: ${t}`).join(', '), throws: true, type: ret });
+			if (record) {
+				added.push(`    func ${ident(name)}(${want.map((t, k) => `_ ${args[k]}: ${t}`).join(', ')}) throws${ret === 'Void' ? '' : ` -> ${ret}`} { ${body} }`);
+				this.declare(name, { kind: 'func', params: want.map((t, k) => `_ ${args[k]}: ${t}`).join(', '), throws: true, type: ret });
+			}
 		}
-		out.push(...added);
+		if (record) out.push(...added);
 		return true;
 	},
 };

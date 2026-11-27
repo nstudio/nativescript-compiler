@@ -1,6 +1,7 @@
 import ts from 'typescript';
-import { isSymbolAsyncIterator, isSymbolIterator } from './ast.ts';
+import { isLibDeclaration, isSymbolAsyncIterator, isSymbolIterator } from './ast.ts';
 import { SHIM_GLOBAL_OBJECT_VARS } from './globals.ts';
+import { implementedInterfaces } from './lang/members.ts';
 export { evolvingArrayRead, evolvingArrayType, evolvingElementContext, spreadOperand, openSpreadType, intersectionAliasMembers, iterationThrows, iteratedType, iteratesCheckedResult } from './lang/arrays.ts';
 export { unsafeReceiver, uncheckedMatch, leadingNeverRead, redeclaredBeside, thisArgCall, withoutThisArg, thisArgBound, takesReceiver, ignoresThisArg } from './lang/this-args.ts';
 export type { ThisArgUse } from './lang/this-args.ts';
@@ -252,4 +253,24 @@ export function substitutedExpr(subst: ReadonlyMap<ts.Node, string>, e: ts.Expre
 	if (code === undefined) return null;
 	if (branchingOnly && !ts.isConditionalExpression(bare) && !ts.isBinaryExpression(bare)) return null;
 	return { bare, code };
+}
+
+/** Member names of declared TypeScript interfaces left out of a class's native conformances, so dynamic views (`fromJS` / `init(jsObject:)`) can read them by name. */
+export function droppedProtocolMemberNames(
+	checker: ts.TypeChecker,
+	cls: ts.ClassLikeDeclaration,
+	protocols: ReadonlySet<string>,
+	implemented: readonly string[],
+	ifaceName: (i: ts.ExpressionWithTypeArguments) => string,
+	skipped: (i: ts.ExpressionWithTypeArguments, t: ts.Type, name: string) => boolean,
+): Set<string> {
+	const out = new Set<string>();
+	for (const i of implementedInterfaces(checker, cls)) {
+		const t = checker.getTypeAtLocation(i);
+		if (!isEmittedInterface(t) || isLibDeclaration(t.getSymbol()?.declarations?.[0])) continue;
+		const name = ifaceName(i);
+		if (!protocols.has(name) || implemented.includes(name) || skipped(i, t, name)) continue;
+		for (const p of t.getProperties()) out.add(p.name);
+	}
+	return out;
 }

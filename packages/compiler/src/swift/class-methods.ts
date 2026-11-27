@@ -155,6 +155,18 @@ export const classMethodsMethods = {
 
 	methodMembers(this: Translator, k: ClassParts): void {
 		for (const m of k.cls.members) this.methodMember(k, m);
+		for (const n of k.droppedProtocolMembers) {
+			if (k.dynMethods.some((d) => d.name === n)) continue;
+			const inh = this.inheritedMethod(k.cls, n);
+			if (!inh || !inh.body || isStatic(inh) || ts.isPrivateIdentifier(inh.name)) continue;
+			const restAt = inh.parameters.findIndex((p) => p.dotDotDotToken);
+			const generic = !this.library && !this.erasesGenerics(inh) && !!inh.typeParameters?.some((p) => !this.erasesTypeParameter(p));
+			if ((restAt >= 0 && restAt !== inh.parameters.length - 1) || generic) continue;
+			const sig = this.emittedSignature(inh);
+			const plain = (t: string) => t.replace(/^\((any .*)\)!$/, '$1?').replace(/!$/, '?');
+			const params = this.readsArguments(inh) ? ['JSRest<Any?>'] : sig.params.map((p, idx) => (idx === restAt ? `JSRest<${/^JSArray<(.*)>$/.exec(plain(p.type))?.[1] ?? 'Any?'}>` : isFunctionType(p.type) ? `@escaping ${p.type}` : plain(p.type)));
+			k.dynMethods.push({ name: n, type: `(${params.join(', ')}) throws -> ${plain(sig.ret)}`, available: this.gatedFunctions.get(inh), length: scriptLength(inh) });
+		}
 	},
 
 	methodMember(this: Translator, k: ClassParts, m: ts.ClassElement): void {
@@ -214,7 +226,7 @@ export const classMethodsMethods = {
 		if (!isStatic(m) && !generic && this.nonVirtualEntry(m)) lines.push('    ' + this.memberFunc(m, ident(nonVirtualName(n, cls.name?.text ?? k.name)), 'final '));
 		// A plugin's objects are read untyped too (`handler.attachToView(view)` on an `any`): their methods by name.
 		const restAt = m.parameters.findIndex((p) => p.dotDotDotToken);
-		if ((((this.pluginFiles.has(cls.getSourceFile().fileName) || this.appMembersByName || this.states.downcastClass(cls) || this.states.byNameClass(cls)) && this.states.byNameMember(cls, n)) || this.states.viewedMember(cls, n)) && !isStatic(m) && !ts.isPrivateIdentifier(m.name) && (restAt < 0 || restAt === m.parameters.length - 1) && !extra.length && !generic) {
+		if ((((this.pluginFiles.has(cls.getSourceFile().fileName) || this.appMembersByName || this.states.downcastClass(cls) || this.states.byNameClass(cls)) && this.states.byNameMember(cls, n)) || this.states.viewedMember(cls, n) || k.droppedProtocolMembers.has(n)) && !isStatic(m) && !ts.isPrivateIdentifier(m.name) && (restAt < 0 || restAt === m.parameters.length - 1) && !extra.length && !generic) {
 			// The signature Swift has for the method: an override's is its root's.
 			const sig = this.emittedSignature(m);
 			const plain = (t: string) => t.replace(/^\((any .*)\)!$/, '$1?').replace(/!$/, '?');

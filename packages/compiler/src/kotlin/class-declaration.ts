@@ -6,7 +6,7 @@ import { ERRORS } from '../semantics/globals.ts';
 import { OBJECT_TO_STRING, ident, kotlinString, lambda, optionalType, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { UNKEYED, isPropertyField, memberPlanOf, notesNull, nullNames, definedNamesOf } from '../semantics/shapes.ts';
-import { implementedInterfaces, initializedNull } from '../semantics/lang.ts';
+import { droppedProtocolMemberNames, implementedInterfaces, initializedNull } from '../semantics/lang.ts';
 import { hasModifier } from '../semantics/ast.ts';
 import { isStatic } from '../semantics/throws.ts';
 import { isCoreDeclaration, isShimDeclaration } from '../program/core-facts.ts';
@@ -32,6 +32,7 @@ export interface ClassParts {
 	readonly witnesses: string[];
 	readonly overridden: Set<string>;
 	readonly interfaceFields: Map<string, string>;
+	readonly droppedProtocolMembers: Set<string>;
 	readonly byName: boolean;
 	readonly literalMade: boolean;
 	readonly supertypes: string[];
@@ -153,6 +154,7 @@ export const classDeclMethods = {
 		const witnesses: string[] = [];
 		const notOverrides = new Set<string>();
 		const implemented = this.implementedProtocols(cls, witnesses, notOverrides);
+		const droppedProtocolMembers = droppedProtocolMemberNames(c, cls, this.protocols, implemented, (i) => this.implementedName(i), (i, t, n) => this.untranslatedInterface(i) || this.declaredOnlyInterface(i) || (!!this.library && (t.getSymbol()?.declarations ?? []).every((d) => d.getSourceFile().isDeclarationFile)) || this.declaresInterface(c.getTypeAtLocation(cls.name ?? cls), n));
 		for (const i of implemented) this.used.add(i);
 		const ownToString = layout.toString;
 		// A class's own toJSON is what JSON.stringify serializes in its instances' place.
@@ -182,7 +184,7 @@ export const classDeclMethods = {
 		// An app class extending the generated kit's (a page's view model, a custom view): read by name as core reads it (bindings, the Builder).
 		const byName = !this.library && ((this.generatedKit && !!kitRoot) || this.appMembersByName);
 		const literalMade = ts.isClassDeclaration(cls) && this.literalMade(cls);
-		return { cls, name, layout, plugin, appBase, base, kitRoot, collection, isError, isView, abstract, open, memberOpen, expando, witnesses, overridden, interfaceFields, byName, literalMade, supertypes, lines: [], statics: [], fields: [], narrowedParams: new Map(), initsAfterParamProps: [], symbolFields: [], symbolKeyInits: [], symKeyCount: 0, fieldStarts: [], dynAccessors: [], dynMethods: [] };
+		return { cls, name, layout, plugin, appBase, base, kitRoot, collection, isError, isView, abstract, open, memberOpen, expando, witnesses, overridden, interfaceFields, droppedProtocolMembers, byName, literalMade, supertypes, lines: [], statics: [], fields: [], narrowedParams: new Map(), initsAfterParamProps: [], symbolFields: [], symbolKeyInits: [], symKeyCount: 0, fieldStarts: [], dynAccessors: [], dynMethods: [] };
 	},
 
 	/** Evaluates a non-fixed computed symbol key once at class definition time into a companion property. */

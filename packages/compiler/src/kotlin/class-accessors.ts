@@ -87,7 +87,7 @@ export const classAccessorsMethods = {
 		target.push(`${pad}${this.accessorJvmNames(cls, n, !!a.set || getterOnly, mod)}${mod}${a.set || getterOnly ? 'var' : 'val'} ${ident(n)}: ${t}`, ...parts);
 		// Library mode: read and set by name as well (`node.cssType` of an untyped node), as the prototype's accessor is.
 		const own = (a.get ?? a.set)!;
-		if ((this.library || byName || this.membersByName(cls) || this.states.downcastClass(cls) || this.states.byNameClass(cls)) && !isStatic(own) && !ts.isPrivateIdentifier(own.name) && !this.symbolMember(own.name) && (this.memberByName(cls, n) || this.states.byNameMember(cls, n))) {
+		if ((this.library || byName || k.droppedProtocolMembers.has(n) || this.membersByName(cls) || this.states.downcastClass(cls) || this.states.byNameClass(cls)) && !isStatic(own) && !ts.isPrivateIdentifier(own.name) && !this.symbolMember(own.name) && (k.droppedProtocolMembers.has(n) || this.memberByName(cls, n) || this.states.byNameMember(cls, n))) {
 			// A write by name gives the setter what script gave (`style="color: red"` and `color="red"` from the Builder); one
 			// passing it to another object's member (`this.style.color = value`) passes it on by name, as that member converts it.
 			const forwarded = a.set && !takes ? forwardedSetter(a.set) : null;
