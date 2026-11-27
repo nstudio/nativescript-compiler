@@ -226,6 +226,9 @@ export const assignmentMethods = {
 			if (special) return special;
 			if (left.expression.kind !== ts.SyntaxKind.SuperKeyword && this.isInstanceMethod(left.name)) return `${RT.jsExpandoSet}(${this.expr(left.expression)}, ${swiftString(left.name.text)}, ${this.stored(right, left, 'Any?', checks)})`;
 		}
+		if (ts.isPropertyAccessExpression(left) && !this.library && this.typeOf(left.expression).replace(/[?!]$/, '') === 'JSWorker' && (left.name.text === 'onmessage' || left.name.text === 'onerror')) {
+			return `${RT.jsSet}(${this.expr(left.expression)}, ${swiftString(left.name.text)}, ${this.stored(right, left, 'Any?', checks)})`;
+		}
 		if (ts.isPropertyAccessExpression(left) && this.isAny(left.expression)) return `${RT.jsSet}(${this.expr(left.expression)}, ${swiftString(left.name.text)}, ${this.stored(right, left, 'Any?', checks)})`;
 		// An array written at a key that may be no index (`frames[time]`, time untyped): as script writes it.
 		if (ts.isElementAccessExpression(left) && isKit(spelledType(this.typeOf(left.expression).replace(/[?!]$/, '')), 'JSArray') && this.typeOf(left.argumentExpression) !== 'Double') return `${RT.jsSet}(${this.expr(left.expression)}, ${this.propertyKey(left.argumentExpression)}, ${this.stored(right, left, 'Any?', checks)})`;

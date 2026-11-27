@@ -10,7 +10,6 @@ import { notedField } from '../semantics/shapes.ts';
 import { isWriteTarget } from '../semantics/ast.ts';
 import { convertedRead } from '../semantics/states/predicates.ts';
 import { isStatic } from '../semantics/throws.ts';
-import { iosRefusedGlobal } from '../semantics/platform-globals.ts';
 import { optionalContext } from '../semantics/spelled.ts';
 import { isKit, isUntyped, spelledType } from '../semantics/types.ts';
 import { atLossSite, HELD_LOSS } from '../semantics/losses.ts';
@@ -88,8 +87,6 @@ export const expressionsMethods = {
 		this.refuseScopedExpr(e);
 		if (this.heldParts.has(e)) return this.subst.get(e)!;
 		if (globalProxyUse(e, this.checker)) throw this.limit(e, 'proxy', '`Proxy`');
-		const refused = iosRefusedGlobal(e, this.checker);
-		if (refused) throw this.error(e, `\`${refused.name}\` in an iOS build`, refused.id);
 		const narrowed = this.narrowedHeld(e);
 		if (narrowed) {
 			this.rawHeld.add(e);

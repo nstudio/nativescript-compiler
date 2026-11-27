@@ -3,37 +3,27 @@ import Foundation
 // Promises and the microtask queue, following ECMA-262 §27.2 job for job so that the
 // interleaving of callbacks matches V8's exactly.
 
-/// The microtask queue (HTML "perform a microtask checkpoint", Node's `runMicrotasks`).
-public enum Microtasks {
-    private static var queue: [(() -> Void)?] = []
-    private static var head = 0
-    private static var draining = false
-    static var pendingRejections: [JSRejection] = []
+/// Per-realm microtask queue state.
+final class JSMicrotasks {
+    nonisolated deinit {}
+    private var queue: [(() -> Void)?] = []
+    private var head = 0
+    private var draining = false
+    var pendingRejections: [JSRejection] = []
+    var kept: [AnyObject] = []
+    private var turned = false
+    /// Notifies a worker host when work enters an idle queue so its loop can wake and drain.
+    var onEnqueue: (() -> Void)?
 
-    /// Receives the reason of every promise still rejected without a handler when a checkpoint
-    /// ends, as Node's `unhandledRejection` event does. The default prints
-    /// `Uncaught (in promise) <reason>` to standard error, or gives it to `globalThis.__onUncaughtError` as
-    /// `jsUncaughtHandler` does, and carries on (Node would exit).
-    public static var onUnhandledRejection: (Any?) -> Void = { reason in
-        if !jsReportedToScript(reason) { jsWriteStandardError("Uncaught (in promise) \(jsToString(reason))\n") }
+    func enqueue(_ job: @escaping () -> Void) {
+        let wasEmpty = head >= queue.count
+        queue.append(job)
+        if wasEmpty && !draining { onEnqueue?() }
     }
 
-    public static func enqueue(_ job: @escaping () -> Void) { queue.append(job) }
+    func taskRan() { turned = true }
 
-    /// The targets of WeakRefs made in the current job, held until the checkpoint after it ends (ECMA-262 KeepDuringJob):
-    /// under ARC a target nothing else holds would otherwise be gone before the next statement.
-    static var kept: [AnyObject] = []
-
-    /// Called when a checkpoint ends after a task (`taskRan`) or a job ran: the app turning stable.
-    public static var onStable: (() -> Void)?
-    private static var turned = false
-
-    /// A JavaScript task (an event handler, a timer callback) ran.
-    public static func taskRan() { turned = true }
-
-    /// Runs queued jobs FIFO, including jobs they queue, then reports unhandled rejections
-    /// (and drains again if reporting queued more). A call made while draining does nothing.
-    public static func checkpoint() {
+    func checkpoint() {
         guard !draining else { return }
         draining = true
         defer {
@@ -55,7 +45,7 @@ public enum Microtasks {
             queue.removeAll(keepingCapacity: true)
             head = 0
             if pendingRejections.isEmpty {
-                guard turned, let onStable else { return }
+                guard turned, self === JSRealm.main.microtasks, let onStable = Microtasks.onStable else { return }
                 turned = false
                 onStable()
                 continue
@@ -63,10 +53,47 @@ public enum Microtasks {
             let pending = pendingRejections
             pendingRejections = []
             for rejection in pending where !rejection.handled {
-                onUnhandledRejection(rejection.reason)
+                Microtasks.onUnhandledRejection(rejection.reason)
             }
         }
     }
+}
+
+/// The microtask queue (HTML "perform a microtask checkpoint", Node's `runMicrotasks`).
+public enum Microtasks {
+    private static var current: JSMicrotasks { JSRealm.current().microtasks }
+
+    static var pendingRejections: [JSRejection] {
+        get { current.pendingRejections }
+        set { current.pendingRejections = newValue }
+    }
+
+    /// Receives the reason of every promise still rejected without a handler when a checkpoint
+    /// ends, as Node's `unhandledRejection` event does. The default prints
+    /// `Uncaught (in promise) <reason>` to standard error, or gives it to `globalThis.__onUncaughtError` as
+    /// `jsUncaughtHandler` does, and carries on (Node would exit).
+    public static var onUnhandledRejection: (Any?) -> Void = { reason in
+        if !jsReportedToScript(reason) { jsWriteStandardError("Uncaught (in promise) \(jsToString(reason))\n") }
+    }
+
+    public static func enqueue(_ job: @escaping () -> Void) { current.enqueue(job) }
+
+    /// The targets of WeakRefs made in the current job, held until the checkpoint after it ends (ECMA-262 KeepDuringJob):
+    /// under ARC a target nothing else holds would otherwise be gone before the next statement.
+    static var kept: [AnyObject] {
+        get { current.kept }
+        set { current.kept = newValue }
+    }
+
+    /// Called when a checkpoint ends after a task (`taskRan`) or a job ran: the app turning stable.
+    public static var onStable: (() -> Void)?
+
+    /// A JavaScript task (an event handler, a timer callback) ran.
+    public static func taskRan() { current.taskRan() }
+
+    /// Runs queued jobs FIFO, including jobs they queue, then reports unhandled rejections
+    /// (and drains again if reporting queued more). A call made while draining does nothing.
+    public static func checkpoint() { current.checkpoint() }
 }
 
 /// A rejection HostPromiseRejectionTracker saw without a handler.

@@ -71,8 +71,8 @@ behaviour. `tests/checks/docs.ts` fails when a runtime file has no row.
 | `Timers.swift` | `Timers.kt` | `setTimeout`, `setInterval`, `setImmediate` in Node's order, with a microtask checkpoint after each callback | HTML timers |
 | `Inspect.swift` | `Inspect.kt` | `console` and Node's `util.inspect` formatting | WHATWG Console |
 | `WinterTC.swift` | `WinterTC.kt` | `atob`, `btoa`, `TextEncoder`, `TextDecoder`, `crypto`, `DOMException` | WinterTC (WHATWG Encoding, Web Crypto, WebIDL) |
-| — | `Workers.kt` | `Worker`, `postMessage`, `structuredClone`, `URL` (an iOS build refuses `new Worker`: refusal `worker`, ledger `workerGlobals`) | HTML Workers; WHATWG URL |
-| `Threads.swift` | `Realm.kt` | Script on the main thread only; native callbacks from other threads marshalled to it; on Android, each worker's realm | 9.3 Realms (Android) |
+| `Workers.swift` | `Workers.kt` | `Worker`, `postMessage`, `structuredClone`, `URL` | HTML Workers; WHATWG URL |
+| `Realm.swift`, `Threads.swift` | `Realm.kt` | Main-thread script realm, native callbacks marshalled from other threads, and each worker's isolated realm | 9.3 Realms |
 | `Reactive.swift` | `Reactive.kt` | Collections that notify the effects reading them when changed in place (a framework's deep reactivity) | NativeScript: signals |
 | `Views.swift` | `Views.kt` | `jsView`: an object of one class standing for another, the view of an object as an interface's class | NativeScript: value model |
 | `Native.swift` | — (in `Dynamic.kt`) | Untyped access to Objective-C or Java objects by name, CoreFoundation and CoreGraphics conveniences | NativeScript: platform interop |
@@ -83,7 +83,7 @@ behaviour. `tests/checks/docs.ts` fails when a runtime file has no row.
 | — | `CSSCalc.kt` | CSS `calc()` as `@csstools/css-calc` folds it (Swift's `CSSCalc.swift` sits beside `Runtime/`) | CSS Values |
 
 The two runtimes do not split their files the same way: Kotlin groups object operations, symbols and weak classes in
-`Language.kt` and `Dynamic.kt`, where Swift has a file each, and only Android runs workers.
+`Language.kt` and `Dynamic.kt`, where Swift has a file each.
 
 ## Core, generated
 

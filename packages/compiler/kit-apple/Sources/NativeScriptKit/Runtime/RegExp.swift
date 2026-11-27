@@ -164,11 +164,12 @@ public final class JSRegExp: JSDynamic, JSStringConvertible {
 
     public func toString() -> String { "/\(source)/\(flags)" }
 
-    /// The matcher for every expression: matching runs no script, so it is never re-entered.
-    private static let machine = RegexVM()
+    /// The matcher for every expression: per-realm so worker threads match concurrently without locking.
+    private static var machine: RegexVM { JSRealm.current().regexVM }
 
     /// Compiled patterns by pattern and flags: a literal evaluated in a loop makes a new RegExp each time, as
     /// JavaScript's does, without parsing it again. Bounded by emptying it when full.
+    private nonisolated static let cacheLock = NSLock()
     private static var cache: [String: [String: RegexProgram]] = [:]
     private static var cached = 0
     private static let cacheLimit = 256
@@ -184,7 +185,10 @@ public final class JSRegExp: JSDynamic, JSStringConvertible {
     }
 
     private static func compile(_ pattern: String, _ flags: String) throws -> RegexProgram {
-        if let known = cache[pattern]?[flags] { return known }
+        cacheLock.lock()
+        let known = cache[pattern]?[flags]
+        cacheLock.unlock()
+        if let known { return known }
         let unicodeSets = flags.contains("v")
         let program: RegexProgram
         do {
@@ -193,12 +197,14 @@ public final class JSRegExp: JSDynamic, JSStringConvertible {
         } catch let e as RegexSyntaxError {
             throw JSException(value: JSSyntaxError("Invalid regular expression: /\(pattern)/\(flags): \(e.message)"))
         }
+        cacheLock.lock()
         if cached >= cacheLimit {
             cache.removeAll(keepingCapacity: true)
             cached = 0
         }
         cache[pattern, default: [:]][flags] = program
         cached += 1
+        cacheLock.unlock()
         return program
     }
 
@@ -329,7 +335,10 @@ final class JSRegExpSubject {
         units = Array(string.utf16)
     }
 
-    private static var last: JSRegExpSubject?
+    private static var last: JSRegExpSubject? {
+        get { JSRealm.current().lastRegExpSubject }
+        set { JSRealm.current().lastRegExpSubject = newValue }
+    }
 
     static func of(_ s: String) -> JSRegExpSubject {
         if let last, jsSameText(last.string, s) { return last }

@@ -13,11 +13,15 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createProgram } from '../../src/program/program.ts';
 import { Translator } from '../../src/kotlin/translator.ts';
+import { Translator as SwiftTranslator } from '../../src/swift/translator.ts';
 import { SourceLines } from '../../src/program/source-lines.ts';
 import { addKotlinInterfaces, translateKotlinModules } from '../../src/kotlin/app-modules.ts';
+import { addInterfaces, translateModules } from '../../src/swift/app-modules.ts';
+import { withoutRedundantImplicit } from '../../src/swift/syntax.ts';
 import { AndroidNativeAPI } from '../../src/kotlin/native/api.ts';
 import { androidClassPath } from '../../src/kotlin/native/classpath.ts';
 import { kotlinToolchain } from '../kotlin-toolchain.ts';
+import { buildSwiftRuntime, SWIFT_MODE } from '../native-build.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '../..');
@@ -103,5 +107,90 @@ for (const name of readdirSync(casesDir).sort()) {
   }
   if (!keep) rmSync(out, { recursive: true, force: true });
 }
+
+// kit-apple's Worker on macOS: WorkerTests.swift + platform-agnostic cases under cases/.
+if (process.platform === 'darwin') {
+  const swiftRuntimeDir = join(build, 'swift-runtime');
+  const workerSwiftFlags = ['-Xfrontend', '-disable-dynamic-actor-isolation'];
+  buildSwiftRuntime(swiftRuntimeDir, '-Onone', workerSwiftFlags);
+  const swiftc = (sources: string[], bin: string) => {
+    const r = spawnSync('xcrun', ['swiftc', '-parse-as-library', ...SWIFT_MODE, ...workerSwiftFlags, '-I', swiftRuntimeDir, '-L', swiftRuntimeDir, '-lNativeScriptKit', '-o', bin, ...sources], { encoding: 'utf8', timeout: 60000 });
+    if (r.status !== 0) throw new Error(`swiftc:\n${(r.stderr + r.stdout).split('\n').filter((l) => /error:/.test(l)).slice(0, 15).join('\n') || r.stderr.slice(0, 2000)}`);
+  };
+
+  try {
+    const unitBin = join(build, 'worker-tests-swift');
+    swiftc([join(here, 'WorkerTests.swift')], unitBin);
+    const unit = spawnSync(unitBin, [], { encoding: 'utf8', timeout: 60000 });
+    process.stdout.write(unit.stdout);
+    if (unit.status !== 0) {
+      failed++;
+      if (unit.stderr) console.log('  stderr: ' + unit.stderr.split('\n').slice(0, 8).join('\n  '));
+    }
+  } catch (err) {
+    failed++;
+    console.log(`✗ swift unit tests: ${(err as Error).message}`);
+  }
+
+  for (const name of readdirSync(casesDir).sort()) {
+    // native-threads exercises java.lang.Thread directly (Android JVM only).
+    if (name === 'native-threads') continue;
+    const dir = join(casesDir, name);
+    const out = join(build, 'swift-cases', name);
+    try {
+      const roots = readdirSync(dir).filter((f) => f.endsWith('.ts')).map((f) => join(dir, f));
+      const files = roots.filter((f) => !f.endsWith('.d.ts'));
+      const workers = files.filter((f) => f.endsWith('.worker.ts'));
+      const { checker, program, files: sources } = createProgram(roots, new Map(), 'ios', modulesDir);
+      const translator = new SwiftTranslator(checker, new Map(), sources, {
+        workerScripts: new Map(workers.map((f) => [f.replace(/\\/g, '/'), relative(dir, f).replace(/\\/g, '/')])),
+      });
+      const modules = translateModules(translator, program, files);
+      addInterfaces(translator, modules);
+      rmSync(out, { recursive: true, force: true });
+      mkdirSync(out, { recursive: true });
+      const header = 'import Foundation\nimport NativeScriptKit\n\n';
+      const swiftFiles: string[] = [];
+      for (const m of modules) {
+        if (!m.code.trim()) continue;
+        const p = join(out, m.name + '.swift');
+        writeFileSync(p, header + withoutRedundantImplicit(m.code));
+        swiftFiles.push(p);
+      }
+      const shapes = (translator.interfacesOutside(new Set(modules.map((m) => m.file))) + translator.shapesCode()).trim();
+      if (shapes) {
+        const p = join(out, '__Objects.swift');
+        writeFileSync(p, header + shapes + '\n');
+        swiftFiles.push(p);
+      }
+      const isWorker = (file: string) => translator.workerScripts!.has(file.replace(/\\/g, '/'));
+      const registered = modules
+        .filter((m) => isWorker(m.file))
+        .map((m) => `        JSWorker.register(${JSON.stringify(translator.workerScripts!.get(m.file.replace(/\\/g, '/')))}) { ${m.init ? `${m.initThrows ? 'try ' : ''}${m.init}()` : ''} }\n`)
+        .join('');
+      const inits = modules
+        .filter((m) => m.init && !isWorker(m.file))
+        .map((m) => `        ${m.initThrows ? 'try ' : ''}${m.init}()\n`)
+        .join('');
+      const mainFile = join(out, '__Main.swift');
+      writeFileSync(mainFile, `${header}@main\nenum Main {\n    static func main() {\n        jsReport {\n${registered}${inits}        }\n        JSEventLoop.runUntilIdle()\n        fflush(stdout)\n    }\n}\n`);
+      swiftFiles.push(mainFile);
+      const bin = join(out, 'app');
+      swiftc(swiftFiles, bin);
+      const run = spawnSync(bin, [], { encoding: 'utf8', timeout: 60000 });
+      const want = readFileSync(join(dir, 'main.ts'), 'utf8').split('\n').filter((l) => l.startsWith('//> ')).map((l) => l.slice(4)).join('\n') + '\n';
+      if (run.stdout === want && run.status === 0) console.log(`✓ swift case ${name}`);
+      else {
+        failed++;
+        console.log(`✗ swift case ${name} (exit ${run.status})\n  want: ${JSON.stringify(want)}\n  got:  ${JSON.stringify(run.stdout)}${run.stderr ? '\n  stderr: ' + run.stderr.split('\n').slice(0, 8).join('\n  ') : ''}`);
+      }
+    } catch (err) {
+      failed++;
+      console.log(`✗ swift case ${name}: ${(err as Error).message}`);
+    }
+    if (!keep) rmSync(out, { recursive: true, force: true });
+  }
+}
+
 console.log(failed ? `worker tests: ${failed} failed` : 'worker tests: all pass');
 process.exit(failed ? 1 : 0);

@@ -1,6 +1,41 @@
 import ts from 'typescript';
-import { relative } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
 import { evaluatedImports } from '../program/module-order.ts';
+
+/**
+ * `new Worker('~/x')`, `new Worker('./x')`, or `new Worker(new URL('./x', import.meta.url))`:
+ * resolves the worker script path against the build's `workerScripts` map for `platform`.
+ */
+export function resolveWorkerScript(name: string, args: readonly ts.Expression[], workerScripts: ReadonlyMap<string, string> | null, resolveAlias: ((specifier: string, importer?: string) => string | undefined) | null, platform: 'ios' | 'android'): string | null {
+	if (name !== 'Worker' || !workerScripts?.size || !args.length) return null;
+	const e = args[0];
+	let spec: string | null = null;
+	if (ts.isStringLiteralLike(e)) {
+		spec = e.text;
+	} else if (ts.isNewExpression(e) && ts.isIdentifier(e.expression) && e.expression.text === 'URL') {
+		const [s, base] = e.arguments ?? [];
+		if (s && ts.isStringLiteralLike(s) && base && base.getText() === 'import.meta.url') spec = s.text;
+	}
+	if (!spec || !workerScripts?.size) return null;
+	const file = e.getSourceFile().fileName;
+	const ext = platform === 'android' ? '.android.ts' : '.ios.ts';
+	const target = spec.startsWith('.') ? resolve(dirname(file), spec) : resolveAlias?.(spec, file);
+	if (target) {
+		const stem = target.replace(/\\/g, '/').replace(/\.(tsx?|m?js)$/, '');
+		for (const f of [stem + '.ts', stem + ext, stem + '.tsx', stem + '/index.ts', stem + `/index${ext}`]) {
+			const script = workerScripts.get(f);
+			if (script) return script;
+		}
+	}
+	if (spec.startsWith('~/') || spec.startsWith('@/')) {
+		const rel = spec.slice(2).replace(/\\/g, '/').replace(/\.(tsx?|m?js)$/, '');
+		for (const [key, script] of workerScripts) {
+			const norm = key.replace(/\\/g, '/');
+			if ([`/${rel}.ts`, `/${rel}${ext}`, `/${rel}.tsx`, `/${rel}/index.ts`, `/${rel}/index${ext}`].some((s) => norm.endsWith(s))) return script;
+		}
+	}
+	return null;
+}
 
 /** Methods that change the array, map, set or typed array they are called on. */
 const MUTATORS = new Set(['push', 'pop', 'shift', 'unshift', 'splice', 'set', 'fill', 'sort', 'reverse', 'copyWithin', 'delete', 'clear', 'add']);

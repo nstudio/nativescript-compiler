@@ -55,39 +55,35 @@ final class JSTimerList {
     var isEmpty: Bool { head >= timers.count }
 }
 
-/// The event loop for timers: drives them from the main run loop in an app, or from
-/// `runUntilIdle()` in a command-line program.
-public enum JSEventLoop {
-    static var lists: [Double: JSTimerList] = [:]
-    static var timers: [Double: JSTimer] = [:]
-    static var nextTimerId = 1.0
-    static var nextSeq = 0
-    static var processing = false
-    static var runLoopTimer: CFRunLoopTimer?
-    static var observer: CFRunLoopObserver?
-    static let origin = DispatchTime.now().uptimeNanoseconds
+/// Per-realm timer queue and run-loop hooks: `JSRealm.main` drives from the main `CFRunLoop`
+/// (or `JSEventLoop.runUntilIdle()`); a worker realm delegates wakeups to its `host` callback.
+final class JSEventLoopState {
+    nonisolated deinit {}
+    let isMain: Bool
+    var host: ((Double?) -> Void)?
+    var lists: [Double: JSTimerList] = [:]
+    var timers: [Double: JSTimer] = [:]
+    var nextTimerId = 1.0
+    var nextSeq = 0
+    var processing = false
+    var runLoopTimer: CFRunLoopTimer?
+    var observer: CFRunLoopObserver?
 
-    /// libuv's clock: whole milliseconds since the loop started.
-    static func now() -> Double {
-        Double(elapsedNanoseconds() / 1_000_000)
+    init(isMain: Bool) {
+        self.isMain = isMain
     }
 
-    private static func elapsedNanoseconds() -> UInt64 {
-        let start = origin
-        return DispatchTime.now().uptimeNanoseconds - start
-    }
-
-    static func schedule(_ callback: @escaping () -> Void, _ delay: Double, repeats: Bool) -> Double {
+    func schedule(_ callback: @escaping () -> Void, _ delay: Double, repeats: Bool) -> Double {
         var duration = delay
         if !(duration >= 1 && duration <= 2_147_483_647) { duration = 1 }
         let timer = JSTimer(id: nextTimerId, duration: duration, repeatInterval: repeats ? duration : nil, callback: callback)
         nextTimerId += 1
         timers[timer.id] = timer
-        insert(timer, start: now())
+        insert(timer, start: JSEventLoop.now())
         return timer.id
     }
 
-    private static func insert(_ timer: JSTimer, start: Double) {
+    private func insert(_ timer: JSTimer, start: Double) {
         let duration = timer.duration.rounded(.towardZero)
         timer.start = start
         timer.seq = nextSeq
@@ -102,7 +98,7 @@ public enum JSEventLoop {
         arm()
     }
 
-    static func cancel(_ id: Double?) {
+    func cancel(_ id: Double?) {
         guard let id, let timer = timers.removeValue(forKey: id) else { return }
         timer.active = false
         let duration = timer.duration.rounded(.towardZero)
@@ -112,7 +108,7 @@ public enum JSEventLoop {
         arm()
     }
 
-    private static func earliestList() -> JSTimerList? {
+    private func earliestList() -> JSTimerList? {
         var best: JSTimerList?
         for list in lists.values {
             guard let current = best else { best = list; continue }
@@ -122,14 +118,14 @@ public enum JSEventLoop {
     }
 
     /// When the next timer is due, on the `now()` clock.
-    static var nextExpiry: Double? { earliestList()?.expiry }
+    var nextExpiry: Double? { earliestList()?.expiry }
 
     /// Node's `processTimers`: runs every due timer list in expiry order.
-    static func processTimers() {
+    func processTimers() {
         guard !processing else { return }
         processing = true
         defer { processing = false }
-        let current = now()
+        let current = JSEventLoop.now()
         while let list = earliestList() {
             if list.expiry > current { break }
             listOnTimeout(list, current)
@@ -137,7 +133,7 @@ public enum JSEventLoop {
         arm()
     }
 
-    private static func listOnTimeout(_ list: JSTimerList, _ current: Double) {
+    private func listOnTimeout(_ list: JSTimerList, _ current: Double) {
         while let timer = list.first {
             if current - timer.start < list.duration {
                 list.expiry = max(timer.start + list.duration, current + 1)
@@ -145,7 +141,7 @@ public enum JSEventLoop {
                 return
             }
             list.removeFirst()
-            let start = now()
+            let start = JSEventLoop.now()
             timer.callback()
             Microtasks.taskRan()
             if let interval = timer.repeatInterval, timer.active {
@@ -160,13 +156,18 @@ public enum JSEventLoop {
         if lists[list.duration] === list { lists[list.duration] = nil }
     }
 
-    /// Re-arms the run-loop timer for the earliest expiry.
-    private static func arm() {
+    /// Re-arms the run-loop timer (or notifies a worker host) for the earliest expiry.
+    private func arm() {
+        if let host {
+            host(nextExpiry.map { max(0, $0 - JSEventLoop.now()) })
+            return
+        }
+        guard isMain else { return }
         guard let expiry = nextExpiry else {
             if let timer = runLoopTimer { CFRunLoopTimerSetNextFireDate(timer, .greatestFiniteMagnitude) }
             return
         }
-        let fireDate = CFAbsoluteTimeGetCurrent() + max(0, expiry - now()) / 1000
+        let fireDate = CFAbsoluteTimeGetCurrent() + max(0, expiry - JSEventLoop.now()) / 1000
         if let timer = runLoopTimer {
             CFRunLoopTimerSetNextFireDate(timer, fireDate)
             return
@@ -178,34 +179,79 @@ public enum JSEventLoop {
         CFRunLoopAddTimer(CFRunLoopGetMain(), timer, .commonModes)
     }
 
-    /// For command-line programs: drains microtasks, then runs timers (sleeping until each is due)
-    /// until none remain.
-    public static func runUntilIdle() {
-        Microtasks.checkpoint()
-        while true {
-            if JSPosted.run() { continue }
-            guard let expiry = nextExpiry else { break }
-            let due = UInt64(expiry) * 1_000_000
-            let elapsed = elapsedNanoseconds()
-            if due > elapsed {
-                _ = JSPosted.arrived.wait(timeout: .now() + .nanoseconds(Int(min(due - elapsed, 1_000_000_000)) + 1000))
-                continue
-            }
-            processTimers()
-            Microtasks.checkpoint()
-        }
-    }
-
-    /// Adds a main-run-loop observer that performs a microtask checkpoint before timers fire and
-    /// before the loop sleeps, so promise callbacks run after each batch of UIKit work.
-    public static func installRunLoopObserver() {
-        guard observer == nil else { return }
+    func installRunLoopObserver() {
+        guard isMain, observer == nil else { return }
         let activities = CFRunLoopActivity.beforeTimers.rawValue | CFRunLoopActivity.beforeWaiting.rawValue
         let created = CFRunLoopObserverCreateWithHandler(nil, activities, true, 0) { _, _ in
             Microtasks.checkpoint()
         }
         observer = created
         CFRunLoopAddObserver(CFRunLoopGetMain(), created, .commonModes)
+    }
+}
+
+/// The event loop for timers: drives them from the main run loop in an app, or from
+/// `runUntilIdle()` in a command-line program.
+public enum JSEventLoop {
+    static let origin = DispatchTime.now().uptimeNanoseconds
+
+    private static var current: JSEventLoopState { JSRealm.current().loop }
+
+    /// libuv's clock: whole milliseconds since the loop started.
+    static func now() -> Double {
+        Double(elapsedNanoseconds() / 1_000_000)
+    }
+
+    private static func elapsedNanoseconds() -> UInt64 {
+        let start = origin
+        return DispatchTime.now().uptimeNanoseconds - start
+    }
+
+    static func schedule(_ callback: @escaping () -> Void, _ delay: Double, repeats: Bool) -> Double {
+        current.schedule(callback, delay, repeats: repeats)
+    }
+
+    static func cancel(_ id: Double?) {
+        current.cancel(id)
+    }
+
+    /// When the next timer is due, on the `now()` clock.
+    static var nextExpiry: Double? { current.nextExpiry }
+
+    /// Node's `processTimers`: runs every due timer list in expiry order.
+    static func processTimers() {
+        current.processTimers()
+    }
+
+    /// For command-line programs: drains microtasks, then runs timers (sleeping until each is due)
+    /// and waits for any active workers until none remain.
+    public static func runUntilIdle() {
+        Microtasks.checkpoint()
+        while true {
+            if JSPosted.run() { continue }
+            if let expiry = nextExpiry {
+                let due = UInt64(expiry) * 1_000_000
+                let elapsed = elapsedNanoseconds()
+                if due > elapsed {
+                    _ = JSPosted.arrived.wait(timeout: .now() + .nanoseconds(Int(min(due - elapsed, 1_000_000_000)) + 1000))
+                    continue
+                }
+                processTimers()
+                Microtasks.checkpoint()
+                continue
+            }
+            if JSWorker.hasActiveWorkers {
+                _ = JSPosted.arrived.wait(timeout: .now() + .milliseconds(50))
+                continue
+            }
+            break
+        }
+    }
+
+    /// Adds a main-run-loop observer that performs a microtask checkpoint before timers fire and
+    /// before the loop sleeps, so promise callbacks run after each batch of UIKit work.
+    public static func installRunLoopObserver() {
+        JSRealm.main.loop.installRunLoopObserver()
     }
 }
 

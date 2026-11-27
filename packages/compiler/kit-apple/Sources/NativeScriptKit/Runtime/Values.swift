@@ -1744,7 +1744,10 @@ public func jsToNumber(_ value: Any?) -> Double {
 }
 
 enum JSJoinGuard {
-    static var active: [ObjectIdentifier] = []
+    static var active: [ObjectIdentifier] {
+        get { JSRealm.current().joining }
+        set { JSRealm.current().joining = newValue }
+    }
 }
 
 /// `String(value)`: arrays join with ",", plain objects are "[object Object]", errors "Name: message".
@@ -2006,9 +2009,8 @@ private func jsBuiltinFunction(_ name: String, _ length: Int, _ body: @escaping 
     return function
 }
 
-/// `globalThis` read as an object: the runtime's globals (`NativeScriptRuntime`, `com.tns`) are not
-/// in a native app, so reading one gives undefined. `DOMException`, which core's fetch reads from it, is there.
-public let jsGlobalThis = JSObject([("DOMException", jsDOMExceptionConstructor), ("performance", jsDateBuiltin)])
+/// `globalThis` read as an object: per-realm (a worker's own global on a worker thread, the app's on main).
+public var jsGlobalThis: JSObject { JSRealm.current().global }
 
 /// `Object` held as a value (`(<any>Object).entries(o)`): its functions over objects, called as script calls them.
 public let jsObjectBuiltin = jsBuiltinFunction("Object", 1, { a in jsIsNullish(jsArg(a, 0)) ? JSObject() : jsArg(a, 0) }, [

@@ -37,6 +37,7 @@ import { mirror, writeIfChanged } from '../../driver/mirror.ts';
 import { KIT_APPLE, PACKAGE } from '../../driver/paths.ts';
 import { compiledEnv } from '../../program/env.ts';
 import { programClassName } from '../../semantics/top-names.ts';
+import { sharedWorkerState, sharedWorkerStateError } from '../../semantics/worker-state.ts';
 
 export interface IosBuild {
 	/** The build's context: its framework adapter, plugin stand-ins and refusals. */
@@ -84,6 +85,9 @@ export interface IosBuild {
 	reach: Reach;
 	properties: Properties;
 	resolved: (containing: string, specifier: string) => string | undefined;
+	/** Worker scripts (`new Worker(new URL('./x.worker', import.meta.url))`), compiled as modules each worker thread runs. */
+	workers?: string[];
+	aliased?: (specifier: string, importer?: string) => string | undefined;
 	/** The app's own configuration leaves strict checking off. */
 	lenient: boolean;
 	assignFields: boolean;
@@ -147,6 +151,16 @@ export async function writeIos(b: IosBuild): Promise<void> {
 	const appNative = native.appSwift ? nativeTable(name).classes : {};
 	const pluginNativeClasses = new Map<string, string>();
 	for (const m of native.modules) for (const [js, c] of Object.entries(nativeTable(m).classes)) if (c.kind === 'class' && !c.extension && c.module === m) pluginNativeClasses.set(js, c.swift);
+	const allModuleFiles = [...new Set([...modules, ...components.map((c) => c.file), ...compiledPlugins])];
+	if (b.workers?.length) {
+		const writes = sharedWorkerState(
+			program,
+			b.workers.map((f) => f.replace(/\\/g, '/')),
+			new Set(allModuleFiles.map((f) => f.replace(/\\/g, '/'))),
+			resolved,
+		);
+		if (writes.length) throw sharedWorkerStateError(writes, app);
+	}
 	const translator = new Translator(checker, infos, sourceFiles, {
 		...context.translation(),
 		pluginFiles,
@@ -168,6 +182,8 @@ export async function writeIos(b: IosBuild): Promise<void> {
 		appNativeClasses: Object.keys(appNative).filter((c) => !appNative[c].extension && appNative[c].kind === 'class'),
 		pluginNativeClasses,
 		pluginModules: native.modules,
+		workerScripts: new Map((b.workers ?? []).map((f) => [f.replace(/\\/g, '/'), relative(app, f).replace(/\\/g, '/')])),
+		resolveAlias: b.aliased ?? null,
 		allowUnapplied,
 		errors: b.allErrors ? (allowUnapplied ? [] : [...unapplied]) : null,
 	});
@@ -230,9 +246,14 @@ export async function writeIos(b: IosBuild): Promise<void> {
 		}
 		const shapes = SourceLines.strip((translator.interfacesOutside(new Set(translated.map((m) => m.file))) + translator.shapesCode()).trim());
 		if (shapes) writeFileSync(join(sourcesDir, '__Objects.swift'), `// Compiled by ns-compiled: the app's object literals without a declared type.\nimport Foundation\nimport NativeScriptKit\n${native.modules.length || /\bUI[A-Z]/.test(shapes) ? `import UIKit\n${native.modules.map((m) => `import ${m}\n`).join('')}` : ''}${SDK_IMPORTS}\n${shapes}\n`);
-		const activeInits = translated.filter((m) => m.init);
+		const isWorker = (file: string) => !!translator.workerScripts?.has(file.replace(/\\/g, '/'));
+		const workerRegs = translated
+			.filter((m) => isWorker(m.file))
+			.map((m) => `        JSWorker.register(${swiftString(translator.workerScripts!.get(m.file.replace(/\\/g, '/'))!)}) { ${m.init ? `${m.initThrows ? 'try ' : ''}${m.init}()` : ''} }\n`)
+			.join('');
+		const activeInits = translated.filter((m) => m.init && !isWorker(m.file));
 		const anyInitThrows = activeInits.some((m) => m.initThrows);
-		const inits = activeInits.length ? (anyInitThrows ? `        ${RT.jsReport} {\n${activeInits.map((m) => `            ${m.initThrows ? 'try ' : ''}${m.init}()\n`).join('')}        }\n` : activeInits.map((m) => `        ${m.init}()\n`).join('')) : '';
+		const inits = workerRegs + (activeInits.length ? (anyInitThrows ? `        ${RT.jsReport} {\n${activeInits.map((m) => `            ${m.initThrows ? 'try ' : ''}${m.init}()\n`).join('')}        }\n` : activeInits.map((m) => `        ${m.init}()\n`).join('')) : '');
 		// The app's CSS as its NativeScript build ships it: the AST core applies.
 		const css = kitAst(sheets);
 		const corePatchRefusal = corePatchRefused(app, nodeModules(app), 'ios');
@@ -387,11 +408,12 @@ export async function writeIos(b: IosBuild): Promise<void> {
 		else removePods(out, name);
 		const resources = iosProjectResources({ app, appDir, out, name, pods: !!pods, say, stubbed: context.stubbedPlugins });
 		const extensions = iosExtensions({ app, out, bundle, packages, signing, team: resources.team, say });
-		// Script is single-threaded: the kit and the app's code are isolated to the main actor, checked in Swift 6 mode. Plugins'
-		// own Swift targets keep their language mode.
-		const swiftMode = { SWIFT_VERSION: '"6"', SWIFT_DEFAULT_ACTOR_ISOLATION: 'MainActor' };
-		// Release only: Debug keeps Swift 6's run-time isolation checks, so an isolation mistake traps during development.
-		const swiftModeRelease = (...flags: string[]) => `      configs:\n        Release:\n          OTHER_SWIFT_FLAGS: "${['$(inherited)', '-Xfrontend', '-disable-dynamic-actor-isolation', ...flags].join(' ')}"\n`;
+		// Script is single-threaded unless the app starts workers (each in its own isolated JSRealm on a worker thread).
+		// When workers are present, disable dynamic MainActor assertions in Debug too so worker threads can run realm-isolated code.
+		const hasWorkers = !!(b.workers && b.workers.length);
+		const swiftMode = { SWIFT_VERSION: '"6"', SWIFT_DEFAULT_ACTOR_ISOLATION: 'MainActor', ...(hasWorkers ? { OTHER_SWIFT_FLAGS: '"$(inherited) -Xfrontend -disable-dynamic-actor-isolation"' } : {}) };
+		// Release only: Debug keeps Swift 6's run-time isolation checks when no workers are present.
+		const swiftModeRelease = (...flags: string[]) => `      configs:\n        Release:\n          OTHER_SWIFT_FLAGS: "${['$(inherited)', ...(hasWorkers ? [] : ['-Xfrontend', '-disable-dynamic-actor-isolation']), ...flags].join(' ')}"\n`;
 		// The app's own Swift (App_Resources/iOS/src), compiled in the app's target, was written for Swift 5: the target keeps that mode,
 		// with the Swift 6 features the generated code relies on (a default argument evaluated in its function's isolation).
 		const appMode = native.appSwift ? { ...swiftMode, SWIFT_VERSION: '"5"', SWIFT_UPCOMING_FEATURE_ISOLATED_DEFAULT_VALUES: 'YES', SWIFT_UPCOMING_FEATURE_REGION_BASED_ISOLATION: 'YES', SWIFT_UPCOMING_FEATURE_INFER_SENDABLE_FROM_CAPTURES: 'YES', SWIFT_UPCOMING_FEATURE_GLOBAL_ACTOR_ISOLATED_TYPES_USABILITY: 'YES' } : swiftMode;

@@ -29,6 +29,7 @@ private final class JSWeakView {
 
 private var jsViewEntries: [ObjectIdentifier: JSViewEntry] = [:]
 private var jsViewPruneAt = 64
+private let jsViewLock = JSUnfairLock()
 
 /// The object `value` is in JavaScript: what a stand-in stands for, else `value` itself.
 @inline(__always)
@@ -79,6 +80,8 @@ public func jsViewOf<T: JSViewing>(_ root: JSDynamic, _ type: T.Type, _ make: (J
 /// The one stand-in of `root` as `T` while both are alive, made by `make` when there is none.
 func jsStandInOf<T: AnyObject>(_ root: AnyObject, _ type: T.Type, _ make: () -> T) -> T {
     let id = ObjectIdentifier(root)
+    let typeId = ObjectIdentifier(type)
+    jsViewLock.lock()
     let entry: JSViewEntry
     if let e = jsViewEntries[id], e.root === root {
         entry = e
@@ -90,8 +93,14 @@ func jsStandInOf<T: AnyObject>(_ root: AnyObject, _ type: T.Type, _ make: () -> 
         entry = JSViewEntry(root)
         jsViewEntries[id] = entry
     }
-    if let v = entry.views[ObjectIdentifier(type)]?.view as? T { return v }
+    if let v = entry.views[typeId]?.view as? T {
+        jsViewLock.unlock()
+        return v
+    }
+    jsViewLock.unlock()
     let v = make()
-    entry.views[ObjectIdentifier(type)] = JSWeakView(v)
+    jsViewLock.lock()
+    entry.views[typeId] = JSWeakView(v)
+    jsViewLock.unlock()
     return v
 }

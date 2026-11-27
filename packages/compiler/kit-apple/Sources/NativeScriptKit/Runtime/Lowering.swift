@@ -50,7 +50,13 @@ func jsReportedToScript(_ value: Any?) -> Bool {
     return true
 }
 
-public func jsReportUncaught(_ value: Any?) { jsUncaughtHandler(value) }
+public func jsReportUncaught(_ value: Any?) {
+    if let handler = JSRealm.current().uncaught {
+        handler(value)
+        return
+    }
+    jsUncaughtHandler(value)
+}
 
 /// A framework's own handling of what no script code caught, which hears it before the app's (`UncaughtErrors`): true
 /// when it took it.

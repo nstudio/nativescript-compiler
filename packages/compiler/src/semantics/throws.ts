@@ -54,6 +54,10 @@ const THROWING_BUILTINS = new Set([
 	'btoa',
 	'Crypto.getRandomValues',
 	'TextDecoder.decode',
+	'Worker.postMessage',
+	'DedicatedWorkerGlobalScope.postMessage',
+	'postMessage',
+	'close',
 ]);
 
 /**
@@ -527,6 +531,8 @@ export class Throws {
 		if (ts.isIdentifier(call.expression) && call.expression.text === 'RegExp') return true;
 		// A buffer or a view of an invalid length is a RangeError.
 		if (ts.isNewExpression(call) && ts.isIdentifier(call.expression) && BUFFER_TYPES.has(call.expression.text) && c.getSymbolAtLocation(call.expression)?.declarations?.every((d) => d.getSourceFile().isDeclarationFile)) return true;
+		// `new Worker(...)` and `new URL(...)` throw when the script is absent/already running or the URL is invalid.
+		if (ts.isNewExpression(call) && ts.isIdentifier(call.expression) && (call.expression.text === 'Worker' || call.expression.text === 'URL') && c.getSymbolAtLocation(call.expression)?.declarations?.every((d) => d.getSourceFile().isDeclarationFile)) return true;
 		// A weak reference to an untyped value refuses a primitive.
 		if (ts.isNewExpression(call) && ts.isIdentifier(call.expression) && call.expression.text === 'WeakRef' && args[0] && this.untyped(args[0])) return true;
 		// Intl's constructors reject options out of range; BigInt() a value with no integer.

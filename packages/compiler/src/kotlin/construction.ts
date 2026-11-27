@@ -8,6 +8,7 @@ import { isKit, isUntyped, parseNativeType, spelledType } from '../semantics/typ
 import { hasModifier, isLibDeclaration } from '../semantics/ast.ts';
 import { isPromiseType } from '../semantics/spelled.ts';
 import { constClassExpr, constructorOf, spellInstantiatedCollection } from '../semantics/classes.ts';
+import { resolveWorkerScript } from '../semantics/worker-state.ts';
 
 export const constructionMethods = {
 	/** `new RegExp(…)`: from a pattern, or a copy of an expression with its flags unless others are given. */
@@ -26,10 +27,8 @@ export const constructionMethods = {
 		if (this.library && ts.isClassExpression(callee) && !args.length) return this.classExpressionObject(callee);
 		const clsExpr = constClassExpr(callee, this.checker);
 		if (clsExpr) return `${this.emitClassExprCode(clsExpr)}(${this.args(e).join(', ')})`;
-		if (name === 'Worker' && this.workerScripts && args.length) {
-			const script = this.workerScript(args[0]);
-			if (script) return `JSWorker(${this.coerce(args[0], 'Any?')}, ${kotlinString(script)})`;
-		}
+		const workerScript = resolveWorkerScript(name, args, this.workerScripts, this.resolveAlias, 'android');
+		if (workerScript) return `JSWorker(${this.coerce(args[0], 'Any?')}, ${kotlinString(workerScript)})`;
 		if (BUFFER_TYPES.has(name) && this.resolve(callee)?.declarations?.every((d) => d.getSourceFile().isDeclarationFile)) return this.newBuffer(name, args);
 		const own = ts.isIdentifier(callee) ? this.resolve(callee)?.valueDeclaration : undefined;
 		const collection = own && ts.isClassLike(own) && !own.getSourceFile().isDeclarationFile && !constructorOf(own, this.checker) ? spellInstantiatedCollection(this.checker.getTypeAtLocation(e), this.checker, (a) => this.type(a, e)) : null;

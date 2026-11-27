@@ -201,6 +201,9 @@ export const fromAnyMethods = {
 		if (type === 'Void' || type === '()') return `(_ = ${code})`;
 		// An Error held untyped (a caught or rejected value): the error, or a view of what was thrown instead.
 		if (type === 'JSError' && !this.lenient) return `${RT.jsErrorOf}(${code})`;
+		// `globalThis as unknown as Worker`: wraps a worker realm's global object as a JSWorker.
+		if (type === 'JSWorker') return this.marks.ownTried(`JSWorker.fromAny(${code})`);
+		if (type === 'JSWorker?' || type === 'JSWorker!') return `JSWorker.fromAnyOrNil(${code})`;
 		// An implicitly unwrapped class (`tabView: TabView!`): the value as it, missing where it is none.
 		if (/^[A-Z][\w.]*!$/.test(type) && !this.native.isStructType(type.slice(0, -1)) && !['Double', 'String', 'Bool'].includes(type.slice(0, -1))) return this.libraryClassCast(input, type.slice(0, -1), false, checked || throwing, placed) ?? this.marks.castCode(code, type.slice(0, -1), 'as?');
 		if (input.mark?.op === 'empty') {

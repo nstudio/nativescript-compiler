@@ -31,8 +31,14 @@ const WORKER_CLASSES = ['Worker', 'MessageEvent', 'ErrorEvent', 'URL'];
 export const ALL_WEB_CLASSES: ReadonlySet<string> = new Set([...WEB_CLASSES, ...WORKER_CLASSES, 'URLSearchParams', 'AbortController', 'AbortSignal', 'Blob', 'File', 'FormData', 'Headers', 'Request', 'Response', 'Event', 'EventTarget', 'CustomEvent', 'CloseEvent', 'WebSocket', 'ReadableStream', 'WritableStream', 'TransformStream']);
 
 /** `name` is a web class the kit implements. */
-export function isWebClass(ledger: Ledger, name: string): boolean {
-	return WEB_CLASSES.includes(name) || (ledger.workerGlobals && WORKER_CLASSES.includes(name));
+export function isWebClass(_ledger: Ledger, name: string): boolean {
+	return WEB_CLASSES.includes(name) || WORKER_CLASSES.includes(name);
+}
+
+/** The kit class name for a web or worker global class (`Worker` → `JSWorker`, `DedicatedWorkerGlobalScope` → `JSWorker`). */
+export function webClassName(ledger: Ledger, name: string): string | null {
+	if (name === 'DedicatedWorkerGlobalScope') return 'JSWorker';
+	return isWebClass(ledger, name) ? `JS${name}` : null;
 }
 
 /** The web's option and algorithm dictionaries, plus global-object web interfaces read by key. */

@@ -252,7 +252,7 @@ public enum JSPosted {
     // Read and written only under `lock`.
     nonisolated(unsafe) private static var jobs: [@MainActor () -> Void] = []
     private nonisolated static let lock = NSLock()
-    nonisolated static let arrived = DispatchSemaphore(value: 0)
+    public nonisolated static let arrived = DispatchSemaphore(value: 0)
 
     @usableFromInline nonisolated static func post(_ job: @escaping @MainActor () -> Void) {
         lock.lock()
@@ -264,7 +264,7 @@ public enum JSPosted {
     }
 
     /// Runs every posted job, in order; whether there was one.
-    @discardableResult static func run() -> Bool {
+    @discardableResult public static func run() -> Bool {
         lock.lock()
         let ready = jobs
         jobs = []

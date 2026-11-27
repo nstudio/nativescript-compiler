@@ -59,16 +59,19 @@ public protocol JSTypedArrayProtocol: JSArrayBufferView {
     var jsLength: Int { get }
     /// The elements as JavaScript values: numbers, or BigInts.
     var jsAnyValues: [Any?] { get }
+    /// A view of the same typed array kind and layout over another buffer (for structured clone).
+    func jsClone(buffer: JSArrayBuffer) -> AnyObject
 }
 
 /// `ArrayBuffer`: a fixed number of bytes, zeroed when made, at an address that stays put for
 /// as long as the buffer lives (native APIs read and write them in place).
 public final class JSArrayBuffer: JSDynamic, JSToStringTag, JSBufferSource, JSHostObject {
-    public let count: Int
-    let bytes: UnsafeMutableRawPointer
+    public private(set) var count: Int
+    public private(set) var detached = false
+    nonisolated(unsafe) let bytes: UnsafeMutableRawPointer
     /// Set for memory the buffer does not own: called instead of freeing it.
-    private let deallocator: (() -> Void)?
-    private let owned: Bool
+    private nonisolated let deallocator: (@Sendable () -> Void)?
+    private nonisolated let owned: Bool
 
     /// `new ArrayBuffer(length)`.
     public convenience init(_ length: Double = 0) throws {
@@ -98,12 +101,21 @@ public final class JSArrayBuffer: JSDynamic, JSToStringTag, JSBufferSource, JSHo
     public init(bytesNoCopy: UnsafeMutableRawPointer, count: Int, deallocator: (() -> Void)?) {
         self.count = count
         bytes = bytesNoCopy
-        self.deallocator = deallocator
+        if let deallocator {
+            let carried = JSCarried(deallocator)
+            self.deallocator = { jsRunInWorker { carried.value() } }
+        } else {
+            self.deallocator = nil
+        }
         owned = false
     }
 
-    isolated deinit {
-        if owned { bytes.deallocate() } else { deallocator?() }
+    nonisolated deinit {
+        if owned {
+            bytes.deallocate()
+        } else if let deallocator {
+            jsLater(deallocator)
+        }
     }
 
     public var byteLength: Double { Double(count) }
@@ -117,6 +129,18 @@ public final class JSArrayBuffer: JSDynamic, JSToStringTag, JSBufferSource, JSHo
         let copy = JSArrayBuffer(byteCount: to - from)
         copy.bytes.copyMemory(from: bytes + from, byteCount: to - from)
         return copy
+    }
+
+    /// Moves this buffer's bytes into a new buffer and detaches this one (for `postMessage` transfer lists).
+    func transfer() throws -> JSArrayBuffer {
+        if detached {
+            throw JSException(JSDOMException("An ArrayBuffer is detached and could not be transferred.", "DataCloneError"))
+        }
+        let moved = JSArrayBuffer(byteCount: count)
+        if count > 0 { moved.bytes.copyMemory(from: bytes, byteCount: count) }
+        detached = true
+        count = 0
+        return moved
     }
 
     /// `ArrayBuffer.prototype`, as far as a program reads it: its tag.
@@ -298,6 +322,7 @@ public final class JSTypedArray<Kind: JSTypedArrayElement>: JSTypedArrayProtocol
 
     /// `new Float32Array(buffer, byteOffset, length)`.
     public convenience init(buffer: JSArrayBuffer, _ byteOffset: Double? = nil, _ length: Double? = nil) throws {
+        if buffer.detached { throw JSException(JSTypeError("Cannot perform Construct on a detached ArrayBuffer")) }
         let size = Self.stride
         let name = Kind.kind.name
         guard let start = jsIndex(byteOffset ?? 0) else { throw JSException(JSRangeError("Start offset \(jsNumberToString(jsToIntegerOrInfinity(byteOffset ?? 0))) is outside the bounds of the buffer")) }
@@ -376,8 +401,11 @@ public final class JSTypedArray<Kind: JSTypedArrayElement>: JSTypedArrayProtocol
     public static var BYTES_PER_ELEMENT: Double { Double(Kind.kind.bytesPerElement) }
     public var BYTES_PER_ELEMENT: Double { Self.BYTES_PER_ELEMENT }
 
-    @inlinable public var length: Double { Double(count) }
-    public var byteLength: Double { Double(count * Self.stride) }
+    @inlinable public var length: Double { buffer.detached ? 0 : Double(count) }
+    public var byteLength: Double { buffer.detached ? 0 : Double(count * Self.stride) }
+    public func jsClone(buffer: JSArrayBuffer) -> AnyObject {
+        JSTypedArray(buffer: buffer, offset: offset, count: count)
+    }
     public var byteOffset: Double { Double(offset) }
     public var jsBytes: UnsafeMutableRawBufferPointer { UnsafeMutableRawBufferPointer(start: base, count: count * Self.stride) }
     public var jsElementKind: JSTypedArrayKind? { Kind.kind }

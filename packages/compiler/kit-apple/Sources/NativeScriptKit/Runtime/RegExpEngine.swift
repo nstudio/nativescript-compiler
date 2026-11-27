@@ -988,6 +988,7 @@ enum UnicodeProperties {
     }()
 
     private static var scripts: [String: [Int]] = [:]
+    private static let scriptsLock = JSUnfairLock()
 
     private static func codePoint(at offset: Int) -> Int {
         offset < 0xD800 ? offset : offset < 0xF800 ? offset + 0x800 : 0x10000 + (offset - 0xF800) / 2
@@ -1000,15 +1001,23 @@ enum UnicodeProperties {
         let words = name.split(separator: "_", omittingEmptySubsequences: false)
         guard name.count == 4 || words.allSatisfy({ w in w.first.map { ("A"..."Z").contains($0) } == true && w.dropFirst().allSatisfy { ("a"..."z").contains($0) } }) else { return nil }
         let key = (extensions ? "scx=" : "sc=") + name
-        if scripts[key] == nil {
+        scriptsLock.lock()
+        let existing = scripts[key]
+        scriptsLock.unlock()
+        let ranges: [Int]
+        if let existing {
+            ranges = existing
+        } else {
             guard let re = try? NSRegularExpression(pattern: "\\p{\(extensions ? "Script_Extensions" : "Script")=\(name)}+") else { return nil }
-            var ranges: [Int] = []
+            var built: [Int] = []
             for m in re.matches(in: everyScalar as String, range: NSRange(location: 0, length: everyScalar.length)) {
-                ranges += [codePoint(at: m.range.location), codePoint(at: m.range.location + m.range.length - 1)]
+                built += [codePoint(at: m.range.location), codePoint(at: m.range.location + m.range.length - 1)]
             }
-            scripts[key] = ranges
+            scriptsLock.lock()
+            scripts[key] = built
+            scriptsLock.unlock()
+            ranges = built
         }
-        let ranges = scripts[key]!
         return { inRanges(ranges, $0) }
     }
 

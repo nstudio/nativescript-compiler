@@ -1,4 +1,3 @@
-import { dirname as pathDirname, resolve as pathResolve } from 'node:path';
 import { heldLoss } from '../semantics/losses.ts';
 import ts from 'typescript';
 import { KOTLIN_LEDGER } from '../semantics/ledger.ts';
@@ -91,9 +90,6 @@ export class Translator implements AsyncTranslator {
 	readonly nativeDeclared = (d: ts.Declaration): boolean => !!this.native?.isNativeDeclaration(d);
 	/** The innermost statement or expression being translated: where code made from a type alone is placed. */
 	translating: ts.Node | undefined;
-	/** Android: the worker scripts compiled with the app, by file, and the name the entry registers each under. */
-	readonly workerScripts: ReadonlyMap<string, string> | null;
-	readonly resolveAlias: ((specifier: string, importer?: string) => string | undefined) | null;
 	/** The generated kit: a module's name for `AppModules.runImport`, set where modules `await import(…)` reaches run when imported. */
 	readonly moduleKey?: (file: string) => string;
 
@@ -162,8 +158,6 @@ export class Translator implements AsyncTranslator {
 		this.framework = new Framework(c.hooks);
 		this.checker = checker;
 		this.lenient = c.lenient ?? false;
-		this.workerScripts = c.workerScripts ?? null;
-		this.resolveAlias = c.resolveAlias ?? null;
 		this.moduleThread = c.moduleThread ?? null;
 		this.moduleKey = c.moduleKey;
 		this.components = components;
@@ -784,35 +778,6 @@ export class Translator implements AsyncTranslator {
 			return '    ' + this.func(m, this.methodIdent(n), 'override ');
 		});
 		return `object : ${this.className(base)}() {\n${members.join('\n')}\n}`;
-	}
-
-	/** `new Worker('~/x')`, `new Worker('./x')`, or `new Worker(new URL('./x', import.meta.url))`: the worker script it names, when the app compiled it. */
-	workerScript(e: ts.Expression): string | null {
-		let spec: string | null = null;
-		if (ts.isStringLiteralLike(e)) {
-			spec = e.text;
-		} else if (ts.isNewExpression(e) && ts.isIdentifier(e.expression) && e.expression.text === 'URL') {
-			const [s, base] = e.arguments ?? [];
-			if (s && ts.isStringLiteralLike(s) && base && base.getText() === 'import.meta.url') spec = s.text;
-		}
-		if (!spec || !this.workerScripts?.size) return null;
-		const file = e.getSourceFile().fileName;
-		const target = spec.startsWith('.') ? pathResolve(pathDirname(file), spec) : this.resolveAlias?.(spec, file);
-		if (target) {
-			const stem = target.replace(/\\/g, '/').replace(/\.(tsx?|m?js)$/, '');
-			for (const f of [stem + '.ts', stem + '.android.ts', stem + '.tsx', stem + '/index.ts', stem + '/index.android.ts']) {
-				const script = this.workerScripts.get(f);
-				if (script) return script;
-			}
-		}
-		if (spec.startsWith('~/') || spec.startsWith('@/')) {
-			const rel = spec.slice(2).replace(/\\/g, '/').replace(/\.(tsx?|m?js)$/, '');
-			for (const [key, script] of this.workerScripts) {
-				const norm = key.replace(/\\/g, '/');
-				if ([`/${rel}.ts`, `/${rel}.android.ts`, `/${rel}.tsx`, `/${rel}/index.ts`, `/${rel}/index.android.ts`].some((s) => norm.endsWith(s))) return script;
-			}
-		}
-		return null;
 	}
 
 	/**

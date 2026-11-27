@@ -2,13 +2,14 @@
 import ts from 'typescript';
 import { isTypedArrayType } from './library.ts';
 import { ERRORS, TYPED_ARRAYS, errorArguments, isWebClass, isLibGlobal } from '../semantics/globals.ts';
-import { ident, isOptional, splitTopLevel, RT } from './syntax.ts';
+import { ident, isOptional, splitTopLevel, swiftString, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { intlConstructor } from '../semantics/lang.ts';
 import { isArrayLengthLiteral, isAsync } from '../semantics/throws.ts';
 import { isLibDeclaration } from '../semantics/ast.ts';
 import { isKit, isUntyped, spelledType } from '../semantics/types.ts';
 import { constClassExpr, constructorOf } from '../semantics/classes.ts';
+import { resolveWorkerScript } from '../semantics/worker-state.ts';
 
 export const constructionMethods = {
 	/** The library error a class is under whose constructors, its own and its program bases', are none; null for another class. */
@@ -211,6 +212,8 @@ export const constructionMethods = {
 		if (this.native.isStructType(t) && args.length === 1 && this.typeOf(args[0]) === t) return this.expr(args[0]);
 		if (this.native.isStructType(t) && !args.length) return `${t}()`;
 		// A web class the runtime has (`new TextEncoder()`), declared by the DOM's library for core's own code: the runtime's class.
+		const workerScript = resolveWorkerScript(name, args, this.workerScripts, this.resolveAlias, 'ios');
+		if (workerScript) return `JSWorker(${this.coerce(args[0], 'Any?')}, ${swiftString(workerScript)})`;
 		if (ts.isIdentifier(callee) && isWebClass(this.ledger, name) && t === `JS${name}` && !!this.resolve(callee)?.declarations?.[0]?.getSourceFile().isDeclarationFile) return `${t}(${this.args(e).join(', ')})`;
 		this.refuseFunctionNew(e);
 		// An untyped constructor (a moot module's class): constructed as script would, which a moot value refuses.

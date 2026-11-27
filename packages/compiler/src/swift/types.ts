@@ -1,7 +1,7 @@
 // TypeScript types as Swift types: representations, held and optional forms, shapes.
 import ts from 'typescript';
 import { DESCRIPTORS } from './library.ts';
-import { WEB_DICTIONARIES, isWebClass } from '../semantics/globals.ts';
+import { WEB_DICTIONARIES, webClassName } from '../semantics/globals.ts';
 import { SPELLING, spell, functionParts, heldType, isFunctionLiteral, isFunctionType, isMethodValue, isOptional, nullishType, optionalElementsType, optionalType, returningAny, swiftString, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { literalOverArray, membersOverTypeParameter, readByKey, definedField, untypedResultBinding, untypedResultField } from '../semantics/shapes.ts';
@@ -157,7 +157,8 @@ export const typesMethods = {
 		};
 		// Core's own code and apps using DOM/core global typings: web classes declared in .d.ts map to the runtime's.
 		if (name && sym?.declarations?.length && sym.declarations.every((d) => d.getSourceFile().isDeclarationFile)) {
-			if (isWebClass(this.ledger, name)) return `JS${name}`;
+			const web = webClassName(this.ledger, name);
+			if (web) return web;
 			if (WEB_DICTIONARIES.includes(name) && (sym.declarations[0].getSourceFile().fileName === '/__shims__/globals.d.ts' || isLibDeclaration(sym.declarations[0]))) return 'Any?';
 		}
 		const kind = name === undefined ? undefined : this.framework.signalKind(name);

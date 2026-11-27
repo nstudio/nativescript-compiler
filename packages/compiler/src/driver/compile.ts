@@ -168,10 +168,9 @@ export async function compile(o: CompileOptions, build: BuildContext = new Build
 	const included = adapter?.reach === 'entry' ? null : tsconfigIncluded(app, appDir);
 	const reached = reachedFrom(adapter?.reach === 'entry' ? [entry] : files.filter((f) => !included || !/\.tsx?$/.test(f) || included.has(f)), importsOf);
 	// A file only the other platform's files use (an Android audio worker) is no module of this build.
-	// A worker's script runs in a worker, not as a module of the app; an iOS build refuses `new Worker`, so it starts none.
 	// Transitively: a file only such files use is out too (an Android track engine its worker imports).
-	// Android compiles worker scripts: the kit runs each on a worker thread.
-	const leftOut = new Set<string>([...(platform === 'android' ? [] : [...workerScripts].filter((w) => !usedBy.has(w))), ...platformSources.filter((f) => !reached.has(f))]);
+	// Both Android and iOS compile worker scripts: each kit runs them on their own worker threads.
+	const leftOut = new Set<string>(platformSources.filter((f) => !reached.has(f)));
 	for (let changed = true; changed;) {
 		changed = false;
 		for (const f of platformSources) {
@@ -595,6 +594,8 @@ export async function compile(o: CompileOptions, build: BuildContext = new Build
 		reach,
 		properties,
 		resolved,
+		workers: [...workerScripts],
+		aliased,
 		lenient: lenientApp,
 		assignFields: assignsFields,
 		allowUnapplied,

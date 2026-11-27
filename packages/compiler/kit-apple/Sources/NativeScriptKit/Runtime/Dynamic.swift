@@ -319,6 +319,7 @@ public func jsOwnPropertyNames(_ value: Any?) -> JSArray<String> {
 }
 
 private var jsRestricted: [ObjectIdentifier: JSRestriction] = [:]
+private let jsRestrictedLock = JSUnfairLock()
 
 /// How far `Object.preventExtensions`, `seal` or `freeze` closed an object other than a plain one.
 private final class JSRestriction {
@@ -330,6 +331,8 @@ private final class JSRestriction {
 
 /// 0: open; 1: not extensible; 2: sealed; 3: frozen.
 func jsRestriction(_ object: AnyObject) -> Int {
+    jsRestrictedLock.lock()
+    defer { jsRestrictedLock.unlock() }
     guard !jsRestricted.isEmpty, let r = jsRestricted[ObjectIdentifier(object)], r.object === object else { return 0 }
     return r.level
 }
@@ -339,7 +342,10 @@ private func jsRestrict(object v: Any?, level: Int) {
     case let o as JSObject: o.restrict(sealed: level >= 2, frozen: level >= 3)
     case let v? where jsIsObject(v) && !(v is JSNull):
         let object = v as AnyObject
-        jsRestricted[ObjectIdentifier(object)] = JSRestriction(object, max(level, jsRestriction(object)))
+        jsRestrictedLock.lock()
+        let current = (jsRestricted[ObjectIdentifier(object)].flatMap { $0.object === object ? $0.level : nil }) ?? 0
+        jsRestricted[ObjectIdentifier(object)] = JSRestriction(object, max(level, current))
+        jsRestrictedLock.unlock()
     default: break
     }
 }
@@ -454,15 +460,20 @@ public func jsIn(_ key: String, _ object: Any?) -> Bool {
 /// A tagged template's strings array; translated code makes one per call site.
 public func jsTemplateObject(_ cooked: [String], raw: [String]) -> JSArray<String> {
     let strings = JSArray(cooked)
+    jsTemplateRawsLock.lock()
     jsTemplateRaws[ObjectIdentifier(strings)] = JSArray(raw)
+    jsTemplateRawsLock.unlock()
     return strings
 }
 
 /// `strings.raw`.
 public func jsTemplateRaw(_ strings: JSArray<String>) -> JSArray<String> {
-    jsTemplateRaws[ObjectIdentifier(strings)] ?? strings
+    jsTemplateRawsLock.lock()
+    defer { jsTemplateRawsLock.unlock() }
+    return jsTemplateRaws[ObjectIdentifier(strings)] ?? strings
 }
 private var jsTemplateRaws: [ObjectIdentifier: JSArray<String>] = [:]
+private let jsTemplateRawsLock = JSUnfairLock()
 
 /// The key order of an object literal with spreads (`{ ...a, b: 1 }`): each spread source's keys as it holds
 /// them, then the literal's own, a key keeping its first position; integer keys first; only the `fields` it has.

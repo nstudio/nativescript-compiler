@@ -9,27 +9,45 @@ public final class JSSymbol: Hashable, CustomStringConvertible {
 
     public init(_ description: String?) {
         jsDescription = description
+        JSSymbol.lock.lock()
         JSSymbol.count += 1
-        key = "\u{0}@@\(JSSymbol.count)"
-        JSSymbol.byKey[key] = self
+        let k = "\u{0}@@\(JSSymbol.count)"
+        key = k
+        JSSymbol.byKey[k] = self
+        JSSymbol.lock.unlock()
     }
 
+    private nonisolated static let lock = NSLock()
     private static var count = 0
     private static var byKey: [String: JSSymbol] = [:]
     private static var registry: [String: JSSymbol] = [:]
 
     /// `Symbol.for(key)`: one symbol per key, program-wide.
     public static func `for`(_ key: String) -> JSSymbol {
-        if let s = registry[key] { return s }
+        lock.lock()
+        if let s = registry[key] {
+            lock.unlock()
+            return s
+        }
+        lock.unlock()
         let s = JSSymbol(key)
+        lock.lock()
+        if let existing = registry[key] {
+            lock.unlock()
+            return existing
+        }
         registry[key] = s
+        lock.unlock()
         return s
     }
 
     /// `Symbol.keyFor(symbol)`: the key of a registered symbol.
     public static func keyFor(_ symbol: JSSymbol) -> String? {
-        guard let d = symbol.jsDescription, registry[d] === symbol else { return nil }
-        return d
+        guard let d = symbol.jsDescription else { return nil }
+        lock.lock()
+        let match = registry[d] === symbol
+        lock.unlock()
+        return match ? d : nil
     }
 
     public static let iterator = JSSymbol("Symbol.iterator")
@@ -42,7 +60,11 @@ public final class JSSymbol: Hashable, CustomStringConvertible {
 
     /// The symbol a property key stands for.
     public static func of(key: String) -> JSSymbol? {
-        key.utf8.first == 0 ? byKey[key] : nil
+        guard key.utf8.first == 0 else { return nil }
+        lock.lock()
+        let found = byKey[key]
+        lock.unlock()
+        return found
     }
 
     public func toString() -> String { "Symbol(\(jsDescription ?? ""))" }

@@ -38,6 +38,7 @@ enum JSCollectionKey: Equatable {
     case unique(Int)
 
     private static var uniqueCounter = 0
+    private static let uniqueLock = JSUnfairLock()
 
     @inlinable static func number(_ d: Double) -> JSCollectionKey {
         .number(d.isNaN ? Double.nan.bitPattern : (d == 0 ? 0 : d.bitPattern))
@@ -63,8 +64,11 @@ enum JSCollectionKey: Equatable {
         case let v?:
             if let n = jsNumeric(v) { return number(n) }
             if jsIsObject(v) { return .object(ObjectIdentifier(jsIdentity(v)! as AnyObject)) }
+            uniqueLock.lock()
             uniqueCounter += 1
-            return .unique(uniqueCounter)
+            let id = uniqueCounter
+            uniqueLock.unlock()
+            return .unique(id)
         }
     }
 

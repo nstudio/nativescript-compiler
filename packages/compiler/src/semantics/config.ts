@@ -55,6 +55,10 @@ export interface TranslatorConfig<V extends TranslatorView = TranslatorView, L =
 	readonly lines?: SourceLines | null;
 	/** With `--all-errors`: where what each statement could not translate is collected, so one run reports them all. */
 	readonly errors?: string[] | null;
+	/** Compiled worker scripts (absolute path → app-relative path): `new Worker(…)` starts the registered script. */
+	readonly workerScripts?: ReadonlyMap<string, string> | null;
+	/** Resolves an app path alias (`~/x`, `@/x`) to its absolute file path. */
+	readonly resolveAlias?: ((specifier: string, importer?: string) => string | undefined) | null;
 }
 
 /** What both translators hold of their config, its defaults filled in (`configFields`). */
@@ -97,6 +101,10 @@ export interface ConfigFields<L> {
 	readonly lines: SourceLines | null;
 	/** With `--all-errors`: what each statement could not translate, collected so one run reports them all. */
 	readonly errors: string[] | null;
+	/** Compiled worker scripts (absolute path → app-relative path). */
+	readonly workerScripts: ReadonlyMap<string, string> | null;
+	/** Resolves an app path alias (`~/x`, `@/x`) to its absolute file path. */
+	readonly resolveAlias: ((specifier: string, importer?: string) => string | undefined) | null;
 }
 
 /** The fields both translators hold of `config`; `ledger` where the config gives none. */
@@ -118,6 +126,8 @@ export function configFields<L>(config: TranslatorConfig<never, L>, ledger: Ledg
 		allowUnapplied: config.allowUnapplied ?? false,
 		lines: config.lines ?? null,
 		errors: config.errors ?? null,
+		workerScripts: config.workerScripts ?? null,
+		resolveAlias: config.resolveAlias ?? null,
 	};
 }
 

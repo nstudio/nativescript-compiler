@@ -34,9 +34,15 @@ export const globalCallsMethods = {
 		if (this.library?.identities?.has(callee.text) && e.arguments.length) return this.restArgument(e, e.arguments[e.arguments.length - 1], this.typeOf(e));
 		const mixed = this.patterns.isMixinCall(e);
 		if (mixed) return mixed.map((c) => `__install_${c.name!.text}()`).join('; ');
+		const decl = this.resolve(callee)?.declarations?.[0];
+		// Worker globals (`postMessage`, `close`): checked before `native.call` so Darwin's C `close(_:)` does not shadow `close()`.
+		if ((callee.text === 'postMessage' || callee.text === 'close') && decl && (decl.getSourceFile().fileName === '/__shims__/globals.d.ts' || isLibDeclaration(decl))) {
+			if (callee.text === 'close') return `${RT.jsClose}()`;
+			const args = e.arguments;
+			return `${RT.jsPostMessage}(${args[0] ? this.coerce(args[0], 'Any?') : 'nil'}${args[1] ? `, ${this.coerce(args[1], 'Any?')}` : ''})`;
+		}
 		const native = this.native.call(e);
 		if (native) return native;
-		const decl = this.resolve(callee)?.declarations?.[0];
 		// A core function imported under another name (`timer.setTimeout`, read as `__timer_setTimeout`): by its own.
 		const name = decl && isCoreDeclaration(decl) && ts.isFunctionDeclaration(decl) && decl.name ? decl.name.text : callee.text;
 		const arg = (k: number) => e.arguments[k];

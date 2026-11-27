@@ -1,7 +1,7 @@
 // TypeScript types as Kotlin types: representations, held and optional forms, shapes.
 import ts from 'typescript';
 import { KIT_NAMES_ANDROID } from './library.ts';
-import { BUFFER_TYPES, WEB_DICTIONARIES, isWebClass } from '../semantics/globals.ts';
+import { BUFFER_TYPES, WEB_DICTIONARIES, webClassName } from '../semantics/globals.ts';
 import { SPELLING, spell, destructuringSource, functionTypeParts, kotlinString, nullishType, optionalElementsType, optionalType, presentConst, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { ambientBase, evolvingArrayRead, evolvingArrayType, isAmbientClass, isRegExpProtocol, memberOwner, namesOwnTypeParameter, tokenClassBase, isArguments } from '../semantics/lang.ts';
@@ -158,8 +158,8 @@ export const typesMethods = {
 			return a ? this.type(a, where) : 'Any?';
 		};
 		if (name && sym?.declarations?.length && sym.declarations.every((d) => d.getSourceFile().isDeclarationFile)) {
-			if (isWebClass(this.ledger, name)) return `JS${name}`;
-			if (name === 'DedicatedWorkerGlobalScope' && this.ledger.workerGlobals) return 'JSWorker';
+			const web = webClassName(this.ledger, name);
+			if (web) return web;
 			if (WEB_DICTIONARIES.includes(name) && (sym.declarations[0].getSourceFile().fileName === '/__shims__/globals.d.ts' || isLibDeclaration(sym.declarations[0]))) return 'Any?';
 		}
 		// Library mode: a Java class named as a library type (`java.util.Map`, `java.util.Iterator`) is the Java class.

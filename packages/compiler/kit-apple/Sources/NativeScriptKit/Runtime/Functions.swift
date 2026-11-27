@@ -60,7 +60,11 @@ public final class JSFunctionObject: JSDynamic, CustomStringConvertible {
         if let own { return own }
         let made = JSObject()
         own = made
-        if let identityKey { JSFunctionIdentity.table[identityKey]?.kept = self }
+        if let identityKey {
+            JSFunctionIdentity.lock.lock()
+            JSFunctionIdentity.table[identityKey]?.kept = self
+            JSFunctionIdentity.lock.unlock()
+        }
         return made
     }
 
@@ -221,15 +225,18 @@ enum JSFunctionIdentity {
         }
     }
 
+    static let lock = JSUnfairLock()
     static var table: [JSFunctionKey: Slot] = [:]
 
     static func forget(_ key: JSFunctionKey) {
+        lock.lock()
         if let slot = table[key], slot.alias == nil, slot.box == nil { table[key] = nil }
+        lock.unlock()
     }
 
     /// The function a closure key stands for: an object (a function object, or a class's method), or
-    /// the key itself for a closure made from nothing else.
-    static func root(_ key: JSFunctionKey) -> Root {
+    /// the key itself for a closure made from nothing else. Caller must hold `lock`.
+    static func rootLocked(_ key: JSFunctionKey) -> Root {
         var k = key
         while let slot = table[k] {
             if let alias = slot.alias {
@@ -244,20 +251,38 @@ enum JSFunctionIdentity {
         }
         return .key(k)
     }
+
+    static func root(_ key: JSFunctionKey) -> Root {
+        lock.lock()
+        defer { lock.unlock() }
+        return rootLocked(key)
+    }
 }
 
 /// A typed closure given to script untyped: one function object per function, so that the same
 /// closure boxed twice (or a closure made from a function object) is the same value to `===`.
 public func jsBoxedFunction<Cell>(_ cell: Cell, _ make: () -> JSFunctionObject) -> JSFunctionObject {
     let key = jsFunctionKey(cell)
-    if let box = JSFunctionIdentity.table[key]?.box { return box }
-    let root = JSFunctionIdentity.root(key)
-    if case .object(let o) = root {
-        if let box = o as? JSFunctionObject { return box }
-        if let box = (o as? JSFunctionDeclaration)?.box { return box }
+    JSFunctionIdentity.lock.lock()
+    if let box = JSFunctionIdentity.table[key]?.box {
+        JSFunctionIdentity.lock.unlock()
+        return box
     }
+    let root = JSFunctionIdentity.rootLocked(key)
+    if case .object(let o) = root {
+        if let box = o as? JSFunctionObject {
+            JSFunctionIdentity.lock.unlock()
+            return box
+        }
+        if let box = (o as? JSFunctionDeclaration)?.box {
+            JSFunctionIdentity.lock.unlock()
+            return box
+        }
+    }
+    JSFunctionIdentity.lock.unlock()
     let box = make()
     // Kept under the key the closure stands for (an adapter's, the function it adapts), which the box keeps alive through it.
+    JSFunctionIdentity.lock.lock()
     let at: JSFunctionKey
     switch root {
     case .key(let k): at = k
@@ -265,6 +290,7 @@ public func jsBoxedFunction<Cell>(_ cell: Cell, _ make: () -> JSFunctionObject) 
     }
     box.identityKey = at
     JSFunctionIdentity.table[at, default: .init()].box = box
+    JSFunctionIdentity.lock.unlock()
     return box
 }
 
@@ -274,7 +300,9 @@ public func jsIdentified<Cell>(_ cell: Cell, _ alias: JSFunctionAlias) -> Cell {
     if case .none = alias.target { return cell }
     let key = jsFunctionKey(cell)
     alias.key = key
+    JSFunctionIdentity.lock.lock()
     JSFunctionIdentity.table[key] = .init(alias: alias)
+    JSFunctionIdentity.lock.unlock()
     return cell
 }
 
@@ -291,12 +319,18 @@ public final class JSFunctionDeclaration {
 /// A module's or namespace's function declaration as a value: the first closure read of it, kept for
 /// good as the function itself is, so that every read is the same closure. `id` names the declaration.
 public func jsDeclaredFunction<Cell>(_ id: String, _ cell: Cell) -> Cell {
-    if let found = JSDeclaredFunctions.table[id] as? Cell { return found }
+    JSDeclaredFunctions.lock.lock()
+    if let found = JSDeclaredFunctions.table[id] as? Cell {
+        JSDeclaredFunctions.lock.unlock()
+        return found
+    }
     JSDeclaredFunctions.table[id] = cell
+    JSDeclaredFunctions.lock.unlock()
     return cell
 }
 
 enum JSDeclaredFunctions {
+    static let lock = JSUnfairLock()
     static var table: [String: Any] = [:]
 }
 
@@ -313,7 +347,12 @@ public func jsSameFunction<A, B>(_ a: A?, _ b: B?) -> Bool {
 /// storing it on the receiver or in this cache keeps nothing alive. `make` captures the alias it is given.
 public func jsMethodValue<Receiver: AnyObject, Cell>(_ receiver: Receiver, _ name: String, _ make: (Receiver, JSFunctionAlias) -> Cell) -> Cell {
     let key = JSMethodValues.Key(receiver: ObjectIdentifier(receiver), name: name, cell: ObjectIdentifier(Cell.self))
-    if let entry = JSMethodValues.table[key], entry.receiver === receiver, let cell = entry.cell as? Cell { return cell }
+    JSMethodValues.lock.lock()
+    if let entry = JSMethodValues.table[key], entry.receiver === receiver, let cell = entry.cell as? Cell {
+        JSMethodValues.lock.unlock()
+        return cell
+    }
+    JSMethodValues.lock.unlock()
     let alias = JSFunctionAlias(method: JSMethodValues.identity(type(of: receiver), name))
     let cell = jsIdentified(make(receiver, alias), alias)
     JSMethodValues.store(key, .init(receiver: receiver, cell: cell))
@@ -344,6 +383,7 @@ enum JSMethodValues {
         weak var receiver: AnyObject?
         let cell: Any
     }
+    static let lock = JSUnfairLock()
     static var table: [Key: Entry] = [:]
     private static var pruneAt = 64
 
@@ -357,6 +397,8 @@ enum JSMethodValues {
 
     static func identity(_ type: AnyClass, _ name: String) -> Identity {
         let key = IdentityKey(type: ObjectIdentifier(type), name: name)
+        lock.lock()
+        defer { lock.unlock() }
         if let found = identities[key] { return found }
         let made = Identity()
         identities[key] = made
@@ -364,9 +406,12 @@ enum JSMethodValues {
     }
 
     static func store(_ key: Key, _ entry: Entry) {
+        lock.lock()
         table[key] = entry
-        guard table.count >= pruneAt else { return }
-        table = table.filter { $0.value.receiver != nil }
-        pruneAt = max(64, table.count * 2)
+        if table.count >= pruneAt {
+            table = table.filter { $0.value.receiver != nil }
+            pruneAt = max(64, table.count * 2)
+        }
+        lock.unlock()
     }
 }
