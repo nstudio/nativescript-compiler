@@ -1,4 +1,3 @@
-// @swift ledger:typedFlat
 // `flat(depth)`: as many levels as the depth asks, `Infinity` all of them, 0 a copy; on typed and untyped arrays.
 const mixed = [1, [2, [3, [4]]]];
 console.log(mixed.flat(), mixed.flat(2), mixed.flat(Infinity), mixed.flat(0));

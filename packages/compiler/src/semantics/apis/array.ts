@@ -1,4 +1,5 @@
 // `Array`'s functions, and those of the buffer types.
+import ts from 'typescript';
 import { apiEntry, apiTable, type ApiEntry } from './api.ts';
 
 export type ArrayStatic = 'apply' | 'create' | 'from' | 'isArray' | 'of';
@@ -78,4 +79,13 @@ export const GENERIC_ARRAY_METHODS: ReadonlySet<string> = new Set([...Object.key
 /** `array.<name>(…)`; null for a method arrays do not have. */
 export function arrayMember(name: string): ApiEntry<ArrayMethod> | null {
 	return apiEntry(ARRAY_METHODS, name);
+}
+
+/** How `array.flat(depth?)` lowers for a receiver whose element type is `element`. */
+export function typedFlatPlan(e: ts.CallExpression, element: string, untyped: boolean): { kind: 'default' } | { kind: 'chain'; suffix: string } | { kind: 'depth'; arg: ts.Expression; untyped: boolean } {
+	const arg = e.arguments[0];
+	if (!arg) return { kind: 'default' };
+	if (untyped) return { kind: 'depth', arg, untyped: true };
+	const levels = Math.min(Number(ts.isNumericLiteral(arg) ? arg.text : NaN), /^(JSArray<)*/.exec(element)![0].length / 8);
+	return levels >= 1 ? { kind: 'chain', suffix: '.flat()'.repeat(levels) } : { kind: 'depth', arg, untyped: false };
 }

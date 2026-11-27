@@ -3,7 +3,7 @@ import ts from 'typescript';
 import { MATH, MATH_OF_SPREAD } from './library.ts';
 import { mathFunction } from '../semantics/apis/math.ts';
 import type { Translator } from './translator.ts';
-import { arrayMember } from '../semantics/apis/array.ts';
+import { arrayMember, typedFlatPlan } from '../semantics/apis/array.ts';
 import { collectionMember } from '../semantics/apis/mapset.ts';
 import { argumentRunsConversion, numberMember } from '../semantics/apis/number.ts';
 import { promiseMember } from '../semantics/apis/promise.ts';
@@ -115,8 +115,19 @@ export const builtinMethods = {
 				break;
 			case 'toString':
 				return `${t}.join()`;
-			case 'flat':
-				return e.arguments.length || !/^JSArray<JSArray</.test(this.typeOf(target)) ? `${t}.flatAny(${e.arguments[0] ? this.toNumber(e.arguments[0]) : ''})` : `${t}.flat()`;
+			case 'flat': {
+				const flat = typedFlatPlan(e, element, isUntyped(spelledType(element)));
+				switch (flat.kind) {
+					case 'default':
+						return /^JSArray<JSArray</.test(this.typeOf(target)) ? `${t}.flat()` : `${t}.flatAny()`;
+					case 'chain':
+						return `${t}${flat.suffix}`;
+					case 'depth': {
+						const expr = `${t}.flatAny(${this.toNumber(flat.arg)})`;
+						return flat.untyped ? expr : this.convert(expr, 'JSArray<Any?>', this.typeOf(e));
+					}
+				}
+			}
 			case 'splice': {
 				if (e.arguments.slice(2).some(ts.isSpreadElement))
 					return `${t}.spliceAll(${e.arguments

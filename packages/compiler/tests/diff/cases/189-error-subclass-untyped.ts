@@ -1,4 +1,3 @@
-// @swift ledger:errorSubclassConstructor
 // A field of an Error subclass reads through `any` and `unknown`: `catch (e: any) { e.code }`, `in`, Object.keys, JSON.
 class CodeError extends Error {
   code: number;

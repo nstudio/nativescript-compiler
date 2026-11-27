@@ -81,6 +81,30 @@ export function rootMethod(m: ts.MethodDeclaration, checker: ts.TypeChecker): ts
 	return root;
 }
 
+/** The Error runtime base name (e.g. `'JSError'`) that `cls`'s hierarchy extends through program base classes, or null. */
+export function rootErrorBase(cls: ts.ClassLikeDeclaration, checker: ts.TypeChecker): string | null {
+	let root = cls;
+	for (let b = programBase(root, checker); b; b = programBase(b, checker)) root = b;
+	const h = root.heritageClauses?.find((x) => x.token === ts.SyntaxKind.ExtendsKeyword)?.types[0];
+	return h ? (ERRORS[h.expression.getText()] ?? null) : null;
+}
+
+/** The non-static member or constructor parameter property of `name` declared on `cls` or a program base class. */
+export function ownClassMember(cls: ts.ClassLikeDeclaration, name: string, checker: ts.TypeChecker): ts.ClassElement | ts.ParameterDeclaration | undefined {
+	for (let c: ts.ClassLikeDeclaration | undefined = cls; c; c = programBase(c, checker)) {
+		const m = c.members.find((x) => !isStatic(x) && x.name?.getText() === name);
+		if (m) return m;
+		const param = c.members.find(ts.isConstructorDeclaration)?.parameters.find((p) => ts.isIdentifier(p.name) && p.name.text === name && ts.canHaveModifiers(p) && !!ts.getModifiers(p)?.length);
+		if (param) return param;
+	}
+	return undefined;
+}
+
+/** If `m` is a property or parameter property redeclaring a program base class's field/accessor, that base member; else null. */
+export function redeclaredMember(m: ts.ClassElement | ts.ParameterDeclaration, checker: ts.TypeChecker): ts.PropertyDeclaration | ts.AccessorDeclaration | ts.ParameterDeclaration | null {
+	return ts.isPropertyDeclaration(m) || ts.isParameter(m) ? redeclaredField(m, checker) : null;
+}
+
 /** The field, accessor or parameter property a program base class declares under a field's name, which the field redeclares. */
 export function redeclaredField(m: ts.PropertyDeclaration | ts.ParameterDeclaration, checker: ts.TypeChecker): ts.PropertyDeclaration | ts.AccessorDeclaration | ts.ParameterDeclaration | null {
 	const cls = ts.isParameter(m) ? (ts.isParameterPropertyDeclaration(m, m.parent) ? m.parent.parent : undefined) : m.parent;

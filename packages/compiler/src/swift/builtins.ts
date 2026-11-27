@@ -4,7 +4,7 @@ import ts from 'typescript';
 import { MATH, MATH_OF_SPREAD, isTypedArrayType } from './library.ts';
 import { mathFunction } from '../semantics/apis/math.ts';
 import type { Translator } from './translator.ts';
-import { arrayMember } from '../semantics/apis/array.ts';
+import { arrayMember, typedFlatPlan } from '../semantics/apis/array.ts';
 import { collectionMember } from '../semantics/apis/mapset.ts';
 import { argumentRunsConversion, numberMember } from '../semantics/apis/number.ts';
 import { promiseMember } from '../semantics/apis/promise.ts';
@@ -221,14 +221,12 @@ export const builtinMethods = {
 			case 'values':
 				return `${t}.${name}()`;
 			case 'flat': {
-				const [depth] = e.arguments;
-				if (!depth) return `${t}.flat()`;
-				if (isUntyped(spelledType(el))) return `${t}.flat(${this.coerce(depth, 'Double')})`;
-				// A typed array flattens one level per `flat()`, as deep as its type nests.
-				const levels = Math.min(Number(ts.isNumericLiteral(depth) ? depth.text : NaN), /^(JSArray<)*/.exec(el)![0].length / 8);
-				if (levels >= 1) return t + '.flat()'.repeat(levels);
+				const plan = typedFlatPlan(e, el, isUntyped(spelledType(el)));
+				if (plan.kind === 'default') return `${t}.flat()`;
+				if (plan.kind === 'chain') return t + plan.suffix;
+				if (plan.untyped) return `${t}.flat(${this.coerce(plan.arg, 'Double')})`;
 				if (q) throw this.error(e, 'flat with a depth on an optional array');
-				return this.convert(`JSArray<Any?>(${t}.jsAnyElements).flat(${this.coerce(depth, 'Double')})`, 'JSArray<Any?>', this.typeOf(e));
+				return this.convert(`JSArray<Any?>(${t}.jsAnyElements).flat(${this.coerce(plan.arg, 'Double')})`, 'JSArray<Any?>', this.typeOf(e));
 			}
 			case 'toLocaleString':
 				if (!e.arguments.length) return `${t}.toLocaleString()`;

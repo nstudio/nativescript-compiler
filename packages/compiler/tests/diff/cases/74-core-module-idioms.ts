@@ -1,4 +1,3 @@
-// @swift ledger:accessorNameClash
 // Idioms core's xml, abortcontroller and split-view modules use.
 const codes = { amp: 38, lt: 60, gt: 62 };
 const seen: string[] = [];

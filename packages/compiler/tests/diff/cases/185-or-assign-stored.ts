@@ -1,4 +1,3 @@
-// @swift ledger:orAssignTyped
 // `const list = map[k] || (map[k] = [])` is the stored array, not a copy: a push through it is seen in the map.
 interface Entry {
   n: number;

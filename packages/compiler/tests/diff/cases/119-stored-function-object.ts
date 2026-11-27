@@ -1,4 +1,3 @@
-// @swift ledger:functionObjects
 // Stored callbacks read as function objects: their `length` tells a test taking `done` from one that does not,
 // and `apply` and `call` give them a receiver.
 interface Entry {

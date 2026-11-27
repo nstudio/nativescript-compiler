@@ -1,8 +1,7 @@
-// @swift ledger:unmetInterfaceMembers
 // A subclass implementing its own options interface, with a field narrower than the untyped one it overrides: the
 // group (both interfaces' optional members, the base's untyped field, the override) is held untyped, and a function
-// field narrower than its optional member is held optional. Kotlin: a class that cannot meet the interface's inherited
-// members (Picker) still implements it.
+// field narrower than its optional member is held optional; a class that cannot meet the interface's inherited
+// members (Picker) does not implement it natively.
 interface DialogOptions {
   height?: any;
   title?: string;

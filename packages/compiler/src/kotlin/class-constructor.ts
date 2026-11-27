@@ -7,7 +7,7 @@ import type { ClassParts } from './class-declaration.ts';
 import { notesNull } from '../semantics/shapes.ts';
 import { isConstant } from '../semantics/lang.ts';
 import { boundNames } from '../semantics/ast.ts';
-import { constructorOf } from '../semantics/classes.ts';
+import { constructorOf, rootErrorBase } from '../semantics/classes.ts';
 
 export const classConstructorMethods = {
 	constructorMembersCode(this: Translator, k: ClassParts): void {
@@ -22,6 +22,7 @@ export const classConstructorMethods = {
 			if (baseCtor) lines.push(`    constructor(${this.params(baseCtor, false)}) : super(${this.readsArguments(baseCtor) ? '__arguments' : baseCtor.parameters.map((p) => ident((p.name as ts.Identifier).text)).join(', ')})${level.length ? ' {' : ''}`, ...(level.length ? [...level, '    }'] : []));
 			// `new HttpError(message, { cause })` of a class that declares no constructor: Error's.
 			else if (isError && base !== 'JSAggregateError') lines.push(`    constructor(message: Any? = null, options: Any? = null) : super(if (message == null) "" else ${RT.jsToString}(message), ${RT.jsGetIfPresent}(options, "cause"))`);
+			else if (appBase && (rootErrorBase(appBase, this.checker) ?? 'JSAggregateError') !== 'JSAggregateError') lines.push(`    constructor(message: Any? = null, options: Any? = null) : super(message, options)${level.length ? ' {' : ''}`, ...(level.length ? [...level, '    }'] : []));
 			else if (k.collection) {
 				lines.push(`    constructor() : super()${level.length ? ' {' : ''}`, ...(level.length ? [...level, '    }'] : []));
 				const mapArgs = /^JSMap<(.*)>$/.exec(k.collection)?.[1];

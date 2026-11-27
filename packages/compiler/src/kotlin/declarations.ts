@@ -136,7 +136,7 @@ export const declarationsMethods = {
 			}
 			// A literal first value nothing reads (`let fps = 0` set again before any read) is left out.
 			const deadLiteral = !!d.initializer && !constant && isConstant(d.initializer) && !this.pluginFiles.has(d.getSourceFile().fileName);
-			const set = (!d.initializer || deadLiteral) && !lowered ? this.assignedBeforeUse(d) : null;
+			const set = (!d.initializer || deadLiteral) && !lowered && !this.asyncCtx ? this.assignedBeforeUse(d) : null;
 			if (set) return `${i}${set === 'once' ? 'val' : 'var'} ${name}: ${t}`;
 			// Lenient code may read it before any assignment (`let found: boolean; … typeof found`): undefined until assigned.
 			if (!d.initializer && (this.lenient || this.lenientApp) && !lowered && ['String', 'Double', 'Boolean'].includes(t) && !this.assignedBeforeUse(d, true)) {

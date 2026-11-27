@@ -171,8 +171,11 @@ export const namesMethods = {
 			// A function taking `this` as a value (a property descriptor's `set`): the receiver is the caller's.
 			if (self || this.implicitThis(fnDecl)) {
 				const thisType = self ? this.type(this.checker.getTypeAtLocation(self.name), self) : 'Any?';
-				const args = this.readsArguments(fnDecl) ? ['JSArray(__a.toMutableList())'] : fnDecl.parameters.filter((q) => !isThisParameter(q)).map((q, k) => (q.dotDotDotToken ? `JSArray(__a.drop(${k}).map { ${this.fromAnyCode('it', this.typeOf(q.name).replace(/^JSArray<(.*)>$/, '$1'), true)} }.toMutableList())` : this.fromAnyCode(this.marks.pureCode(`__a.getOrNull(${k})`), this.paramType(q), true)));
-				return `JSMethod ${lambda(['__self', '__a'], `${ref}(${[isUntyped(spelledType(thisType)) ? '__self' : this.fromAnyCode('__self', thisType, true), ...args].join(', ')})`)}`;
+				const params = fnDecl.parameters.filter((q) => !isThisParameter(q));
+				const arity = params.findIndex((q) => !!q.questionToken || !!q.initializer || !!q.dotDotDotToken);
+				const len = arity < 0 ? params.length : arity;
+				const args = this.readsArguments(fnDecl) ? ['JSArray(__a.toMutableList())'] : params.map((q, k) => (q.dotDotDotToken ? `JSArray(__a.drop(${k}).map { ${this.fromAnyCode('it', this.typeOf(q.name).replace(/^JSArray<(.*)>$/, '$1'), true)} }.toMutableList())` : this.fromAnyCode(this.marks.pureCode(`__a.getOrNull(${k})`), this.paramType(q), true)));
+				return `JSMethod(${len}) ${lambda(['__self', '__a'], `${ref}(${[isUntyped(spelledType(thisType)) ? '__self' : this.fromAnyCode('__self', thisType, true), ...args].join(', ')})`)}`;
 			}
 			// Library mode: a function of an optional string, number or boolean held as a value (a shorthand's converter) may be given
 			// anything (core probes converters with `unsetValue`): another kind of value is none of them, as `typeof` finds it.

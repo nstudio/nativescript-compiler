@@ -110,8 +110,9 @@ export const expressionsMethods = {
 			// An object literal is held as the script object it is made as (`a = b = { value: 10, unit: 'px' }`).
 			let last: ts.Expression = e.right;
 			while (ts.isBinaryExpression(last) && last.operatorToken.kind === ts.SyntaxKind.EqualsToken) last = last.right;
+			const target = (this.declaredTypeOf(e.left) ?? this.typeOf(e.left)).replace(/\?$/, '');
 			// A literal stored into a typed target is made as that target's shape.
-			const shaped = !this.library && ts.isObjectLiteralExpression(last) && ts.isIdentifier(e.left) && !isUntyped(spelledType(this.declaredTypeOf(e.left) ?? 'Any?')) ? this.declaredTypeOf(e.left)! : null;
+			const shaped = !this.library && ts.isObjectLiteralExpression(last) && !isUntyped(spelledType(target)) && target !== 'Unit' && !isKit(spelledType(target), 'JSObject') ? (ts.isIdentifier(e.left) ? (this.declaredTypeOf(e.left) ?? target) : target) : null;
 			let t = shaped ?? (this.typeOf(e.right) === 'Unit' || (!this.library && ts.isObjectLiteralExpression(last)) ? 'Any?' : this.typeOf(e.right));
 			// `a = b = null`: null of the target's type.
 			const unset = e.right.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(e.right) && e.right.text === 'undefined');
@@ -129,7 +130,6 @@ export const expressionsMethods = {
 			// Library mode: a target declared nullable (`let match: RegExpExecArray` set from `exec`) holds what may be missing.
 			if (this.library && this.isObjectType(t) && this.declaredTypeOf(e.left) === optionalType(t) && this.nullTolerant(e)) t = optionalType(t);
 			// `(map[k] = [])`: TypeScript types the empty literal `never[]`; it is made as the target's array, the one stored.
-			const target = (this.declaredTypeOf(e.left) ?? this.typeOf(e.left)).replace(/\?$/, '');
 			if (ts.isArrayLiteralExpression(last) && !last.elements.length && t === 'JSArray<Any?>' && isKit(spelledType(target), 'JSArray')) t = target;
 			const v = this.fresh('__assigned');
 			const value = this.stored(e.right, e.left, t);

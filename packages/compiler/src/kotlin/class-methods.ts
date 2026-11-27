@@ -75,8 +75,14 @@ export const classMethodsMethods = {
 		const n = m.name.getText();
 		if (plugin && !this.library && !inherited.has(n) && !(kitRoot && this.core?.kitMember(kitRoot, n)) && !this.facts.isNamed(n)) return;
 		if (isStatic(m)) {
+			const clash = cls.members.some((x) => {
+				if (!isStatic(x) || !(ts.isPropertyDeclaration(x) || ts.isAccessor(x)) || !x.name || !ts.isIdentifier(x.name)) return false;
+				const p = x.name.text;
+				const cap = p[0].toUpperCase() + p.slice(1);
+				return n === `get${cap}` || n === `set${cap}` || (/^is[A-Z]/.test(p) && n === p);
+			});
 			this.indent = '        ';
-			k.statics.push('        ' + this.func(m, ident(n)));
+			k.statics.push('        ' + this.func(m, ident(n), clash ? `@JvmName("__fn_${n}") ` : ''));
 			this.indent = '    ';
 			return;
 		}

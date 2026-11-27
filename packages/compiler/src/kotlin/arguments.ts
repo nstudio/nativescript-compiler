@@ -235,7 +235,8 @@ export const argumentsMethods = {
 		if (named?.length && named.every((d) => isLibDeclaration(d))) return null;
 		if (literal && (this.readsArguments(literal) || literal.parameters.some((q) => q.dotDotDotToken || isThisParameter(q) || !ts.isIdentifier(q.name)))) return null;
 		const sigs = this.checker.getTypeAtLocation(e).getNonNullableType().getCallSignatures();
-		if (sigs.length !== 1 || sigs[0].typeParameters?.length || sigs[0].getDeclaration()?.parameters.some((q) => q.dotDotDotToken)) return null;
+		const decl = sigs.length === 1 ? sigs[0].getDeclaration() : undefined;
+		if (sigs.length !== 1 || sigs[0].typeParameters?.length || decl?.parameters.some((q) => q.dotDotDotToken || isThisParameter(q)) || (decl && ts.isFunctionDeclaration(decl) && this.implicitThis(decl))) return null;
 		const source = this.typeOf(e);
 		const parts = this.scriptReadParts(source);
 		return parts ? { literal, source, parts } : null;

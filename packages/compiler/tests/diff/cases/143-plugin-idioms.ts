@@ -1,4 +1,3 @@
-// @swift ledger:genericAsyncResult
 // Idioms of plugins' code: an interface and a class of one name in two modules, `p['toString']()` on an
 // untyped value, `Awaited<T>` of a generic async function, and a catch handler that rejects again.
 import { Database as IDatabase, describe } from './helpers/database.ts';

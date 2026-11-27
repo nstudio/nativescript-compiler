@@ -9,7 +9,7 @@ import { implementedInterfaces } from '../semantics/lang.ts';
 import { isCoreDeclaration } from '../program/core-facts.ts';
 import { isStatic } from '../semantics/throws.ts';
 import { isUntyped, spelledType } from '../semantics/types.ts';
-import { COLLECTION_OVERRIDE_METHODS, collectionBaseInfo } from '../semantics/classes.ts';
+import { COLLECTION_OVERRIDE_METHODS, collectionBaseInfo, ownClassMember, redeclaredMember } from '../semantics/classes.ts';
 
 export const componentMethods = {
 	/** A static field the module's statements initialize (`classDeclCode`'s statics): nullable until they run. */
@@ -360,19 +360,41 @@ export const componentMethods = {
 	 */
 	protocolWitnesses(this: Translator, cls: ts.ClassLikeDeclaration, decl: ts.InterfaceDeclaration | undefined, name: string, out: string[], notOverrides: Set<string>): boolean {
 		if (!decl || !this.protocols.has(name)) return true;
-		const own = (name: string) => cls.members.find((x) => x.name?.getText() === name);
 		const added: string[] = [];
 		const skipped: string[] = [];
-		for (const req of decl.members) {
-			const name = req.name?.getText();
-			const m = name ? own(name) : undefined;
+		for (const req of this.withInherited(decl, decl.members)) {
+			const memberName = req.name?.getText();
+			const m = memberName ? ownClassMember(cls, memberName, this.checker) : undefined;
 			// A writable field the interface erases to any value, which a field typed by the class's type parameter can't override.
-			if (name && ts.isPropertySignature(req) && !hasModifier(req, ts.SyntaxKind.ReadonlyKeyword) && this.isAny(req)) {
-				const field = m ?? cls.members.find(ts.isConstructorDeclaration)?.parameters.find((p) => ts.isIdentifier(p.name) && p.name.text === name && ts.getModifiers(p)?.length);
-				const t = field && (ts.isPropertyDeclaration(field) || ts.isParameter(field) || ts.isGetAccessorDeclaration(field) || ts.isSetAccessorDeclaration(field)) ? this.checker.getTypeAtLocation(field.name) : undefined;
-				if (!this.ledger.genericsReified && t && t.flags & ts.TypeFlags.TypeParameter && t.symbol?.declarations?.[0]?.parent === cls) throw this.limit(field!, 'generic-field-erased', "a field typed by a generic class's type parameter, met as a generic interface's writable field");
+			if (memberName && ts.isPropertySignature(req) && !hasModifier(req, ts.SyntaxKind.ReadonlyKeyword) && this.isAny(req)) {
+				const t = m && (ts.isPropertyDeclaration(m) || ts.isParameter(m) || ts.isGetAccessorDeclaration(m) || ts.isSetAccessorDeclaration(m)) ? this.checker.getTypeAtLocation(m.name) : undefined;
+				if (!this.ledger.genericsReified && t && t.flags & ts.TypeFlags.TypeParameter && t.symbol?.declarations?.[0]?.parent === cls) throw this.limit(m!, 'generic-field-erased', "a field typed by a generic class's type parameter, met as a generic interface's writable field");
 			}
-			if (!name || !m || !ts.isMethodSignature(req)) continue;
+			if (memberName && m && ts.isPropertySignature(req)) {
+				if (!this.library) {
+					if (ts.isMethodDeclaration(m)) return false;
+					const expected = req.questionToken ? optionalType(this.typeOf(req)) : this.typeOf(req);
+					const baseField = redeclaredMember(m, this.checker);
+					const actual = ts.isGetAccessorDeclaration(m)
+						? this.returnTypeOf(m)
+						: baseField
+							? this.overUntypedField(m)
+								? 'Any?'
+								: this.typeOf(baseField.name)
+							: ts.isPropertyDeclaration(m)
+								? this.states.lenientNullField(m)
+									? optionalType(this.typeOf(m.name))
+									: this.typeOf(m.name)
+								: ts.isParameter(m)
+									? this.states.mayBeNull(m)
+										? optionalType(this.typeOf(m.name))
+										: this.typeOf(m.name)
+									: null;
+					if (actual !== null && actual !== expected) return false;
+				}
+				continue;
+			}
+			if (!memberName || !m || !ts.isMethodSignature(req)) continue;
 			if (!ts.isMethodDeclaration(m)) return false;
 			const want = req.parameters.map((p) => this.requirementParamType(p));
 			const have = m.parameters.map((p) => this.paramType(p));
@@ -391,9 +413,9 @@ export const componentMethods = {
 				this.erasedSignatureMethods.add(m);
 			}
 			const args = req.parameters.map((p, k) => (ts.isIdentifier(p.name) ? ident(p.name.text) : `__p${k}`));
-			const call = `${ident(name)}(${args.map((a, k) => (have[k] === want[k] ? a : erased(have[k], k) ? `${RT.jsUnchecked}<${have[k]}>(${a})` : `${a} as Any?`)).join(', ')})`;
-			added.push(`    override fun ${ident(name)}(${want.map((t, k) => `${args[k]}: ${t}`).join(', ')})${ret === 'Unit' ? '' : `: ${ret}`} { ${ret === 'Unit' ? call : ownRet === 'Unit' ? `${call}; return null` : `return ${call}`} }`);
-			skipped.push(name);
+			const call = `${ident(memberName)}(${args.map((a, k) => (have[k] === want[k] ? a : erased(have[k], k) ? `${RT.jsUnchecked}<${have[k]}>(${a})` : `${a} as Any?`)).join(', ')})`;
+			added.push(`    override fun ${ident(memberName)}(${want.map((t, k) => `${args[k]}: ${t}`).join(', ')})${ret === 'Unit' ? '' : `: ${ret}`} { ${ret === 'Unit' ? call : ownRet === 'Unit' ? `${call}; return null` : `return ${call}`} }`);
+			skipped.push(memberName);
 		}
 		out.push(...added);
 		for (const n of skipped) notOverrides.add(n);

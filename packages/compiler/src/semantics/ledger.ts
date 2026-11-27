@@ -30,11 +30,6 @@ export interface Ledger {
 	 * takes one (which Swift does not compile); without it, the reverse (`new` of the function is no constructor call).
 	 */
 	readonly implicitThisUnconstructed: boolean;
-	/**
-	 * The kit runs worker scripts: `Worker`, `MessageEvent`, `ErrorEvent` and `URL` are web classes it implements. An
-	 * iOS build refuses them (platform-globals.ts).
-	 */
-	readonly workerGlobals: boolean;
 	/** The native SDK the platform binds: a program calling one platform's classes, or reading its globals, builds only for it. */
 	readonly nativeSdk: 'apple' | 'android';
 	/**
@@ -56,28 +51,14 @@ export interface Ledger {
 	readonly subclassFieldsBeforeBase: boolean;
 	/** Typed arrays whole: `BigUint64Array`, callbacks taking (value, index, array), constructors as values, BigInt elements written; Kotlin does not yet. */
 	readonly typedArrays: boolean;
-	/** `flat(depth)` of a typed nested array gives the flattened element type; Kotlin does not yet. */
-	readonly typedFlat: boolean;
-	/** A stored function read as a function object: its `length`, and `apply`/`call` giving it a receiver; Kotlin does not yet. */
-	readonly functionObjects: boolean;
 	/** A method value is one function per receiver, and a function adapted to another function type is still the function it adapts (`===`); Kotlin does not yet. */
 	readonly functionIdentity: boolean;
 	/** Type parameters with no native statement: one any value binds, one bound to a class and a shape, read by name; Kotlin does not yet. */
 	readonly unboundGenerics: boolean;
 	/** JavaScript's integer conversions where an index, a length, digits or a radix is taken, with their RangeErrors; Kotlin does not yet. */
 	readonly indexConversions: boolean;
-	/** A static field and a static method whose JVM accessor names are one (`instance` and `getInstance()`) both declared. */
-	readonly accessorNameClash: boolean;
-	/** The result of a generic async function returning `Awaited<T>`; Kotlin does not yet. */
-	readonly genericAsyncResult: boolean;
-	/** `map[k] || (map[k] = v)` held as a typed slot of the map's value type; Kotlin does not yet. */
-	readonly orAssignTyped: boolean;
-	/** An Error subclass without its own constructor made with a message; Kotlin does not yet. */
-	readonly errorSubclassConstructor: boolean;
 	/** An Error subclass's fields listed (Object.keys, JSON) in declaration order, before what the constructor adds; Swift does not yet. */
 	readonly errorSubclassKeyOrder: boolean;
-	/** A class implementing an interface whose inherited members it cannot meet natively still implements it; Kotlin does not yet. */
-	readonly unmetInterfaceMembers: boolean;
 	/**
 	 * A plugin compiled from source is strict code where its files are written strict (`writtenStrict`; the others are
 	 * the config's `lenientFiles`). Without it every plugin file is lenient code. Kotlin holds every plugin declaration
@@ -242,23 +223,15 @@ export const LEDGER_KINDS: { readonly [K in keyof Ledger]: LedgerKind } = {
 	looseReads: 'gap',
 	checkedParameters: 'platform',
 	implicitThisUnconstructed: 'gap',
-	workerGlobals: 'gap',
 	nativeSdk: 'platform',
 	freesOnLastReference: 'platform',
 	failedUnwrapThrows: 'gap',
 	subclassFieldsBeforeBase: 'platform',
 	typedArrays: 'gap',
-	typedFlat: 'gap',
-	functionObjects: 'gap',
 	functionIdentity: 'gap',
 	unboundGenerics: 'gap',
 	indexConversions: 'gap',
-	accessorNameClash: 'gap',
-	genericAsyncResult: 'gap',
-	orAssignTyped: 'gap',
-	errorSubclassConstructor: 'gap',
 	errorSubclassKeyOrder: 'gap',
-	unmetInterfaceMembers: 'gap',
 	pluginsWrittenStrict: 'gap',
 	functionElementsUntyped: 'platform',
 	errorClassObjects: 'platform',
@@ -289,23 +262,15 @@ export const SWIFT_LEDGER: Ledger = {
 	looseReads: true,
 	checkedParameters: false,
 	implicitThisUnconstructed: true,
-	workerGlobals: false,
 	nativeSdk: 'apple',
 	freesOnLastReference: true,
 	failedUnwrapThrows: false,
 	subclassFieldsBeforeBase: true,
 	typedArrays: true,
-	typedFlat: true,
-	functionObjects: true,
 	functionIdentity: true,
 	unboundGenerics: true,
 	indexConversions: true,
-	accessorNameClash: true,
-	genericAsyncResult: true,
-	orAssignTyped: true,
-	errorSubclassConstructor: true,
 	errorSubclassKeyOrder: false,
-	unmetInterfaceMembers: true,
 	pluginsWrittenStrict: true,
 	functionElementsUntyped: true,
 	errorClassObjects: false,
@@ -336,23 +301,15 @@ export const KOTLIN_LEDGER: Ledger = {
 	looseReads: false,
 	checkedParameters: true,
 	implicitThisUnconstructed: false,
-	workerGlobals: true,
 	nativeSdk: 'android',
 	freesOnLastReference: false,
 	failedUnwrapThrows: true,
 	subclassFieldsBeforeBase: false,
 	typedArrays: false,
-	typedFlat: false,
-	functionObjects: false,
 	functionIdentity: false,
 	unboundGenerics: false,
 	indexConversions: false,
-	accessorNameClash: false,
-	genericAsyncResult: false,
-	orAssignTyped: false,
-	errorSubclassConstructor: false,
 	errorSubclassKeyOrder: true,
-	unmetInterfaceMembers: false,
 	pluginsWrittenStrict: false,
 	functionElementsUntyped: false,
 	errorClassObjects: true,

@@ -269,7 +269,12 @@ export const untypedValuesMethods = {
 		const kept = this.pluginFiles.has(decl.getSourceFile().fileName) ? [] : (decl.typeParameters ?? []).filter((p) => !this.erasesTypeParameter(p));
 		const generic = kept.length ? `<${kept.map((p) => (!this.library && this.classConstraint(p) ? this.type(this.checker.getTypeFromTypeNode(p.constraint!), p).replace(/\?$/, '') : 'Any?')).join(', ')}>` : '';
 		// One reading `arguments` takes them all (`__arguments`).
-		const args = this.readsArguments(decl) ? ['JSArray<Any?>(__a.toMutableList())'] : decl.parameters.map((q, k) => (q.dotDotDotToken ? `JSArray(__a.drop(${k}).map { ${generic ? `${RT.jsUnchecked}(it)` : this.fromAnyCode('it', this.typeOf(q.name).replace(/^JSArray<(.*)>$/, '$1'), true)} }.toMutableList())` : generic ? `${RT.jsUnchecked}(__a.getOrNull(${k}))` : this.fromAnyCode(this.marks.pureCode(`__a.getOrNull(${k})`), this.paramType(q), true)));
+		const argOf = (q: ts.ParameterDeclaration, k: number) => {
+			if (q.dotDotDotToken) return `JSArray(__a.drop(${k}).map { ${generic ? `${RT.jsUnchecked}(it)` : this.fromAnyCode('it', this.typeOf(q.name).replace(/^JSArray<(.*)>$/, '$1'), true)} }.toMutableList())`;
+			const raw = generic ? `${RT.jsUnchecked}(__a.getOrNull(${k}))` : this.fromAnyCode(this.marks.pureCode(`__a.getOrNull(${k})`), this.paramType(q), true);
+			return this.constantDefault(q) ? `if (__a.getOrNull(${k}) == null) ${this.stored(q.initializer!, q, this.paramType(q))} else ${raw}` : raw;
+		};
+		const args = this.readsArguments(decl) ? ['JSArray<Any?>(__a.toMutableList())'] : decl.parameters.map(argOf);
 		const arity = decl.parameters.findIndex((q) => !!q.questionToken || !!q.initializer || !!q.dotDotDotToken);
 		if (this.implicitThis(decl)) return `JSMethod(${arity < 0 ? decl.parameters.length : arity}) ${lambda(['__self', '__a'], `${name}${generic}(${['__self', ...args].join(', ')})${this.returnTypeOf(decl) === 'Unit' ? '; null' : ''}`)}`;
 		// A reference (`(::f)`) takes no type arguments; the function's name does.

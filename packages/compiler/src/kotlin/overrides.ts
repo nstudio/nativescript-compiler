@@ -350,7 +350,10 @@ export const overridesMethods = {
 		if ([...(this.structural.get(decl) ?? [])].some((d) => d.name.text === name && this.protocolWitnesses(decl, d, name, [], new Set()))) return true;
 		for (const h of decl.heritageClauses ?? []) {
 			for (const x of h.types) {
-				if (x.expression.getText() === name) return true;
+				if (h.token === ts.SyntaxKind.ImplementsKeyword && this.implementedName(x) === name) {
+					const iface = this.checker.getTypeAtLocation(x).getSymbol()?.declarations?.find(ts.isInterfaceDeclaration);
+					if (this.protocolWitnesses(decl, iface, name, [], new Set())) return true;
+				}
 				if (h.token === ts.SyntaxKind.ExtendsKeyword && this.declaresInterface(this.checker.getTypeAtLocation(x), name)) return true;
 			}
 		}

@@ -129,20 +129,12 @@ cases that show it.
 |---|---|---|---|
 | `looseReads` | yes | no | `ValueStates.looseDeclaration` is asked of reads and declarations both, and answers for the declaration they name; without it, a declaration answers for itself and a read of a widened field (`widenedFieldRead`) for its field. |
 | `implicitThisUnconstructed` | yes | no | A function declaration reading a `this` it does not declare takes its receiver as its first parameter (`implicitThis`). |
-| `workerGlobals` | no | yes | The kit runs worker scripts: `Worker`, `MessageEvent`, `ErrorEvent` and `URL` are web classes it implements. |
 | `failedUnwrapThrows` | no | yes | A read of an empty value the types say present (a narrowing a closure outlived, a module `let` read before its declaration runs) throws what the program catches as JavaScript's TypeError or ReferenceError: Kotlin's `!!` and lateinit reads throw. |
 | `typedArrays` | yes | no | Typed arrays whole: `BigUint64Array`, callbacks taking (value, index, array), constructors as values, BigInt elements written; Kotlin does not yet. |
-| `typedFlat` | yes | no | `flat(depth)` of a typed nested array gives the flattened element type; Kotlin does not yet. |
-| `functionObjects` | yes | no | A stored function read as a function object: its `length`, and `apply`/`call` giving it a receiver; Kotlin does not yet. |
 | `functionIdentity` | yes | no | A method value is one function per receiver, and a function adapted to another function type is still the function it adapts (`===`); Kotlin does not yet. |
 | `unboundGenerics` | yes | no | Type parameters with no native statement: one any value binds, one bound to a class and a shape, read by name; Kotlin does not yet. |
 | `indexConversions` | yes | no | JavaScript's integer conversions where an index, a length, digits or a radix is taken, with their RangeErrors; Kotlin does not yet. |
-| `accessorNameClash` | yes | no | A static field and a static method whose JVM accessor names are one (`instance` and `getInstance()`) both declared. |
-| `genericAsyncResult` | yes | no | The result of a generic async function returning `Awaited<T>`; Kotlin does not yet. |
-| `orAssignTyped` | yes | no | `map[k] \|\| (map[k] = v)` held as a typed slot of the map's value type; Kotlin does not yet. |
-| `errorSubclassConstructor` | yes | no | An Error subclass without its own constructor made with a message; Kotlin does not yet. |
 | `errorSubclassKeyOrder` | no | yes | An Error subclass's fields listed (Object.keys, JSON) in declaration order, before what the constructor adds; Swift does not yet. |
-| `unmetInterfaceMembers` | yes | no | A class implementing an interface whose inherited members it cannot meet natively still implements it; Kotlin does not yet. |
 | `pluginsWrittenStrict` | yes | no | A plugin compiled from source is strict code where its files are written strict (`writtenStrict`; the others are the config's `lenientFiles`). |
 | `undefinedResultsWidened` | yes | no | A function that may give undefined has an optional result (Swift's `mayReturnUndefined`, which reads no narrowing: a lenient function's `if (cached) return cached` of a record's entry counts). |
 | `nullabilityBeforeEmission` | yes | no | A declaration's empty state is decided before any read of it (lenient code's parameter property typed with a `null` TypeScript drops is optional). |

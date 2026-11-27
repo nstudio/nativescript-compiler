@@ -7,7 +7,7 @@ import { UNKEYED } from '../semantics/shapes.ts';
 import { hasModifier, isLibDeclaration } from '../semantics/ast.ts';
 import { isCoreDeclaration } from '../program/core-facts.ts';
 import { isNamed, isUntyped, spelledType } from '../semantics/types.ts';
-import { programBase } from '../semantics/classes.ts';
+import { ownClassMember, programBase, redeclaredMember } from '../semantics/classes.ts';
 
 export const protocolsMethods = {
 	/** Whether a class's source base class (or one above it) implements an interface. */
@@ -97,15 +97,6 @@ export const protocolsMethods = {
 	protocolWitnesses(this: Translator, cls: ts.ClassLikeDeclaration, name: string, type: ts.Type, out: string[]): boolean {
 		const decl = type.getSymbol()?.declarations?.find(ts.isInterfaceDeclaration);
 		if (!decl || !this.protocols.has(name)) return true;
-		const own = (name: string) => {
-			for (let c: ts.ClassLikeDeclaration | undefined = cls; c; c = this.sourceBase(c)) {
-				const m = c.members.find((x) => x.name?.getText() === name);
-				if (m) return m;
-				const param = c.members.find(ts.isConstructorDeclaration)?.parameters.find((p) => ts.isIdentifier(p.name) && p.name.text === name && ts.canHaveModifiers(p) && !!ts.getModifiers(p)?.length);
-				if (param) return param;
-			}
-			return undefined;
-		};
 		const added: string[] = [];
 		// The protocol refines its interface's bases: their members are required too.
 		const inherited = type
@@ -116,12 +107,12 @@ export const protocolsMethods = {
 			const name = req.name?.getText();
 			if (!name) continue;
 			if (this.fieldByOwnParameter(cls, req)) return false;
-			const m = own(name);
+			const m = ownClassMember(cls, name, this.checker);
 			// A parameter property or an inherited member the class does not declare: Swift checks it.
 			if (!m) continue;
 			if (ts.isPropertySignature(req)) {
 				const want = req.questionToken ? optionalType(this.typeOf(req)) : this.typeOf(req);
-				const root = ts.isPropertyDeclaration(m) || ts.isParameter(m) ? this.redeclaredField(m) : null;
+				const root = redeclaredMember(m, this.checker);
 				const fieldType = ts.isPropertyDeclaration(m) ? this.typeOf(m.name) : ts.isParameter(m) ? (!!m.questionToken && !isOptional(this.typeOf(m.name)) && !isUntyped(spelledType(this.typeOf(m.name))) ? optionalType(this.typeOf(m.name)) : this.typeOf(m.name)) : null;
 				const have = ts.isGetAccessorDeclaration(m) ? (this.narrowedFrom(m) ?? this.returnTypeOf(m)) : root ? this.redeclaredType(root) : fieldType;
 				if (have !== want) return false;
