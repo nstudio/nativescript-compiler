@@ -37,7 +37,7 @@ const REPO_URL = `${manifest.repository.url.replace(/\.git$/, '')}/blob/main/${m
 const shipped = (path: string) => manifest.files.some((f) => (f.endsWith('/') ? path.startsWith(f) : path === f));
 
 /** Paths a build writes, which a checkout does not have until it runs. */
-const OUTPUT = /^(?:dist\/|platforms\/|kit-apple\/Sources\/NativeScriptKit\/Core|kit-android\/generated|generated\/)/;
+const OUTPUT = /^(?:dist\/|platforms\/|kit-apple\/Sources\/NativeScriptKit\/Core|kit-apple\/Overlays\/|kit-android\/generated|kit-android\/overlays\/|generated\/)/;
 
 const files = (...pattern: string[]) => execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', ...pattern], { cwd: pkg, encoding: 'utf8' });
 const docs = files('*.md')
