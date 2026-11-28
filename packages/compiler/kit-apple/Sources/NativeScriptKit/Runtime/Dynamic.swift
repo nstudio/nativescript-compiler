@@ -37,6 +37,8 @@ public func jsDelete(_ object: Any?, _ key: String) throws -> Bool {
 struct JSPropertySlot {
     var get: ((Any?) throws -> Any?)?
     var set: ((Any?, Any?) throws -> Void)?
+    var rawGet: Any?
+    var rawSet: Any?
     var isAccessor = false
     var enumerable = true
     var writable = true
@@ -50,6 +52,8 @@ public struct JSPropertyDescriptor {
     public var value: Any??
     public var get: ((Any?) throws -> Any?)?
     public var set: ((Any?, Any?) throws -> Void)?
+    var rawGet: Any?
+    var rawSet: Any?
     public var enumerable: Bool?
     public var writable: Bool?
     public var configurable: Bool?
@@ -68,8 +72,8 @@ public struct JSPropertyDescriptor {
         guard let o = jsFlat(object) as? JSDynamic else { throw JSException(JSTypeError("Property description must be an object: \(jsToString(object))")) }
         let has = { (k: String) in jsHasKey(o, k) }
         if has("value") { value = .some(o[jsKey: "value"]) }
-        if has("get"), let g = jsFlat(o[jsKey: "get"]) { let f = jsReceiving(g); get = { this in try f(this, []) } }
-        if has("set"), let s = jsFlat(o[jsKey: "set"]) { let f = jsReceiving(s); set = { this, v in _ = try f(this, [v]) } }
+        if has("get"), let g = jsFlat(o[jsKey: "get"]) { rawGet = g; let f = jsReceiving(g); get = { this in try f(this, []) } }
+        if has("set"), let s = jsFlat(o[jsKey: "set"]) { rawSet = s; let f = jsReceiving(s); set = { this, v in _ = try f(this, [v]) } }
         if has("enumerable") { enumerable = jsIsTruthy(o[jsKey: "enumerable"]) }
         if has("writable") { writable = jsIsTruthy(o[jsKey: "writable"]) }
         if has("configurable") { configurable = jsIsTruthy(o[jsKey: "configurable"]) }

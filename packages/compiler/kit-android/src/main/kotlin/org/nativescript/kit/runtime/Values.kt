@@ -379,9 +379,9 @@ class JSObject() : JSDynamic, JSSymbolKeyed, JSAccessorKeyed, JSReactiveConverti
             if (changes) throw JSException(JSTypeError("Cannot redefine property: $key"))
         }
         if (d.get != null || d.set != null) {
-            slot.get = d.get; slot.set = d.set; slot.isAccessor = true; slot.writable = false
+            slot.get = d.get; slot.set = d.set; slot.rawGet = d.rawGet; slot.rawSet = d.rawSet; slot.isAccessor = true; slot.writable = false
         } else if (d.hasValue || d.writable != null) {
-            if (slot.isAccessor) { slot.get = null; slot.set = null; slot.isAccessor = false }
+            if (slot.isAccessor) { slot.get = null; slot.set = null; slot.rawGet = null; slot.rawSet = null; slot.isAccessor = false }
         }
         d.enumerable?.let { slot.enumerable = it }
         d.writable?.let { slot.writable = it }
@@ -399,7 +399,8 @@ class JSObject() : JSDynamic, JSSymbolKeyed, JSAccessorKeyed, JSReactiveConverti
             val g = slot.get
             val s = slot.set
             return JSObject(listOf(
-                Pair("get", g?.let { { -> it(this) } }), Pair("set", s?.let { { v: Any? -> it(this, v) } }),
+                Pair("get", slot.rawGet ?: g?.let { JSMethod(0) { self, _ -> it(self) } }),
+                Pair("set", slot.rawSet ?: s?.let { JSMethod(1) { self, args -> it(self, args.getOrNull(0)); null } }),
                 Pair("enumerable", slot.enumerable), Pair("configurable", slot.configurable)))
         }
         return JSObject(listOf(Pair("value", storage[key]), Pair("writable", slot.writable), Pair("enumerable", slot.enumerable), Pair("configurable", slot.configurable)))
@@ -488,7 +489,7 @@ class JSObject() : JSDynamic, JSSymbolKeyed, JSAccessorKeyed, JSReactiveConverti
             jsTracker?.track()
             val idx = indexKeys
             val s = slots
-            if ((idx == null || idx.isEmpty()) && !hasSymbols && (s == null || s.isEmpty())) return namedKeys
+            if ((idx == null || idx.isEmpty()) && !hasSymbols && (s == null || s.isEmpty())) return namedKeys.toList()
             val names = if (hasSymbols) namedKeys.filter { !jsIsSymbolKey(it) } else namedKeys
             val all = if (idx == null || idx.isEmpty()) names else idx.map { it.toString() } + names
             return if (s == null || s.isEmpty()) all else all.filter { s[it]?.enumerable ?: true }
@@ -678,22 +679,22 @@ fun jsCallOptional(function: Any?, vararg args: Any?): Any? = if (jsIsNullish(fu
 /** `Object.keys` for what translated code holds: a typed object, an untyped one, an array. */
 fun jsKeysOf(value: Any?): List<String> = when (value) {
     is String -> value.indices.map { it.toString() }
-    is JSDynamic -> value.jsKeys
-    is Function<*>, is JSFunction -> jsFunctionProperties(value, false)?.jsKeys ?: emptyList()
-    is JSArray<*> -> (0 until value.size).filter { value.jsHoles?.get(it) != true }.map { it.toString() } + (value.jsProperties?.jsKeys ?: emptyList())
+    is JSDynamic -> value.jsKeys.toList()
+    is Function<*>, is JSFunction -> jsFunctionProperties(value, false)?.jsKeys?.toList() ?: emptyList()
+    is JSArray<*> -> (0 until value.size).filter { value.jsHoles?.get(it) != true }.map { it.toString() } + (value.jsProperties?.jsKeys?.toList() ?: emptyList())
     else -> emptyList()
 }
 
 fun jsObjectKeys(value: Any?): JSArray<String> = JSArray(jsKeysOf(value))
 
 fun jsObjectValues(value: Any?): JSArray<Any?> = when (value) {
-    is JSDynamic -> JSArray(value.jsKeys.map { value.jsGet(it) })
+    is JSDynamic -> JSArray(value.jsKeys.toList().map { value.jsGet(it) })
     is JSArray<*> -> JSArray(jsKeysOf(value).map { jsField(value, it) })
     else -> JSArray()
 }
 
 fun jsObjectEntries(value: Any?): JSArray<Pair<String, Any?>> = when (value) {
-    is JSDynamic -> JSArray(value.jsKeys.map { Pair(it, value.jsGet(it)) })
+    is JSDynamic -> JSArray(value.jsKeys.toList().map { Pair(it, value.jsGet(it)) })
     is JSArray<*> -> JSArray(jsKeysOf(value).map { Pair(it, jsField(value, it)) })
     else -> JSArray()
 }
@@ -702,7 +703,7 @@ fun jsObjectEntries(value: Any?): JSArray<Pair<String, Any?>> = when (value) {
 fun <T : JSDynamic> jsObjectAssign(target: T, vararg sources: Any?): T {
     for (source in sources) {
         when (source) {
-            is JSDynamic -> for (key in source.jsKeys) target.jsSet(key, source.jsGet(key))
+            is JSDynamic -> for (key in source.jsKeys.toList()) target.jsSet(key, source.jsGet(key))
             is JSArray<*>, is String -> for (key in jsKeysOf(source)) target.jsSet(key, jsField(source, key))
             else -> {}
         }

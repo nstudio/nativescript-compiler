@@ -361,10 +361,14 @@ export const placementMethods = {
 				parts &&
 				parts.params.length >= 1 &&
 				parts.params.length <= 5 &&
-				this.checker
+				(this.checker
 					.getTypeAtLocation(e)
 					.getCallSignatures()
-					.some((sig) => !!sig.thisParameter);
+					.some((sig) => !!sig.thisParameter) ||
+					!!this.checker
+						.getContextualType(e)
+						?.getCallSignatures()
+						.some((sig) => !!sig.thisParameter));
 			if (thisTaking) {
 				const code = cast(`${RT.jsThisFunction}(__f, ${parts!.params.length})`, target.replace(/^\((.*)\)\?$/, '$1'));
 				return `run { val __f = ${this.expr(e)}; ${/\)\?$/.test(target) ? `if (${RT.jsIsNullish}(__f)) null else ${code}` : code} }`;
@@ -424,6 +428,25 @@ export const placementMethods = {
 				const names = g!.params.map((_, k) => this.marks.pureCode(`__a${k}`));
 				const call = `${this.library ? this.refName(e as ts.Identifier) : ident((e as ts.Identifier).text)}(${names.map((n, k) => this.convert(n, g!.params[k], f!.params[k])).join(', ')})`;
 				return `{ ${g!.params.map((p, k) => `${names[k]}: ${p}`).join(', ')} -> ${call} }`;
+			}
+			// A function value typed without `this` (`stylePropertyDescriptor.set`: `(v: any) => void`) placed where a `this`-taking function is wanted (`(this: T, value) => void`): preserve any underlying `JSMethod`'s receiver instead of dropping `value`.
+			if (
+				f &&
+				g &&
+				f.params.length < g.params.length &&
+				g.params.length <= 5 &&
+				!this.checker
+					.getTypeAtLocation(e)
+					.getCallSignatures()
+					.some((sig) => !!sig.thisParameter) &&
+				this.checker
+					.getContextualType(e)
+					?.getCallSignatures()
+					.some((sig) => !!sig.thisParameter)
+			) {
+				const raw = ts.isPropertyAccessExpression(e) && !e.questionDotToken && this.isAny(e.expression) ? `${RT.jsGet}(${this.expr(e.expression)}, ${kotlinString(e.name.text)})` : this.expr(e);
+				const code = cast(`${RT.jsThisFunction}(__f, ${g.params.length}, false)`, target.replace(/^\((.*)\)\?$/, '$1'));
+				return `run { val __f = ${raw}; ${/\)\?$/.test(target) ? `if (${RT.jsIsNullish}(__f)) null else ${code}` : code} }`;
 			}
 			const voidPromiseRet = !this.library && !!f && !!g && f.ret === 'JSPromise<Unit>' && /^JSPromise<.+>$/.test(g.ret) && g.ret !== f.ret;
 			if (f && g && f.params.length <= g.params.length && (f.params.length < g.params.length || voidPromiseRet || f.params.some((p, k) => p !== g.params[k] && this.convert('x', g.params[k], p) !== 'x')) && (g.ret === 'Unit' || g.ret === f.ret || voidPromiseRet || (isUntyped(spelledType(g.ret)) && (this.library || f.ret !== 'Unit')) || (!this.library && isUntyped(spelledType(f.ret))))) {

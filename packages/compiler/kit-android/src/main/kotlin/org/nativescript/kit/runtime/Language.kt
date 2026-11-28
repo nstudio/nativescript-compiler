@@ -293,6 +293,8 @@ fun jsObjectRest(source: Any?, taken: List<String>): JSObject {
 class JSPropertySlot(
     var get: ((Any?) -> Any?)? = null,
     var set: ((Any?, Any?) -> Unit)? = null,
+    var rawGet: Any? = null,
+    var rawSet: Any? = null,
     var isAccessor: Boolean = false,
     var enumerable: Boolean = true,
     var writable: Boolean = true,
@@ -307,6 +309,8 @@ class JSPropertyDescriptor(
     val hasValue: Boolean = false,
     val get: ((Any?) -> Any?)? = null,
     val set: ((Any?, Any?) -> Unit)? = null,
+    val rawGet: Any? = null,
+    val rawSet: Any? = null,
     val enumerable: Boolean? = null,
     val writable: Boolean? = null,
     val configurable: Boolean? = null,
@@ -316,12 +320,16 @@ class JSPropertyDescriptor(
         fun of(o: Any?): JSPropertyDescriptor {
             val d = jsBox(o) as? JSDynamic ?: throw JSException(JSTypeError("Property description must be an object: ${jsToString(o)}"))
             val has = { k: String -> jsHasKey(d, k) }
-            val g = if (has("get")) jsBox(d.jsGet("get"))?.let { jsReceiving(it) } else null
-            val s = if (has("set")) jsBox(d.jsGet("set"))?.let { jsReceiving(it) } else null
+            val rawG = if (has("get")) jsBox(d.jsGet("get")) else null
+            val rawS = if (has("set")) jsBox(d.jsGet("set")) else null
+            val g = rawG?.let { jsReceiving(it) }
+            val s = rawS?.let { jsReceiving(it) }
             return JSPropertyDescriptor(
                 value = if (has("value")) d.jsGet("value") else null, hasValue = has("value"),
                 get = g?.let { f -> { self: Any? -> f(self, emptyArray()) } },
                 set = s?.let { f -> { self: Any?, v: Any? -> f(self, arrayOf(v)); Unit } },
+                rawGet = rawG,
+                rawSet = rawS,
                 enumerable = if (has("enumerable")) jsTruthy(d.jsGet("enumerable")) else null,
                 writable = if (has("writable")) jsTruthy(d.jsGet("writable")) else null,
                 configurable = if (has("configurable")) jsTruthy(d.jsGet("configurable")) else null,

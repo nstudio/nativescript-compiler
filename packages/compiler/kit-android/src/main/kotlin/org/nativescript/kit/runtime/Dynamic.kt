@@ -308,18 +308,33 @@ private class JSMethodRest3(override val method: JSMethod) : JSMethodHolder, (An
 inline fun <T> jsUnlessNullish(value: Any?, read: (Any?) -> T): T? = if (jsIsNullish(value)) null else read(value)
 
 /** A function value held untyped, as a Kotlin function taking its `this` first: a JSMethod gets it as its receiver. */
-fun jsThisFunction(f: Any?, arity: Int): Any = if (f !is JSMethod) when (arity) {
-    1 -> jsFunction1<Any?, Any?>(f)
-    2 -> jsFunction2<Any?, Any?, Any?>(f)
-    3 -> jsFunction3<Any?, Any?, Any?, Any?>(f)
-    4 -> jsFunction4<Any?, Any?, Any?, Any?, Any?>(f)
-    else -> jsFunction5<Any?, Any?, Any?, Any?, Any?, Any?>(f)
-} else when (arity) {
-    1 -> { a: Any? -> f.call(a, arrayOf()) }
-    2 -> { a: Any?, b: Any? -> f.call(a, arrayOf(b)) }
-    3 -> { a: Any?, b: Any?, c: Any? -> f.call(a, arrayOf(b, c)) }
-    4 -> { a: Any?, b: Any?, c: Any?, d: Any? -> f.call(a, arrayOf(b, c, d)) }
-    else -> { a: Any?, b: Any?, c: Any?, d: Any?, e: Any? -> f.call(a, arrayOf(b, c, d, e)) }
+fun jsThisFunction(f: Any?, arity: Int, hasThis: Boolean = true): Any {
+    val m = when (f) {
+        is JSMethod -> f
+        is JSMethodHolder -> f.method
+        else -> null
+    }
+    if (m != null) return when (arity) {
+        1 -> { a: Any? -> m.call(a, arrayOf()) }
+        2 -> { a: Any?, b: Any? -> m.call(a, arrayOf(b)) }
+        3 -> { a: Any?, b: Any?, c: Any? -> m.call(a, arrayOf(b, c)) }
+        4 -> { a: Any?, b: Any?, c: Any?, d: Any? -> m.call(a, arrayOf(b, c, d)) }
+        else -> { a: Any?, b: Any?, c: Any?, d: Any?, e: Any? -> m.call(a, arrayOf(b, c, d, e)) }
+    }
+    if (!hasThis) return when (arity) {
+        1 -> { _: Any? -> jsCall(f) }
+        2 -> { _: Any?, b: Any? -> jsCall(f, b) }
+        3 -> { _: Any?, b: Any?, c: Any? -> jsCall(f, b, c) }
+        4 -> { _: Any?, b: Any?, c: Any?, d: Any? -> jsCall(f, b, c, d) }
+        else -> { _: Any?, b: Any?, c: Any?, d: Any?, e: Any? -> jsCall(f, b, c, d, e) }
+    }
+    return when (arity) {
+        1 -> jsFunction1<Any?, Any?>(f)
+        2 -> jsFunction2<Any?, Any?, Any?>(f)
+        3 -> jsFunction3<Any?, Any?, Any?, Any?>(f)
+        4 -> jsFunction4<Any?, Any?, Any?, Any?, Any?>(f)
+        else -> jsFunction5<Any?, Any?, Any?, Any?, Any?, Any?>(f)
+    }
 }
 
 /** Argument `index` of a dynamic call; a missing one is undefined. */
@@ -334,7 +349,7 @@ interface JSDeletable {
 fun jsAssign(target: Any?, vararg sources: Any?): Any? {
     for (source in sources) {
         when (source) {
-            is JSDynamic -> for (key in source.jsKeys) jsSet(target, key, source.jsGet(key))
+            is JSDynamic -> for (key in source.jsKeys.toList()) jsSet(target, key, source.jsGet(key))
             is JSArray<*>, is String -> for (key in jsKeysOf(source)) jsSet(target, key, jsField(source, key))
             else -> {}
         }

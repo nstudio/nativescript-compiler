@@ -124,7 +124,7 @@ export const classMethodsMethods = {
 		const own = !overridden.has(n) && /^\$[be]\d+$/.test(n) ? 'internal ' : '';
 		lines.push('    ' + this.func(m, this.methodIdent(n), (this.erasedSignatureMethods.has(m) ? `@JvmName("${n}__typed") ` : '') + own + (kotlinEquals ? 'override ' : this.memberMods(k, n))));
 		// A plugin's objects are read untyped too (`handler.attachToView(view)` on an `any`): their methods by name.
-		if (plugin && !m.typeParameters?.length && !m.parameters.some((p) => p.dotDotDotToken)) k.dynMethods.push({ name: n, params: m.parameters.map((p) => this.paramType(p)), ret: this.returnTypeOf(m) });
+		if (plugin && !this.generics(m) && !m.parameters.some((p) => p.dotDotDotToken)) k.dynMethods.push({ name: n, params: m.parameters.map((p) => this.paramType(p)), ret: this.returnTypeOf(m) });
 	},
 
 	abstractMethodCode(this: Translator, k: ClassParts, m: ts.MethodDeclaration): void {
@@ -167,7 +167,7 @@ export const classMethodsMethods = {
 			}
 			// Called by its symbol with the Kotlin signature it has: the overridden one's.
 			const sig = root && root !== m ? root : m;
-			if (!isStatic(m) && !sig.parameters.some((p) => p.dotDotDotToken) && !sig.typeParameters?.length && !this.readsArguments(sig)) {
+			if (!isStatic(m) && !sig.parameters.some((p) => p.dotDotDotToken) && !this.generics(sig) && !this.readsArguments(sig)) {
 				const key = keyed.fixed ? keyed.key : this.capturedSymbolKey(k, keyed.key);
 				k.dynMethods.push({ name: keyed.member, key, fixed: keyed.fixed, either: keyed.either, maybeUndefined: keyed.key.includes('?: "undefined"'), params: sig.parameters.map((p) => this.paramType(p)), unread: m.parameters.map((p) => this.unreadParameter(m, p)), ret: this.returnTypeOf(sig) });
 			}
@@ -182,7 +182,7 @@ export const classMethodsMethods = {
 		// Library mode: every method of the class is read by name as well (`font.getAndroidTypeface()` on an untyped font), overrides included.
 		if (this.library || byName || droppedProtocolMembers.size > 0 || this.membersByName(cls) || this.states.downcastClass(cls) || this.states.byNameClass(cls)) {
 			const addMethod = (m: ts.MethodDeclaration) => {
-				if (!m.body || isStatic(m) || ts.isComputedPropertyName(m.name) || ts.isPrivateIdentifier(m.name) || m.typeParameters?.length || m.parameters.some((p) => p.dotDotDotToken) || this.readsArguments(m)) return;
+				if (!m.body || isStatic(m) || ts.isComputedPropertyName(m.name) || ts.isPrivateIdentifier(m.name) || this.generics(m) || m.parameters.some((p) => p.dotDotDotToken) || this.readsArguments(m)) return;
 				const n = m.name.getText();
 				if (dynMethods.some((d) => d.name === n && !d.key) || n === 'toString' || n === 'equals') return;
 				if (!droppedProtocolMembers.has(n) && !this.memberByName(cls, n) && !this.states.byNameMember(cls, n)) return;
@@ -191,7 +191,7 @@ export const classMethodsMethods = {
 				if (!this.library && kitRoot && this.core?.kitMember(kitRoot, n)) return;
 				let root: ts.MethodDeclaration = m;
 				for (let up = this.inheritedMethod(cls, n); up; up = this.inheritedMethod(up.parent as ts.ClassLikeDeclaration, n)) root = up;
-				if (root.parameters.length !== m.parameters.length) return;
+				if (root.parameters.length !== m.parameters.length || this.generics(root)) return;
 				dynMethods.push({ name: n, params: root.parameters.map((p) => this.paramType(p)), defaults: root.parameters.map((p) => (this.constantDefault(p) ? this.stored(p.initializer!, p, this.paramType(p)) : undefined)), ret: this.returnTypeOf(root) });
 			};
 			for (const m of cls.members) if (ts.isMethodDeclaration(m)) addMethod(m);

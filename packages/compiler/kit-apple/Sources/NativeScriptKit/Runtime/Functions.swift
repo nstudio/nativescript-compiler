@@ -187,7 +187,9 @@ public final class JSFunctionAlias {
 
     /// A typed view of an untyped function value: the function object itself is the identity.
     public init(of source: Any?) {
-        if let f = jsFlat(source) as? JSFunctionObject { target = .object(f.identity ?? f) } else { target = .none }
+        if let f = jsFlat(source) as? JSFunctionObject { target = .object(f.identity ?? f) }
+        else if let m = jsFlat(source) as? JSMethod { target = .object(JSFunctionObject("", 0, m)) }
+        else { target = .none }
     }
 
     /// An adapter of a typed closure, which the adapter calls (and so keeps alive).

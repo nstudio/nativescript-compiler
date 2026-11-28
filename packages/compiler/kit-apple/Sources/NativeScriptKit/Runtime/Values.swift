@@ -861,10 +861,12 @@ public final class JSObject: JSDynamic, JSSymbolKeyed, JSAccessorKeyed, JSReacti
         if d.get != nil || d.set != nil {
             slot.get = d.get
             slot.set = d.set
+            slot.rawGet = d.rawGet
+            slot.rawSet = d.rawSet
             slot.isAccessor = true
             slot.writable = false
         } else if d.value != nil || d.writable != nil {
-            if slot.isAccessor { slot.get = nil; slot.set = nil; slot.isAccessor = false }
+            if slot.isAccessor { slot.get = nil; slot.set = nil; slot.rawGet = nil; slot.rawSet = nil; slot.isAccessor = false }
         }
         if let v = d.enumerable { slot.enumerable = v }
         if let v = d.writable { slot.writable = v }
@@ -884,7 +886,8 @@ public final class JSObject: JSDynamic, JSSymbolKeyed, JSAccessorKeyed, JSReacti
         guard storage[k] != nil else { return nil }
         let slot = slots[k] ?? JSPropertySlot()
         if slot.isAccessor {
-            return JSObject([("get", slot.get.map { g in { (_: [Any?]) throws -> Any? in try g(self) } as JSFunction } as Any?), ("set", slot.set.map { s in { (a: [Any?]) throws -> Any? in try s(self, jsArg(a, 0)); return nil } as JSFunction } as Any?),
+            return JSObject([("get", slot.rawGet ?? (slot.get.map { g in ({ (selfArg: Any?, _: [Any?]) throws -> Any? in try g(selfArg) } as JSMethod) } as Any?)),
+                             ("set", slot.rawSet ?? (slot.set.map { s in ({ (selfArg: Any?, a: [Any?]) throws -> Any? in try s(selfArg, jsArg(a, 0)); return nil } as JSMethod) } as Any?)),
                              ("enumerable", slot.enumerable), ("configurable", slot.configurable)])
         }
         return JSObject([("value", storage[k] ?? nil), ("writable", slot.writable), ("enumerable", slot.enumerable), ("configurable", slot.configurable)])
