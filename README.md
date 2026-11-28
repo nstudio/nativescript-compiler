@@ -2,7 +2,7 @@
 
 Official nStudio NativeScript CLI plugin (`ns compile`) and framework adapters that compile NativeScript apps (TypeScript, `@nativescript/core`, framework templates, and plugins) directly to native **Swift** (iOS) and **Kotlin** (Android) — with **no JavaScript runtime** in the release binary.
 
-[Why NativeScript](#why-nativescript-makes-this-possible) · [Packages](#packages) · [Quick Start](#quick-start-end-users) · [Examples](#examples) · [Crash Traces](#crash-traces) · [Speed & Footprint](#speed-and-footprint-compiled-vs-js-v8-release) · [Local Development](#local-development) · [Generating Kits](#generating-swift--kotlin-kits-from-nativescriptcore)
+[Why NativeScript](#why-nativescript-makes-this-possible) · [Packages](#packages) · [Quick Start](#quick-start-end-users) · [Examples](#examples) · [Crash Traces](#crash-traces) · [Speed & Footprint](#speed-and-footprint-compiled-vs-js-v8-release) · [Correctness & test262](#correctness-node-parity--ecma-262-test262-coverage) · [Local Development](#local-development) · [Generating Kits](#generating-swift--kotlin-kits-from-nativescriptcore)
 
 ---
 
@@ -170,12 +170,11 @@ Measured in alternating 5-round A/B runs (`ns compile` vs `--release --no-compil
 - **Android JIT-heavy pure JS microbenchmarks:** V8 on Android runs full TurboFan JIT, so tight numeric-array loops (`matmul` on boxed `JSArray<Double>` vs V8 unboxed double arrays) and repeated `+=` string concatenation loops favor V8 JIT today.
 - **JSON (`json-parse`/`json-stringify`):** V8's C++ JSON engine is currently 2×–9× faster than the Swift/Kotlin runtime JSON helpers.
 
-<details>
-<summary><strong>Correctness, Node Parity &amp; ECMA-262 (test262) Coverage</strong></summary>
+## Correctness, Node Parity & ECMA-262 (test262) Coverage
 
 The compiler is continuously verified against **Node.js (V8) as the semantic oracle** across typed TypeScript programs, JavaScript edge cases (`wtfjs`), and the official `tc39/test262` conformance suite:
 
-#### 1. Differential Node Parity (Typed TypeScript — 990 Cases)
+### 1. Differential Node Parity (Typed TypeScript — 990 Cases)
 
 Every case runs under Node.js and as a compiled native binary (Swift on macOS, Kotlin on JVM), comparing stdout, stderr, and exit status:
 
@@ -184,11 +183,11 @@ Every case runs under Node.js and as a compiled native binary (Swift on macOS, K
 | **Runnable cases matching Node** | **932 / 936 (99.6%)** *(44 declared refusals, 4 known failures)* | **884 / 886 (99.8%)** *(39 declared refusals, 2 known failures)* |
 | **wtfjs edge cases (61 applicable)** | **54 / 54 runnable match Node** *(0 failures, 7 refused)* | **54 / 54 runnable match Node** *(0 failures, 7 refused)* |
 | **Shared-front decision parity** | **8,885,451** decisions across 48 cases — **0** answered differently | *(same)* |
-| **Architecture &amp; layering gates** | **307** modules, **0** cycles · **29 / 29** semantics tests · **85 / 85** expression-parser checks | *(same)* |
+| **Architecture & layering gates** | **307** modules, **0** cycles · **31 / 31** semantics tests · **85 / 85** expression-parser checks | *(same)* |
 
 *(2 of Swift's 4 remaining known failures are inherent UTF-16 lone-surrogate limits of Swift `String`; full details in [tests/README.md](packages/compiler/tests/README.md#the-suite-today) and [WTFJS.md](packages/compiler/tests/diff/WTFJS.md).)*
 
-#### 2. ECMA-262 `tc39/test262` Native Conformance
+### 2. ECMA-262 `tc39/test262` Native Conformance
 
 `test262` is untyped JavaScript mechanically adapted to TypeScript modules (`18,817` selected tests, `3,657` rejected by TypeScript's own type checker and `~3,300` intentionally refused for out-of-scope constructs like `eval`, `Proxy`, `Reflect`, and `with`). Across accepted tests, **4,240 Swift** and **4,408 Kotlin** official ECMAScript conformance tests pass natively with no JavaScript engine — with standout accepted pass rates across core built-ins:
 
@@ -197,8 +196,8 @@ Every case runs under Node.js and as a compiled native binary (Swift on macOS, K
 | **Math** | **85.5%** *(130 pass)* | **96.1%** *(146 pass)* | 0 wrong outputs on both |
 | **JSON** | **90.1%** *(73 pass)* | **91.5%** *(75 pass)* | — |
 | **Number** | **85.3%** *(151 pass)* | **92.4%** *(158 pass)* | — |
-| **`typeof` &amp; Equality** | **67.7%** *(21 pass)* | **93.5%** *(29 pass)* | — |
-| **Optional Chaining &amp; Nullish** | **69.8%** *(30 pass)* | **88.4%** *(38 pass)* | 0 wrong outputs on both |
+| **`typeof` & Equality** | **67.7%** *(21 pass)* | **93.5%** *(29 pass)* | — |
+| **Optional Chaining & Nullish** | **69.8%** *(30 pass)* | **88.4%** *(38 pass)* | 0 wrong outputs on both |
 | **String** | **75.7%** *(253 pass)* | **87.0%** *(294 pass)* | — |
 | **Map** | **84.4%** *(38 pass)* | **84.4%** *(38 pass)* | 0 wrong outputs on both |
 | **Set** | **73.3%** *(44 pass)* | **86.7%** *(52 pass)* | 0 wrong outputs on both |
@@ -209,8 +208,6 @@ Every case runs under Node.js and as a compiled native binary (Swift on macOS, K
 | **Array** | **67.0%** *(825 pass)* | **64.2%** *(819 pass)* | — |
 
 See the full per-area report and reproduction instructions in [packages/compiler/tests/test262/README.md](packages/compiler/tests/test262/README.md#results).
-
-</details>
 
 ## Local Development
 
