@@ -145,7 +145,7 @@ export const globalCallsMethods = {
 		const declared = this.checker.getResolvedSignature(e)?.getDeclaration();
 		const isFunctionValue = !declared || ts.isJSDocSignature(declared) || !('body' in declared && declared.body) || ts.isArrowFunction(declared) || ts.isFunctionExpression(declared);
 		// A function held untyped (one of several function types): called as script calls it.
-		if (this.isAny(callee)) {
+		if (this.isAny(callee) && !(declared && ts.isFunctionDeclaration(declared) && declared.body)) {
 			const code = `${RT.jsCall}(${this.expr(callee)}${this.untypedArgs(e)})`;
 			const t = this.typeOf(e);
 			return isUntyped(spelledType(t)) || t === 'Void' ? code : this.fromAnyCode(code, t, true);

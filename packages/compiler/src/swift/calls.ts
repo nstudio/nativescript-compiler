@@ -200,7 +200,7 @@ export const callsMethods = {
 			this.refuseCallReceiver(e);
 			const builtin = method === 'call' || method === 'apply' ? this.builtinPrototypeCall(method, target, e) : null;
 			if (builtin) return builtin;
-			if (['call', 'apply', 'bind'].includes(method) && isLibDeclaration(this.checker.getResolvedSignature(e)?.getDeclaration()) && functionParts(this.typeOf(target).replace(/^\((.*)\)[?!]$/, '$1'))) return this.functionMethod(method, target, e);
+			if (['call', 'apply', 'bind'].includes(method) && isLibDeclaration(this.checker.getResolvedSignature(e)?.getDeclaration()) && (functionParts(this.typeOf(target).replace(/^\((.*)\)[?!]$/, '$1')) || (ts.isPropertyAccessExpression(target) && target.expression.getText() === 'Function.prototype' && ['call', 'apply', 'bind'].includes(target.name.text)))) return this.functionMethod(method, target, e);
 			if ((method === 'call' || method === 'apply') && this.programPrototypeMethod(target) && isLibDeclaration(this.checker.getResolvedSignature(e)?.getDeclaration())) return this.functionMethod(method, target, e);
 			const required = this.library ? null : this.core.requiredModuleCall(e);
 			if (required) return required;

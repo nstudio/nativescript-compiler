@@ -696,7 +696,7 @@ public final class JSDateTimeFormat: JSDynamic {
     }
 
     private func zoneName(_ date: Date, long: Bool) -> String {
-        if timeZoneId == "UTC" { return long ? "Coordinated Universal Time" : "UTC" }
+        if timeZoneId == "UTC" || timeZoneId == "GMT" || timeZoneId == "Etc/UTC" { return long ? "Coordinated Universal Time" : "UTC" }
         // ICU's zone names start in 1970; before, a zone is its offset from GMT.
         if date.timeIntervalSince1970 < 0 { return offsetName(date, long: long) }
         if long {

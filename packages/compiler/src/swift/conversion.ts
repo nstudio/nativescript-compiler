@@ -133,8 +133,11 @@ export const conversionMethods = {
 		if (!decl?.name || decl.getSourceFile().isDeclarationFile || decl.typeParameters?.length || decl.asteriskToken || this.takesThis(decl)) return null;
 		// Given to the language's or a platform's API (`list.map(f)`, which rethrows what `f` may throw), which never compares it: as it is.
 		if ((ts.isCallExpression(p) || ts.isNewExpression(p)) && p.arguments?.includes(e)) {
-			const callee = this.checker.getResolvedSignature(p)?.getDeclaration();
-			if (callee && callee.getSourceFile().isDeclarationFile && !isCoreDeclaration(callee)) return null;
+			const sig = this.checker.getResolvedSignature(p);
+			const callee = sig?.getDeclaration();
+			const paramDecl = sig?.getParameters()[p.arguments.indexOf(e)]?.valueDeclaration;
+			const paramType = paramDecl ? this.checker.getTypeAtLocation(paramDecl) : undefined;
+			if (callee && callee.getSourceFile().isDeclarationFile && !isCoreDeclaration(callee) && paramType && this.checker.getNonNullableType(paramType).getCallSignatures().length > 0) return null;
 		}
 		return decl;
 	},

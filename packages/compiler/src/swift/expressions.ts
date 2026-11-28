@@ -40,7 +40,7 @@ export const expressionsMethods = {
 	/** A condition: Swift needs a Bool where JavaScript tests truthiness. */
 	cond(this: Translator, e: ts.Expression, cell?: ConditionCell): string {
 		const sub = substitutedExpr(this.subst, e);
-		if (sub) return this.typeOf(sub.bare) === 'Bool' ? sub.code : `${RT.jsTruthy}(${sub.code})`;
+		if (sub) return this.typeOf(sub.bare) === 'Bool' ? sub.code : `${RT.jsTruthy}(${this.marks.isUnwrap(sub.code) ? this.marks.unwrapInner(sub.code)! : sub.code})`;
 		if (cell === undefined) cell = conditionCell(this.conditions, e);
 		const code = this.truthy(cell);
 		// A closure called in place (`{ () -> Bool in … }()`) would be read as an `if`'s or `while`'s body.

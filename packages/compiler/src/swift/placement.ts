@@ -355,7 +355,8 @@ export const placementMethods = {
 		// An array literal where any value may go holds any value: script may store a string in `const list: any = [1, 2]`,
 		// or in `{ list: [1] }` of an untyped object.
 		const untypedMember = ts.isPropertyAssignment(bare.parent) && this.dynamicLiterals.has(bare.parent.parent);
-		if (ts.isArrayLiteralExpression(bare) && isUntyped(spelledType(target)) && !ts.isAsExpression(e) && (untypedMember || !!(this.checker.getContextualType(bare)?.flags! & ts.TypeFlags.Any))) return this.array(bare, 'JSArray<Any?>');
+		const ctx = this.checker.getContextualType(bare);
+		if (ts.isArrayLiteralExpression(bare) && isUntyped(spelledType(target)) && !ts.isAsExpression(e) && ((untypedMember && (!ctx || !!(ctx.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) || !this.checker.isArrayType(ctx))) || !!(ctx?.flags! & ts.TypeFlags.Any))) return this.array(bare, 'JSArray<Any?>');
 		// An array of tuples where the slot's type has them typed (`[[property, color]]` for `[any, any][]` returned as `[CssProperty, Color][]`).
 		const tuples = /^(JSArray<)?(\(.*\))>?$/.exec(target.replace(/\?$/, ''));
 		const arity = tuples && !hasTopLevelArrow(tuples[2]) ? splitTopLevel(tuples[2].slice(1, -1)).length : 0;
