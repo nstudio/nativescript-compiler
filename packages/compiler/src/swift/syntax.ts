@@ -393,7 +393,7 @@ export const SWIFT_SYNTAX: Omit<AsyncSyntax, 'unwrap'> = {
 	asyncBody: (cap) => [`${cap}.body {`, '}'],
 	// Undefined where the result has no undefined (a tuple, after branches that each return): reached only where the types are wrong.
 	asyncReturn: (cap, value, isPromise, result) => (value === null ? `${cap}.returnValue(${result === 'Void' ? '()' : /^\(.*\)$/.test(result) && !/->/.test(result) ? `{ fatalError("undefined for ${result}") }()` : 'nil'})` : `${cap}.${isPromise ? 'returnPromise' : 'returnValue'}(${value})`),
-	asyncError: (cap) => `{ ${cap}.throwValue($0) }`,
+	asyncError: (cap) => `${cap}.throwValue`,
 	loopRun: (iteration) => `JSAsyncLoop().run ${iteration}`,
 	undefinedValue: 'nil',
 	generatorBody: (cap, element, isAsync) => [`return ${isAsync ? 'JSAsyncGenerator' : 'JSGenerator'}<${element}> { (${cap}: ${isAsync ? 'JSAsyncGeneratorContext' : 'JSGeneratorContext'}) throws -> Void in`, '}'],

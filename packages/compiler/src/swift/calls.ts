@@ -1,6 +1,6 @@
 // Calls as Swift: functions, methods, prototype calls, JavaScript globals and statics, native dispatch.
 import ts from 'typescript';
-import { LIST_APPLIED, isTypedArrayType } from './library.ts';
+import { LIB_FUNCTION_VALUES, LIST_APPLIED, isTypedArrayType } from './library.ts';
 import { isLibGlobal } from '../semantics/globals.ts';
 import { comparedToNullish, functionParts, hasTopLevelArrow, ident, isFunctionType, isOptional, isSymbolAsyncIterator, openSwiftChain, optionalType, swiftString, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
@@ -33,6 +33,7 @@ export const callsMethods = {
 	/** A browser global only TypeScript's DOM library declares, or nothing does (`window`, `navigator`, `Blob`): the global object's property of that name, untyped. */
 	isDomGlobal(this: Translator, e: ts.Node): boolean {
 		if (this.library || !ts.isIdentifier(e) || (ts.isPropertyAccessExpression(e.parent) && e.parent.name === e) || ts.isTypeNode(e.parent)) return false;
+		if (Object.hasOwn(LIB_FUNCTION_VALUES, e.text)) return false;
 		const decls = this.resolve(e)?.declarations ?? [];
 		// A plugin's name nothing declares here (`window` where its own build had the DOM's typings): the global object's, undefined.
 		if (!decls.length) return this.pluginFiles.has(e.getSourceFile().fileName) && !isArguments(e, this.checker) && !['undefined', 'NaN', 'Infinity'].includes(e.text);
@@ -427,9 +428,11 @@ export const callsMethods = {
 		// `handler!(…)`: the function, where undefined is not a function.
 		if (ts.isNonNullExpression(callee)) {
 			if (!/[?!]$/.test(this.typeOf(callee.expression))) return this.call(ts.factory.updateCallExpression(e, callee.expression, e.typeArguments, e.arguments));
+			const fn = this.expr(callee.expression);
+			if (/^(?:try\s+)?FunctionCell_\w+\.present\(/.test(fn)) return `(${fn})(${this.args(e).join(', ')})`;
 			const label = ts.isPropertyAccessExpression(callee.expression) || ts.isIdentifier(callee.expression) ? callee.expression.getText() : null;
 			const fnType = this.typeOf(callee.expression).replace(/^\((.*)\)[?!]$/, '$1').replace(/[?!]$/, '');
-			return label ? `({ () throws -> ${fnType} in guard let __fn = ${this.tryPrefix(callee.expression)}${this.expr(callee.expression)} else { throw JSException(JSTypeError(${swiftString(`${label} is not a function`)})) }; return __fn }())(${this.args(e).join(', ')})` : `${RT.jsCallee}(${this.expr(callee.expression)})(${this.args(e).join(', ')})`;
+			return label ? `({ () throws -> ${fnType} in guard let __fn = ${this.tryPrefix(callee.expression)}${fn} else { throw JSException(JSTypeError(${swiftString(`${label} is not a function`)})) }; return __fn }())(${this.args(e).join(', ')})` : `${RT.jsCallee}(${fn})(${this.args(e).join(', ')})`;
 		}
 		throw this.error(e, 'call');
 	},

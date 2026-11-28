@@ -141,7 +141,8 @@ export const classMethodsMethods = {
 			this.chainingLoose = true;
 			const rawKey = this.propertyKey(m.name.expression);
 			this.chainingLoose = saved;
-			const key = fixedKey(m.name.expression, this.checker) ? rawKey : this.storedSymbolKey(k, m.name.expression, rawKey);
+			const keyThrows = this.throwsInfo.expr(m.name.expression);
+			const key = fixedKey(m.name.expression, this.checker) ? (keyThrows ? `(try? ${rawKey})` : rawKey) : this.storedSymbolKey(k, m.name.expression, rawKey);
 			symbolMethods.push({ key, method, owner: ident(k.name), params: m.parameters.map((p) => this.paramType(p)), unread: m.parameters.map((p) => this.unreadParameter(m, p)), ret: this.returnTypeOf(m), throws: this.throwsInfo.fn(m) });
 			lines.push('    ' + this.memberFunc(m, method));
 			return;

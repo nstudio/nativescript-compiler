@@ -24,8 +24,8 @@ export const BUILTIN_CLASSES: Record<string, string> = Object.assign(Object.crea
 export const LIB_FUNCTION_VALUES: Record<string, { code: string; type: string }> = {
 	clearTimeout: { code: `{ (__id: Any?) -> Void in ${RT.jsClearTimeout}(${RT.jsIsNullish}(__id) ? nil : ${RT.jsToNumber}(__id)) }`, type: '(Any?) throws -> Void' },
 	clearInterval: { code: `{ (__id: Any?) -> Void in ${RT.jsClearInterval}(${RT.jsIsNullish}(__id) ? nil : ${RT.jsToNumber}(__id)) }`, type: '(Any?) throws -> Void' },
-	queueMicrotask: { code: `{ (__f: @escaping () throws -> Void) -> Void in ${RT.jsQueueMicrotask} { ${RT.jsReport} { try __f() } } }`, type: '(() throws -> Void) throws -> Void' },
-	requestAnimationFrame: { code: `{ (__f: @escaping (Double) throws -> Void) -> Double in ${RT.jsRequestAnimationFrame} { __t in ${RT.jsReport} { try __f(__t) } } }`, type: '((Double) throws -> Void) throws -> Double' },
+	queueMicrotask: { code: `{ (__f: @escaping () throws -> Void) -> Void in ${RT.jsQueueMicrotask} { ${RT.jsReport} { try __f() } } }`, type: '(@escaping () throws -> Void) throws -> Void' },
+	requestAnimationFrame: { code: `{ (__f: @escaping (Double) throws -> Void) -> Double in ${RT.jsRequestAnimationFrame} { __t in ${RT.jsReport} { try __f(__t) } } }`, type: '(@escaping (Double) throws -> Void) throws -> Double' },
 	cancelAnimationFrame: { code: `{ (__id: Double?) -> Void in ${RT.jsCancelAnimationFrame}(__id) }`, type: '(Double?) throws -> Void' },
 };
 

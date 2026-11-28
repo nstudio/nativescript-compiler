@@ -5,7 +5,7 @@ import { convertedRead } from '../semantics/states/predicates.ts';
 import type { NulledRead } from '../semantics/states/value-states.ts';
 import { place } from '../semantics/placement.ts';
 import type { ResultSlot, ReturnCell } from '../semantics/placement.ts';
-import { THROWING_CODE, escapingFunction, escapingParam, functionParts, hasTopLevelArrow, ident, isFunctionType, isNullish, isOptional, nullishType, numberLiteralBranch, numericLiteralOnly, optionalType, postfixChain, splitTopLevel, swiftString, unwrapFunction, RT, lenientReader } from './syntax.ts';
+import { THROWING_CODE, escapingFunction, escapingParam, functionParts, hasTopLevelArrow, ident, isFunctionType, isNullish, isOptional, nullishType, numberLiteralBranch, numericLiteralOnly, optionalElementsType, optionalType, postfixChain, splitTopLevel, swiftString, unwrapFunction, RT, lenientReader } from './syntax.ts';
 import type { Translator } from './translator.ts';
 import { structural } from '../semantics/conversion.ts';
 import { heldOf, isKit, isNamed, isUntyped, parseNativeType, spelledType } from '../semantics/types.ts';
@@ -25,7 +25,10 @@ export const placementMethods = {
 		const own = this.typeOf(e).replace(/[?!]$/, ''),
 			promise = `JSPromise<${slot.target}>`;
 		// The `try` marks the value: a return through a finally holds it in a block, which a `try` cannot mark.
-		if (!isKit(spelledType(own), 'JSPromise')) return [this.marks.tryBefore(this.tryPrefix(e), place(this.placement, e, slot)), false];
+		if (!isKit(spelledType(own), 'JSPromise')) {
+			const placed = place(this.placement, e, slot);
+			return [this.marks.tryBefore(this.tryPrefix(e) || (THROWING_CODE.test(placed) ? 'try ' : ''), placed), false];
+		}
 		// A promise of another type than the function's (`Promise<[Status, boolean]>` returned where `Promise<any>` is): its value converted.
 		const adopt = (code: string) => (own !== promise ? this.convert(code, own, promise) : code);
 		const read = this.typeOf(e);
@@ -554,6 +557,19 @@ export const placementMethods = {
 		if (!this.library && /^JSArray<Any\?>[?!]?$/.test(target) && /^JSArray<.+>[?!]?$/.test(source) && !isNamed(spelledType(source), 'JSArray<Any?>')) {
 			if (ts.isArrayLiteralExpression(bare) && !bare.elements.some(ts.isSpreadElement)) return this.array(bare, 'JSArray<Any?>');
 			return this.convert(this.expr(e), source, target);
+		}
+		// An array of typed promises where an array of untyped promises is wanted (`Promise<void>[]` as `Promise<unknown>[]`).
+		if (!this.library && /^JSArray<JSPromise<.+>>[?!]?$/.test(source) && /^JSArray<JSPromise<Any\?>>[?!]?$/.test(target) && !/^JSArray<JSPromise<Any\?>>[?!]?$/.test(source)) {
+			const fromPromise = source.replace(/^JSArray<(.*)>[?!]?$/, '$1');
+			return `(${this.expr(e)} as ${source.replace(/[?!]$/, '')}).map { ${this.convert('$0', fromPromise, 'JSPromise<Any?>')} }`;
+		}
+		// A Set or Array whose elements Swift held optional (`optionalElements`), placed where non-optional elements are declared.
+		if (!this.library && source !== target && source === optionalElementsType(target) && /^JS(Set|Array)<.+>\??$/.test(target)) {
+			const el = target.replace(/^JS(?:Set|Array)<(.*)>\??$/, '$1');
+			if (!isUntyped(spelledType(el))) {
+				const kind = target.startsWith('JSSet<') ? 'JSSet' : 'JSArray';
+				return `${kind}<${el}>(${this.expr(e)}.map { ${this.undefinedAs('$0', el, optionalType(el))} })`;
+			}
 		}
 		if (/^JSPromise<(Any\?|JSArray<Any\?>)>$/.test(source) && /^JSPromise<.*>[?!]?$/.test(target) && source !== target.replace(/[?!]$/, '')) {
 			const all = ts.isCallExpression(bare) && ts.isPropertyAccessExpression(bare.expression) && bare.expression.name.text === 'all' && ts.isIdentifier(bare.expression.expression) && bare.expression.expression.text === 'Promise' && isLibGlobal(this, bare.expression.expression) && bare.arguments.length === 1 && !ts.isArrayLiteralExpression(bare.arguments[0]) ? bare : null;

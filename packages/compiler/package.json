@@ -39,13 +39,15 @@
       "default": "./dist/api/binding-api.js"
     },
     "./config": {
-      "types": "./config.d.ts"
+      "types": "./config.d.ts",
+      "default": "./config.js"
     },
     "./package.json": "./package.json"
   },
   "files": [
     "bin/",
     "config.d.ts",
+    "config.js",
     "dist/",
     "verify/",
     "kit-apple/Package.swift",
@@ -71,7 +73,7 @@
   },
   "peerDependencies": {
     "@nativescript/core": "*",
-    "nativescript": ">=9.1.0"
+    "nativescript": "*"
   },
   "peerDependenciesMeta": {
     "@nativescript/core": {

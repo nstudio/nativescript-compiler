@@ -448,7 +448,7 @@ export const overridesMethods = {
 		const decls = this.resolve(e)?.declarations ?? [];
 		if (!decls.length) return this.pluginFiles.has(e.getSourceFile().fileName) && !isArguments(e, this.checker) && !['undefined', 'NaN', 'Infinity'].includes(e.text);
 		// The animation-frame functions held as values: kit-android's runtime has none.
-		if (['requestAnimationFrame', 'cancelAnimationFrame'].includes(e.text) && decls.every((d) => d.getSourceFile().fileName === '/__shims__/globals.d.ts') && !(ts.isCallExpression(e.parent) && e.parent.expression === e)) return true;
+		if (['requestAnimationFrame', 'cancelAnimationFrame'].includes(e.text) && decls.every((d) => d.getSourceFile().isDeclarationFile) && !(ts.isCallExpression(e.parent) && e.parent.expression === e)) return true;
 		return isDomGlobalDeclaration(e.text, decls);
 	},
 

@@ -286,8 +286,8 @@ export const typesMethods = {
 			return `${this.appModule}.${this.topNames().get(sym!.valueDeclaration ?? sym!.declarations![0]) ?? name}`;
 		}
 		if (name && name !== '__type' && name !== '__object') {
-			// Library mode: an interface only a declaration file has (the DOM's `MediaQueryListEvent`, core's `AddChildFromBuilder`) has no Swift type.
-			if (this.library && sym && sym.flags & ts.SymbolFlags.Interface && !(sym.flags & ts.SymbolFlags.Class) && sym.declarations?.every((d) => d.getSourceFile().isDeclarationFile && ((isLibDeclaration(d) && (/lib\.dom/.test(d.getSourceFile().fileName) || DESCRIPTORS.has(name))) || isCoreDeclaration(d)))) return 'Any?';
+			// An interface only a declaration file has (the DOM's `MediaQueryListEvent`, `AddEventListenerOptions`, `Document`, core's `AddChildFromBuilder` in library mode) has no Swift type.
+			if (sym && sym.flags & ts.SymbolFlags.Interface && !(sym.flags & ts.SymbolFlags.Class) && sym.declarations?.every((d) => d.getSourceFile().isDeclarationFile && ((isLibDeclaration(d) && (/lib\.dom/.test(d.getSourceFile().fileName) || (this.library && DESCRIPTORS.has(name)))) || (this.library && isCoreDeclaration(d))))) return 'Any?';
 			if (sym?.declarations?.some((d) => !d.getSourceFile().isDeclarationFile)) this.used.add(name);
 			// A core class its declarations name as the platform file's (`Font` of `font.ios.ts`), which the kit names apart from the common one.
 			if (!this.library && sym && sym.flags & ts.SymbolFlags.Class && isCoreDeclaration(sym.declarations?.[0])) {

@@ -5,6 +5,7 @@ import { isUntyped, parseNativeType, type NativeKind, type NativeType } from './
 import type { Ledger } from './ledger.ts';
 import { TRACING, traced } from './decision-trace.ts';
 import { lossOf, type LossReason } from './losses.ts';
+import { declaresThis } from './ast.ts';
 
 // One conversion between slots: which of the 5×5 representation cells a placement is, decided
 // from the two slots' forms and how the value enters, for both translators. It decides; the backends spell.
@@ -370,7 +371,12 @@ export function erasesTypeParameter(p: ts.TypeParameterDeclaration, ledger: Pick
 	if (!ts.isFunctionDeclaration(fn) && !ts.isMethodDeclaration(fn) && !(structural && (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)))) return false;
 	if (structural && p.constraint && (ts.isTypeLiteralNode(p.constraint) || (ts.isIntersectionTypeNode(p.constraint) && p.constraint.types.some(ts.isTypeLiteralNode)))) return true;
 	const named = new RegExp(`\\b${p.name.text}\\b`);
-	return !fn.parameters.some((q) => q.type && named.test(q.type.getText()) && !(structural && functionShaped(q.type) && (!functionTypeNode(q.type) || keepsIdentity('function', q))));
+	return !fn.parameters.some((q) => {
+		if (!q.type || !named.test(q.type.getText())) return false;
+		if (!structural || !functionShaped(q.type)) return true;
+		const ftn = functionTypeNode(q.type);
+		return !!ftn && !declaresThis(ftn) && !keepsIdentity('function', q);
+	});
 }
 
 /** A function type, with null or undefined. */

@@ -341,6 +341,7 @@ const SWIFT_ONLY = [
 	'jsNativeNumber',
 	'jsNativeObject',
 	'jsNativeResult',
+	'jsNativeSet',
 	'jsNativeString',
 	'jsNativeStruct',
 	'jsNativeStructField',

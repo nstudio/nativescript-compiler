@@ -8,19 +8,24 @@ import { isStatic } from '../semantics/throws.ts';
 import { isUntyped, spelledType } from '../semantics/types.ts';
 import { untypedGeneric } from '../semantics/spelled.ts';
 import { baseMethod } from '../semantics/classes.ts';
+import { isCoreDeclaration } from '../program/core-facts.ts';
 
 export const argumentsMethods = {
+	/** Whether `decl` is a parameter whose declared type names a type parameter Swift erased. */
+	erasedParam(this: Translator, decl: ts.Declaration | undefined): boolean {
+		return (
+			(!!decl && ts.isParameter(decl) && ts.isClassLike(decl.parent.parent) && !!decl.parent.parent.typeParameters?.length && this.erasesGenerics(decl.parent.parent)) ||
+			(!!decl && ts.isParameter(decl) && ts.isMethodSignature(decl.parent) && this.erasingProtocol(decl.parent)) ||
+			(!!decl && ts.isParameter(decl) && !!decl.type && !decl.getSourceFile().isDeclarationFile && !!(decl.parent as ts.SignatureDeclaration).typeParameters?.some((tp) => (this.erasesTypeParameter(tp) || (!this.library && this.erasesGenerics(decl.parent))) && new RegExp(`\\b${tp.name.text}\\b`).test(decl.type!.getText())))
+		);
+	},
+
 	/** The slot the parameter `p`, the `k`th, is at call `e` given `a`: Swift's type of it there, and how it takes a missing value. */
 	paramSlot(this: Translator, e: ts.CallExpression | ts.NewExpression, p: ts.Symbol, k: number, a: ts.Expression): ParamSlot {
 		const decl = p.valueDeclaration;
 		const slot = (target: string, facts?: Pick<ParamSlot, 'nullish' | 'asIs'>) => argumentSlot(this.placement, target, decl, { call: e, k, a }, facts);
 		// A method or constructor of a generic class Swift has erased: the parameter's type as the method declares it.
-		const erased =
-			(!!decl && ts.isParameter(decl) && ts.isClassLike(decl.parent.parent) && !!decl.parent.parent.typeParameters?.length && this.erasesGenerics(decl.parent.parent)) ||
-			// A method of an app's generic interface, whose protocol erases the interface's type parameters.
-			(!!decl && ts.isParameter(decl) && ts.isMethodSignature(decl.parent) && this.erasingProtocol(decl.parent)) ||
-			// A program function's type parameter Swift erases (`U extends { root: View }`, any of a plugin's): the parameter as declared, the argument's type erased with it.
-			(!!decl && ts.isParameter(decl) && !!decl.type && !decl.getSourceFile().isDeclarationFile && !!(decl.parent as ts.SignatureDeclaration).typeParameters?.some((tp) => (this.erasesTypeParameter(tp) || (!this.library && this.erasesGenerics(decl.parent))) && new RegExp(`\\b${tp.name.text}\\b`).test(decl.type!.getText())));
+		const erased = this.erasedParam(decl);
 		// An array of the class or a subclass where the function takes `JSArray<some C>`: the array itself.
 		if (decl && ts.isParameter(decl) && this.opaqueArrayParam(decl)) return slot(this.typeOf(a));
 		// In code the checker finds unreachable a parameter's type is never: its declared type.
@@ -114,14 +119,14 @@ export const argumentsMethods = {
 		const out: string[] = [];
 		const restAt = params.findIndex((p) => p.valueDeclaration && ts.isParameter(p.valueDeclaration) && p.valueDeclaration.dotDotDotToken);
 		// A function type's rest parameter too (`mainThreadify(fn)` gives `(...args) => void`, or `String.fromCharCode.bind(String)`): Swift's function type takes it as `JSRest`.
-		const calleeRest = !this.library && ts.isCallExpression(e) && restAt >= 0 && functionParts(this.typeOf(e.expression).replace(/^\((.*)\)[?!]$/, '$1'))?.rest === restAt;
+		const calleeRest = !this.library && ts.isCallExpression(e) && restAt >= 0 && !isCoreDeclaration(sig?.getDeclaration()) && functionParts(this.typeOf(e.expression).replace(/^\((.*)\)[?!]$/, '$1'))?.rest === restAt;
 		const appDeclared = (!!sig?.getDeclaration() && (!sig!.getDeclaration().getSourceFile().isDeclarationFile || (!this.library && ts.isFunctionTypeNode(sig!.getDeclaration())))) || calleeRest;
 		let covered = list.length;
 		for (let k = 0; k < list.length; k++) {
 			const a = list[k];
 			if (restAt >= 0 && k >= restAt && appDeclared) {
 				// An app function's rest parameter is one array: the arguments packed, spreads included.
-				const calleeParam = ts.isCallExpression(e) ? functionParts(this.typeOf(e.expression).replace(/^\((.*)\)[?!]$/, '$1'))?.params[restAt]?.replace(/^JSRest<(.*)>$/, 'JSArray<$1>') : undefined;
+				const calleeParam = !this.erasedParam(params[restAt].valueDeclaration) && ts.isCallExpression(e) ? functionParts(this.typeOf(e.expression).replace(/^\((.*)\)[?!]$/, '$1'))?.params[restAt]?.replace(/^JSRest<(.*)>$/, 'JSArray<$1>') : undefined;
 				const rest = calleeParam && /^JSArray<.*>$/.test(calleeParam) ? calleeParam : this.restType(params[restAt]);
 				out.push(this.packed(list.slice(k), rest, this.restSlot(e, rest.replace(/^JSArray<(.*)>$/, '$1'), params[restAt].valueDeclaration)));
 				break;
@@ -147,8 +152,10 @@ export const argumentsMethods = {
 				if (!tuple || k + tuple.length > params.length || restAt >= 0) throw this.error(a, 'a spread argument');
 				const held = this.typeOf(a.expression);
 				const code = this.expr(a.expression);
+				const calleeParams = !appDeclared && ts.isCallExpression(e) ? functionParts(this.typeOf(e.expression).replace(/^\((.*)\)[?!]$/, '$1'))?.params : undefined;
 				tuple.forEach((el, i) => {
-					const given = this.type(this.checker.getTypeOfSymbolAtLocation(params[k + i], e), e);
+					const cp = calleeParams?.[k + i];
+					const given = cp && !cp.startsWith('JSRest<') ? cp.replace(/^@escaping /, '') : this.type(this.checker.getTypeOfSymbolAtLocation(params[k + i], e), e);
 					const slot = this.spreadSlot(e, params[k + i], k + i, this.filledDefault(params[k + i].valueDeclaration) ? optionalType(given) : given);
 					out.push(held.startsWith('(') && !functionParts(held) ? this.convert(`${code}.${i}`, this.type(el, e), slot.target) : this.presentFromAny(`${RT.jsArg}(${this.coerce(a.expression, 'JSArray<Any?>')}.storage, ${i})`, slot.target, true));
 				});
@@ -188,7 +195,7 @@ export const argumentsMethods = {
 		const d = p.valueDeclaration as ts.ParameterDeclaration;
 		// A rest of a type parameter (`bind`'s `(...args: A) => R`): Swift's function type takes it as one untyped array.
 		if (d.type && this.isBareTypeParameter(d.type)) return 'JSArray<Any?>';
-		const t = this.typeOf(d.name);
+		const t = this.inFile(d.getSourceFile().fileName, () => this.typeOf(d.name));
 		return isUntyped(spelledType(t)) ? 'JSArray<Any?>' : t;
 	},
 

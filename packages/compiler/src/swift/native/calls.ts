@@ -462,7 +462,7 @@ export const nativeCallsMethods = {
 		if (!native || !(sym!.flags & ts.SymbolFlags.Variable)) return null;
 		const k = lookupConstant(native.module, native.name);
 		if (!k) throw this.t.error(e, `${native.name} (${this.noCounterpart(native.module, native.name)})`, 'native');
-		this.usesEnumOf(k, native.module, native.name);
+		this.usesEnumOf(k, native.module, native.name, e);
 		return this.fromSwift(k.swift, k.type, e);
 	},
 
@@ -475,16 +475,21 @@ export const nativeCallsMethods = {
 			const k = lookupConstant(module, e.text);
 			if (!k) continue;
 			this.uses(module);
-			this.usesEnumOf(k, module, e.text);
+			this.usesEnumOf(k, module, e.text, e);
 			return this.fromSwift(k.swift, k.type, e);
 		}
 		return null;
 	},
 
 	/** A typed constant's enum is looked up among the modules in use, and may live in another table than the typings' module. */
-	usesEnumOf(this: NativeAPI, k: { enumType?: string }, module: string, jsName: string) {
+	usesEnumOf(this: NativeAPI, k: { enumType?: string; introduced?: string }, module: string, jsName: string, e: ts.Node) {
+		this.checkAvailable(k, e, jsName);
 		const home = k.enumType ? constantModule(module, jsName) : null;
 		if (home) this.uses(home);
+		if (k.enumType) {
+			const en = lookupEnum(home ?? module, k.enumType);
+			if (en) this.checkAvailable(en, e, k.enumType);
+		}
 	},
 
 	/** A native function of no arguments as a value (`isRunning = UIAccessibilityIsVoiceOverRunning`): a closure calling it, as Swift may have it as a property. */

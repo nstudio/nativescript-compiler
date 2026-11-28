@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import ts from 'typescript';
 import { flattenStringConcat, planArithmetic, planEquality, planLogicalAssign, planNullishCoalesce, planRelational, planUnary, typeofComparison } from '../../src/semantics/lower.ts';
 import { CodeMarks, emitted, exprText, markedExpr, pureExpr } from '../../src/semantics/marks.ts';
+import { isGivenNullSignalValue } from '../../src/semantics/signals.ts';
+import { erasesTypeParameter } from '../../src/semantics/conversion.ts';
 
 const K = ts.SyntaxKind;
 
@@ -88,5 +90,28 @@ describe('semantics/marks EmittedExpr', () => {
 		assert.equal(marks.isPath('o.a'), false);
 		marks.pureCode('o');
 		assert.equal(marks.isPath('o.a'), true);
+	});
+});
+
+describe('semantics regressions (alpha.18)', () => {
+	it('isGivenNullSignalValue handles synthesized nodes without a parent', () => {
+		const synthetic = ts.factory.createIdentifier('templateSelector');
+		assert.equal(synthetic.parent, undefined);
+		assert.equal(
+			isGivenNullSignalValue(
+				synthetic,
+				() => undefined,
+				() => true,
+			),
+			false,
+		);
+	});
+
+	it('erasesTypeParameter erases type parameters used only in this-typed function parameters under structural erasure', () => {
+		const sf = ts.createSourceFile('t.ts', 'function wrap<T extends Style>(cssName: string, set: (this: T, value: unknown) => void): (this: T, value: unknown) => void { return set; }', ts.ScriptTarget.ES2022, true);
+		const fn = sf.statements[0] as ts.FunctionDeclaration;
+		const tp = fn.typeParameters![0];
+		assert.equal(erasesTypeParameter(tp, { structuralGenericsErased: true }), true);
+		assert.equal(erasesTypeParameter(tp, { structuralGenericsErased: false }), false);
 	});
 });

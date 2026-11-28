@@ -232,7 +232,13 @@ export const assignmentMethods = {
 			const d = this.resolve(left)?.valueDeclaration;
 			if (d && ts.isVariableDeclaration(d) && !d.initializer && !ts.isSourceFile(d.parent.parent.parent)) return this.marks.assignedCode(this.expr(left), 'nil');
 		}
-		if (ts.isPropertyAccessExpression(left) && this.isAddedMember(left)) return `(${this.expr(left.expression)} as JSDynamic)[jsKey: ${swiftString(left.name.text)}] = ${this.stored(right, left, 'Any?', checks)}`;
+		if (ts.isPropertyAccessExpression(left) && this.isAddedMember(left)) {
+			const target = this.checker.getNonNullableType(this.checker.getTypeAtLocation(left.expression));
+			if (target.isIntersection() && target.types.some((t) => this.native.type(t))) {
+				return `${RT.jsNativeSet}(${this.expr(left.expression)}, ${swiftString(left.name.text)}, ${this.stored(right, left, 'Any?', checks)})`;
+			}
+			return `(${this.expr(left.expression)} as JSDynamic)[jsKey: ${swiftString(left.name.text)}] = ${this.stored(right, left, 'Any?', checks)}`;
+		}
 		if (ts.isPropertyAccessExpression(left) && this.isNativeExpando(left)) return `${RT.jsSetNativeExpando}(${this.expr(left.expression)}, ${swiftString(left.name.text)}, ${this.stored(right, left, 'Any?', checks)})`;
 		if (ts.isPropertyAccessExpression(left) && this.isExpando(left)) return `${RT.jsSet}(${this.expr(left.expression)}, ${swiftString(left.name.text)}, ${this.stored(right, left, 'Any?', checks)})`;
 		if (ts.isPropertyAccessExpression(left)) {

@@ -64,6 +64,15 @@ object AppModules {
             if (name !in names) names.add(name)
             null
         })
+        jsSet(jsGlobalThis, "requestAnimationFrame", jsFunction { a ->
+            val cb = a.getOrNull(0)
+            requestAnimationFrame { t -> jsCall(cb, t) }
+        })
+        jsSet(jsGlobalThis, "cancelAnimationFrame", jsFunction { a ->
+            val id = a.getOrNull(0)
+            cancelAnimationFrame(if (id == null || id === jsNull) null else jsToNumber(id))
+            null
+        })
     }
 }
 

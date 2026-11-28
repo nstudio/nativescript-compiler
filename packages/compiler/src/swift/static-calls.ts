@@ -96,7 +96,7 @@ export const staticCallsMethods = {
 			case 'Array':
 				if (method === 'isArray') {
 					const g = !this.library ? shapeArrayGuardAccess(arg(0), (t) => this.isObjectShape(t), (x) => this.typeOf(x)) : null;
-					return `JSArray<Any?>.isArray(${g ? `${this.expr(g.prop.expression)}${g.optional ? '?' : ''}[jsKey: ${swiftString(g.prop.name.text)}]` : this.restArgument(e, arg(0), 'Any?')})`;
+					return `JSArray<Any?>.isArray(${g ? `${this.expr(g.prop.expression)}${g.optional && this.typeOf(g.prop.expression).endsWith('?') ? '?' : ''}[jsKey: ${swiftString(g.prop.name.text)}]` : this.restArgument(e, arg(0), 'Any?')})`;
 				}
 				if (method === 'from' && e.arguments.length === 1) return `${T()}.from(${this.iterable(arg(0))})`;
 				if (method === 'from' && (e.arguments.length === 2 || e.arguments.length === 3) && ts.isObjectLiteralExpression(arg(0))) {

@@ -124,7 +124,8 @@ export const methodValuesMethods = {
 		const params = fn.parameters.filter((p) => !(ts.isIdentifier(p.name) && p.name.text === 'this'));
 		const ret = this.returnTypeOf(fn);
 		const localType = (p: ts.ParameterDeclaration) => (p.questionToken || (p.initializer && !this.templateParams) ? this.paramType(p) : this.states.mayBeNull(p) ? (this.lenient ? optionalType(this.typeOf(p.name)) : `${this.typeOf(p.name)}!`) : this.paramType(p));
-		const selfType = declaresThis(fn) ? localType(fn.parameters[0]) : 'Any?';
+		const rawSelf = declaresThis(fn) ? localType(fn.parameters[0]) : 'Any?';
+		const selfType = !isUntyped(spelledType(rawSelf)) && !this.declaredNullable(fn.parameters[0]) ? rawSelf.replace(/\?$/, '!') : rawSelf;
 		const selfBind = !isUntyped(spelledType(selfType)) ? [`let __self: ${selfType} = ${this.presentFromAny('__this', selfType.replace(/!$/, '?'), true, true)}`] : [];
 		// A function reading `arguments` binds its parameters from them itself.
 		const binds = [

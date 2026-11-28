@@ -18,6 +18,9 @@ export const argumentsMethods = {
 		const at = { call: e, k, a };
 		if (decl && this.states.nullishHeld(decl)) return argumentSlot(this.placement, nullishType(this.type(this.checker.getTypeOfSymbolAtLocation(p, e), e)), decl, at, { nullish: true });
 		let pt = decl && this.states.nullish().held.has(decl) ? 'Any?' : this.heldElements(decl && ts.isParameter(decl) ? decl : e, this.type(this.checker.getTypeOfSymbolAtLocation(p, e), e));
+		// An overloaded declared function held as a Kotlin function value (`cancelAnimationFrame`) takes its Kotlin type's parameter.
+		const calleeParam = !appDeclared && ts.isCallExpression(e) ? functionTypeParts(this.typeOf(e.expression).replace(/^\((.*)\)\?$/, '$1'))?.params[k] : undefined;
+		if (calleeParam && !calleeParam.startsWith('JSArray<')) pt = calleeParam;
 		// A generic implementation's parameter is not instantiated by an overload's call: the overload's, as this call instantiates it.
 		const implTypes = impl && impl !== sig?.getDeclaration() ? (impl.typeParameters?.map((t) => t.name.text) ?? []) : [];
 		const resolved = sig?.getParameters()[k];
@@ -300,6 +303,7 @@ export const argumentsMethods = {
 			}
 			const decl = params[k + i].valueDeclaration as ts.ParameterDeclaration;
 			if (s.constantDefault && isNullable(el.type)) out.push(`(${this.convert(el.code, el.type, optionalType(s.target))} ?: ${this.coerce(decl.initializer!, s.target)})`);
+			else if (el.type === optionalType(s.target) && ['Double', 'String', 'Boolean'].includes(s.target)) out.push(`(${el.code} ?: ${s.target === 'Double' ? 'Double.NaN' : s.target === 'String' ? '"undefined"' : 'false'})`);
 			else if (isNullable(el.type) && !isNullable(s.target) && !isUntyped(spelledType(s.target)) && !isUntyped(spelledType(el.type))) return null;
 			else out.push(this.convert(el.code, el.type, s.target));
 		}

@@ -560,7 +560,8 @@ public func jsNativePropertySet(_ native: Any?, _ setter: String, _ value: Any?)
 /// `a || b` on untyped values.
 public func jsOr(_ a: Any?, _ b: Any?) -> Any? { jsTruthy(a) ? a : b }
 
-func jsNativeSet(_ object: NSObject, _ key: String, _ value: Any?) {
+public func jsNativeSet(_ object: NSObject?, _ key: String, _ value: Any?) {
+    guard let object else { return }
     if JSNativeDispatch.set?(object, key, value) == true { return }
     if let own = object as? JSNativeMembers, own.jsSetMember(key, value) { return }
     // A block property the headers declare is set by the dispatch, of its block type; key-value coding

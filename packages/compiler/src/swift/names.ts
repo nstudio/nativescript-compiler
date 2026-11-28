@@ -49,6 +49,9 @@ export const namesMethods = {
 		// Library mode: core's `global` is the program's global object; the Android SDK's namespaces exist only there.
 		// A name nothing declares for iOS (`android`, `java`, Node's `__dirname`) is a value whose use throws.
 		if (name === 'global' && (this.library ? !libDecl || libDecl.getSourceFile().isDeclarationFile : !!libDecl && libDecl.getSourceFile().isDeclarationFile)) return 'jsGlobalThis';
+		// A timer or microtask function held as a value (`const clear = clearTimeout`, `requestAnimationFrame`, `queueMicrotask`), core's declaration of it too.
+		const held = !!libDecl && libDecl.getSourceFile().isDeclarationFile && Object.hasOwn(LIB_FUNCTION_VALUES, name) && !(ts.isCallExpression(e.parent) && e.parent.expression === e) ? LIB_FUNCTION_VALUES[name] : undefined;
+		if (held) return this.convert(held.code, held.type, this.typeOf(e));
 		if (this.isDomGlobal(e)) return `jsGlobalThis[jsKey: ${swiftString(name)}]`;
 		// The runtime gives the bundled app's module its folder in the app bundle.
 		if (name === '__dirname' && (!libDecl || libDecl.getSourceFile().isDeclarationFile)) return 'jsAppDirectory';
@@ -69,9 +72,6 @@ export const namesMethods = {
 			if (sdk) return sdk;
 			return this.fromAnyCode(`jsGlobalThis[jsKey: ${swiftString(name)}]`, this.typeOf(e));
 		}
-		// A timer or microtask function held as a value (`const clear = clearTimeout`), core's declaration of it too.
-		const held = !!libDecl && libDecl.getSourceFile().isDeclarationFile && Object.hasOwn(LIB_FUNCTION_VALUES, name) && !(ts.isCallExpression(e.parent) && e.parent.expression === e) ? LIB_FUNCTION_VALUES[name] : undefined;
-		if (held) return this.convert(held.code, held.type, this.typeOf(e));
 		// A global function core or the app only declares (`zonedCallback`, which core's globals set), as a value: the global object's.
 		if (!this.library && libDecl && ts.isFunctionDeclaration(libDecl) && !libDecl.body && (appAmbient || isCoreDeclaration(libDecl)) && ts.isSourceFile(libDecl.parent) && !hasModifier(libDecl, ts.SyntaxKind.ExportKeyword)) return 'jsGlobalThis[jsKey: ' + swiftString(name) + ']';
 		// `Object` as a value, not the receiver of a call the translation knows (`(<any>Object).entries(o)`): its functions as script has them.

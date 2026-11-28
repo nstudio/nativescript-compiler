@@ -29,7 +29,7 @@ on:
       core_ref:
         description: 'NativeScript/NativeScript git ref to generate kits from (branch, tag, or SHA)'
         required: true
-        default: 'feat/core-stronger-types-and-hooks'
+        default: 'main'
         type: string
       dist_tag:
         description: 'npm dist-tag'
