@@ -55,7 +55,7 @@ commit where CI's differential and `wtfjs.ts --check` steps pass. To compare it 
 | 27 | Addition of RegExps | refused: 1573 R | refused: 1573 R | builtin-prototype |  |
 | 28 | Strings aren't instances of `String` | matches Node, the rest refused: 1520 ✓, 1521 R, 1546 ✓ | matches Node, the rest refused: 1520 ✓, 1521 R, 1546 ✓ | wrapper-object |  |
 | 29 | Calling functions with backticks | matches Node: 1525 ✓, 1548 ✓ | matches Node: 1525 ✓, 1548 ✓ |  |  |
-| 30 | Call call call | matches Node, the rest refused: 1567 ✓, 1578 R | matches Node: 1567 ✓, 1578 ✓ | ? (Swift) |  |
+| 30 | Call call call | matches Node, the rest refused: 1567 ✓, 1578 R | matches Node: 1567 ✓, 1578 ✓ | other-receiver (Swift) |  |
 | 31 | A `constructor` property | matches Node: 1522 ✓ | matches Node: 1522 ✓ |  |  |
 | 32 | Object as a key of object's property | matches Node: 1547 ✓ | matches Node: 1547 ✓ |  |  |
 | 33 | Accessing prototypes with `__proto__` | refused: 1566 R | refused: 1566 R | proto |  |
