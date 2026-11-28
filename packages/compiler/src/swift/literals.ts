@@ -1,6 +1,6 @@
 // Literals as Swift: arrays, objects and dynamic objects.
 import ts from 'typescript';
-import { functionParts, ident, identPath, initOrder, isNullish, isOptional, label, optionalType, splitTopLevel, swiftString, withoutThenables, spell, RT } from './syntax.ts';
+import { functionParts, ident, identPath, implicitType, initOrder, isNullish, isOptional, label, optionalType, splitTopLevel, swiftString, withoutThenables, spell, RT } from './syntax.ts';
 import type { ShapeField, Translator } from './translator.ts';
 import { assertedOperand, evolvingElementContext, intersectionAliasMembers, isTypeParameterType, literalKey, openSpreadType, spreadOperand, unquoted } from '../semantics/lang.ts';
 import { place } from '../semantics/placement.ts';
@@ -256,7 +256,7 @@ export const literalsMethods = {
 			}
 		};
 		// A field the class holds implicitly unwrapped (`shapeHeld`) takes what the literal gives as optional, undefined included.
-		const loose = (want: string | undefined) => !!want && target === name && this.shapeHeld({ type: want }) === `${want}!`;
+		const loose = (want: string | undefined) => !!want && target === name && this.shapeHeld({ type: want }) === implicitType(want);
 		// Methods that read `this` see the object through a weak reference the literal sets once it exists.
 		// A function expression as a member (`onViewLoaded: function () { this.loadedCount++ }`) reads the object as `this` too.
 		const thisFunction = (p: ts.ObjectLiteralElementLike): p is ts.PropertyAssignment & { initializer: ts.FunctionExpression } => ts.isPropertyAssignment(p) && ts.isFunctionExpression(p.initializer) && thisNodes(p.initializer).length > 0;

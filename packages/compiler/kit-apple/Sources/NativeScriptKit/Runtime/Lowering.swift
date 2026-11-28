@@ -11,11 +11,11 @@ public final class JSAsyncLoop {
     nonisolated deinit {}
     private var running = false
     private var pending = false
-    private var iteration: ((@escaping () -> Void) -> Void)?
+    private var iteration: ((@escaping @MainActor () -> Void) -> Void)?
 
     public init() {}
 
-    public func run(_ body: @escaping (@escaping () -> Void) -> Void) {
+    public func run(_ body: @escaping (@escaping @MainActor () -> Void) -> Void) {
         iteration = body
         step()
     }
@@ -39,6 +39,7 @@ public func jsReport(_ body: () throws -> Void) {
 
 /// Without NativeScript's `Application` (a plain program, the differential tests), an uncaught error goes to
 /// `globalThis.__onUncaughtError` when script sets one, where core's handler is; else to standard error.
+@MainActor
 public var jsUncaughtHandler: (Any?) -> Void = { value in
     if !jsReportedToScript(value) { jsError("Uncaught", value) }
 }

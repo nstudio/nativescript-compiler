@@ -226,7 +226,7 @@ export const callsMethods = {
 			}
 			// A field holding a function untyped (`private _resolve;`): called with the object as `this`.
 			const field = this.resolve(callee.name)?.valueDeclaration;
-			if (this.isAny(callee) && field && (ts.isPropertyDeclaration(field) || ts.isPropertySignature(field) || ts.isMethodSignature(field) || ts.isParameter(field))) {
+			if (this.isAny(callee) && field && (ts.isPropertyDeclaration(field) || ts.isPropertySignature(field) || (ts.isMethodSignature(field) && !isLibDeclaration(field)) || ts.isParameter(field))) {
 				const args = e.arguments.some(ts.isSpreadElement) ? `${this.packed(e.arguments, 'JSArray<Any?>', this.restSlot(e, 'Any?'))}.storage` : `[${e.arguments.map((a) => this.restArgument(e, a, 'Any?')).join(', ')}]`;
 				const code = `${RT.jsCallValue}(${this.expr(callee)}, this: ${this.coerce(target, 'Any?')}, optional: ${!!e.questionDotToken}, ${args})`;
 				const t = this.typeOf(e);

@@ -158,11 +158,16 @@ export function balanced(code: string): boolean {
 	return depth === 0 && !quoted;
 }
 
-/** `T?`, keeping an already optional type and parenthesizing a function type. */
+/** `T?`, keeping an already optional type and parenthesizing a function or existential (`any P`) type. */
 export function optionalType(t: string): string {
 	if (t.endsWith('!')) return t;
-	if (hasTopLevelArrow(t)) return `(${t})?`;
+	if (hasTopLevelArrow(t) || t.startsWith('any ')) return `(${t})?`;
 	return t.endsWith('?') ? t : `${t}?`;
+}
+
+/** `T!`, parenthesizing a function or existential (`any P`) type. */
+export function implicitType(t: string): string {
+	return hasTopLevelArrow(t) || t.startsWith('any ') ? `(${t})!` : `${t}!`;
 }
 
 const NAMES: Partial<Record<NativeKind, string>> = { string: 'String', number: 'Double', boolean: 'Bool', void: 'Void', never: 'Never', any: 'Any', symbol: 'JSSymbol', bigint: 'JSBigInt' };
@@ -170,7 +175,7 @@ const NAMES: Partial<Record<NativeKind, string>> = { string: 'String', number: '
 /** A native type as Swift spells it. */
 export function spell(t: NativeType): string {
 	if (t.text !== undefined) return t.text;
-	if (t.implicit) return t.kind === 'function' ? `(${t.name})!` : `${t.name}!`;
+	if (t.implicit) return implicitType(t.name);
 	return t.optional ? optionalType(t.name) : t.name;
 }
 
@@ -367,10 +372,10 @@ export const SWIFT_SYNTAX: Omit<AsyncSyntax, 'unwrap'> = {
 	runtime: RT,
 	voidType: 'Void',
 	untypedType: 'Any?',
-	fnType: (params, ret) => `(${params.map((p) => (p === '() -> Void' ? `@escaping ${p}` : p)).join(', ')}) -> ${ret}`,
+	fnType: (params, ret) => (params.length === 0 && ret === 'Void' ? '@MainActor () -> Void' : `(${params.map((p) => (p === '@MainActor () -> Void' ? `@escaping ${p}` : p)).join(', ')}) -> ${ret}`),
 	constant: (name, type, value) => `let ${name}${type ? `: ${type}` : ''} = ${value}`,
 	closure: (params, body, onError, i) => {
-		const list = `(${params.map(([n, t]) => `${n}: ${t === '() -> Void' ? '@escaping ' : ''}${t}`).join(', ')})`;
+		const list = `(${params.map(([n, t]) => `${n}: ${t === '@MainActor () -> Void' ? '@escaping ' : ''}${t}`).join(', ')})`;
 		if (!throwsOutside(body.join('\n'))) return `{ ${list} -> Void in\n${body.join('\n')}\n${i}}`;
 		const deeper = body.map((l) => '    ' + l);
 		return `{ ${list} -> Void in\n${i}    do {\n${deeper.join('\n')}\n${i}    } catch {\n${i}        ${onError}(${RT.jsCaught}(error))\n${i}    }\n${i}}`;

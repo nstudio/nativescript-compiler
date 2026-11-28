@@ -1,6 +1,6 @@
 // Facts of Swift types: nullish storage, setters and widened parameters, declared types and shapes, and small tests of a type.
 import ts from 'typescript';
-import { isFunctionType, isNullish, isOptional, nullishType, optionalType, shapeName } from './syntax.ts';
+import { implicitType, isFunctionType, isNullish, isOptional, nullishType, optionalType, shapeName } from './syntax.ts';
 import type { ShapeField, Translator } from './translator.ts';
 import { shapePlanOfLiteral } from '../semantics/shapes.ts';
 import { accessedDeclaration, assignedValues, wellKnownMember } from '../semantics/lang.ts';
@@ -459,12 +459,12 @@ export const typeFactsMethods = {
 	setBeforeRead(this: Translator, t: string): string {
 		const z = this.zero(t);
 		if (z) return `${t} = ${z}`;
-		return isFunctionType(t) || t.startsWith('any ') ? `(${t})!` : `${t}!`;
+		return implicitType(t);
 	},
 	deferred(this: Translator, t: string): string {
 		const z = this.zero(t);
 		if (z) return `${t} = ${z}`;
 		if (this.lenient && this.nullableRef(t) !== t) return this.nullableRef(t);
-		return isFunctionType(t) ? `(${t})!` : `${t}!`;
+		return implicitType(t);
 	},
 };

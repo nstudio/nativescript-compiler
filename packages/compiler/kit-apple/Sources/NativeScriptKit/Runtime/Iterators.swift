@@ -646,7 +646,7 @@ public func jsAsyncIteratorOf(_ value: Any?) throws -> JSAsyncIterator<Any?> {
 }
 
 /// AsyncIteratorClose for `for await` leaving early: awaits `return()` when the iterator has one.
-public func jsAsyncClose(_ iterator: JSAsyncIteratorProtocol, _ then: @escaping () -> Void, _ onError: @escaping (Any?) -> Void) {
+public func jsAsyncClose(_ iterator: JSAsyncIteratorProtocol, _ then: @escaping @MainActor () -> Void, _ onError: @escaping (Any?) -> Void) {
     guard let promise = iterator.jsReturnPromise(nil) else { return then() }
     jsAwait(promise, { result in
         guard let object = jsFlat(result), jsIsObject(object), !(object is JSNull) else { return onError(JSTypeError("Iterator result \(jsToString(result)) is not an object")) }

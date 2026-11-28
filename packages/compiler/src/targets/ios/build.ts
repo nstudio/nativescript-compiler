@@ -411,7 +411,7 @@ export async function writeIos(b: IosBuild): Promise<void> {
 		// Script is single-threaded unless the app starts workers (each in its own isolated JSRealm on a worker thread).
 		// When workers are present, disable dynamic MainActor assertions in Debug too so worker threads can run realm-isolated code.
 		const hasWorkers = !!(b.workers && b.workers.length);
-		const swiftMode = { SWIFT_VERSION: '"6"', SWIFT_DEFAULT_ACTOR_ISOLATION: 'MainActor', ...(hasWorkers ? { OTHER_SWIFT_FLAGS: '"$(inherited) -Xfrontend -disable-dynamic-actor-isolation"' } : {}) };
+		const swiftMode = { SWIFT_VERSION: '"6"', SWIFT_DEFAULT_ACTOR_ISOLATION: 'MainActor', SWIFT_UPCOMING_FEATURE_INFER_ISOLATED_CONFORMANCES: 'YES', ...(hasWorkers ? { OTHER_SWIFT_FLAGS: '"$(inherited) -Xfrontend -disable-dynamic-actor-isolation"' } : {}) };
 		// Release only: Debug keeps Swift 6's run-time isolation checks when no workers are present.
 		const swiftModeRelease = (...flags: string[]) => `      configs:\n        Release:\n          OTHER_SWIFT_FLAGS: "${['$(inherited)', ...(hasWorkers ? [] : ['-Xfrontend', '-disable-dynamic-actor-isolation']), ...flags].join(' ')}"\n`;
 		// The app's own Swift (App_Resources/iOS/src), compiled in the app's target, was written for Swift 5: the target keeps that mode,

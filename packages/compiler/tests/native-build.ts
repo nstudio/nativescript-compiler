@@ -70,7 +70,7 @@ export const kotlinRuntimeSources = [...readdirSync(join(kitAndroid, 'runtime'))
 export type Optimize = '-Onone' | '-O' | '-Osize';
 
 /** The language mode and isolation the kit and an app's code compile with (the CLI's project settings). */
-export const SWIFT_MODE = ['-swift-version', '6', '-default-isolation', 'MainActor'];
+export const SWIFT_MODE = ['-swift-version', '6', '-default-isolation', 'MainActor', '-enable-upcoming-feature', 'InferIsolatedConformances'];
 
 /**
  * The Swift runtime as a static library and module in `build`, rebuilt when a source is newer or it was built with

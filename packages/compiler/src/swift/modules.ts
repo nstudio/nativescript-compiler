@@ -1,7 +1,7 @@
 // Module-level declarations as Swift: modules, variables, namespaces, constants, interfaces and protocols.
 import { setLossSite } from '../semantics/losses.ts';
 import ts from 'typescript';
-import { NONISOLATED_DEINIT, SWIFT_GLOBAL_FUNCTIONS, escapingFunction, functionParts, ident, identPath, indented, isFunctionType, isNullish, isOptional, nativeResult, nativeZero, optionalType, swiftString, RT } from './syntax.ts';
+import { NONISOLATED_DEINIT, SWIFT_GLOBAL_FUNCTIONS, escapingFunction, functionParts, ident, identPath, implicitType, indented, isFunctionType, isNullish, isOptional, nativeResult, nativeZero, optionalType, swiftString, RT } from './syntax.ts';
 import type { CellStatic } from './syntax.ts';
 import type { ShapeField, Translator } from './translator.ts';
 import { lookupClass, lookupMember } from './native/sdk.ts';
@@ -892,7 +892,7 @@ ${members.join('\n')}
 		if (this.lenientAll) return isFunctionType(f.type) ? `(${f.type})?` : this.nullableRef(f.type);
 		// An app's object field holds undefined too, as a literal asserted to the type may give it (`{ …, view } as
 		// ItemEventData` before the view exists); a read that uses it unwraps it there.
-		return !this.library && !isOptional(f.type) && !f.type.endsWith('!') && !isFunctionType(f.type) && this.nullableRef(f.type) !== f.type ? `${f.type}!` : f.type;
+		return !this.library && !isOptional(f.type) && !f.type.endsWith('!') && !isFunctionType(f.type) && this.nullableRef(f.type) !== f.type ? implicitType(f.type) : f.type;
 	},
 	membersWritten(this: Translator): Set<string> {
 		return this.facts.assignedMembers();
