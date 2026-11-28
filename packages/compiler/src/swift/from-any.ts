@@ -255,7 +255,7 @@ export const fromAnyMethods = {
 			// An interface classes implement: an object conforming to it as it is, any other read by its keys.
 			return type.endsWith('?') ? `${RT.jsUnlessNullish}(${code}, { (${RT.jsFlat}($0) as? ${base}) ?? ${base}Object(jsObject: $0) })` : `{ (__o: Any?) -> ${base} in (${RT.jsFlat}(__o) as? ${base}) ?? ${base}Object(jsObject: __o) }(${code})`;
 		}
-		if (this.facts.hasInterface(this, this.interfaces, (d, s) => this.topName(d, s), base) || !!this.shapes.named(base) || (!this.library && this.core.viewable(base))) {
+		if ((!this.classNamed(base) && (this.facts.hasInterface(this, this.interfaces, (d, s) => this.topName(d, s), base) || !!this.shapes.named(base))) || (!this.library && this.core.viewable(base))) {
 			this.used.add(base);
 			// An object of the interface's class already is the object read (a receiver `call` passes); any other is read by its keys.
 			return type.endsWith('?') ? `${RT.jsUnlessNullish}(${code}, { (${RT.jsFlat}($0) as? ${base}) ?? ${this.viewOf(base, '$0')} })` : `{ (__o: Any?) -> ${base} in (${RT.jsFlat}(__o) as? ${base}) ?? ${this.viewOf(base, '__o')} }(${code})`;

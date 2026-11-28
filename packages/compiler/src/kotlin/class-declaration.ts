@@ -10,7 +10,7 @@ import { droppedProtocolMemberNames, implementedInterfaces, initializedNull } fr
 import { hasModifier } from '../semantics/ast.ts';
 import { isStatic } from '../semantics/throws.ts';
 import { isCoreDeclaration, isShimDeclaration } from '../program/core-facts.ts';
-import { classExprCaptures, classExprScriptName, programBase } from '../semantics/classes.ts';
+import { classExprCaptures, classExprScriptName, programBase, prototypeMethodList } from '../semantics/classes.ts';
 import type { ClassPlan } from '../semantics/class-plan.ts';
 
 /** What a class declaration's steps share: its facts, computed once, and the parts each step adds to. */
@@ -266,12 +266,9 @@ export const classDeclMethods = {
 		const { cls, name } = k;
 		if (this.library || !this.staticInits || !ts.isClassDeclaration(cls) || !this.facts.prototypeClasses().has(cls) || cls.typeParameters?.length) return;
 		const owner = name.replace(/<.*$/, '');
-		const seen = new Set<string>();
-		for (const m of cls.members) {
-			if (!ts.isMethodDeclaration(m) || !m.body || isStatic(m) || ts.isPrivateIdentifier(m.name) || ts.isComputedPropertyName(m.name) || m.typeParameters?.length || m.asteriskToken || m.parameters.some((p) => p.dotDotDotToken || (ts.isIdentifier(p.name) && p.name.text === 'this')) || this.readsArguments(m)) continue;
-			const key = m.name.getText().replace(/^['"]|['"]$/g, '');
-			if (seen.has(key)) continue;
-			seen.add(key);
+		for (const { method: m, key } of prototypeMethodList(cls, {
+			skip: (m, key) => m.parameters.some((p) => p.dotDotDotToken || (ts.isIdentifier(p.name) && p.name.text === 'this')) || this.readsArguments(m) || (k.plugin && !k.layout.inherited.has(key) && !(k.kitRoot && this.core?.kitMember(k.kitRoot, key)) && !this.facts.isNamed(key)),
+		})) {
 			const args = m.parameters.map((p, idx) => this.fromAnyCode(this.marks.pureCode(`__a.getOrNull(${idx})`), this.paramType(p), true));
 			const call = `__o.${this.methodIdent(key)}(${args.join(', ')})`;
 			const body = this.returnTypeOf(m) === 'Unit' ? `${call}; null` : call;

@@ -373,6 +373,7 @@ export const functionsMethods = {
 		const given = ts.isFunctionExpression(fn) && thisArgBound(fn, this.checker) ? fn.parameters.filter((q) => !isThisParameter(q)).length : fn.parameters.length;
 		for (let k = given; k < slotParams.length; k++) params += `${params ? ', ' : ''}__u${k}: ${slotParams[k]}`;
 		if (!ts.isMethodDeclaration(fn) && fn.name && fn.body && refersTo(fn.body, this.checker.getSymbolAtLocation(fn.name), this.checker)) {
+			this.refuseNamedGenerator(fn);
 			const fnName = ident(fn.name.text);
 			const pTypes = splitTopLevel(params)
 				.map((p) => p.trim())

@@ -9,7 +9,7 @@ import { returnCell } from '../semantics/placement.ts';
 import { hasModifier, isLibDeclaration, withoutDefault, implementationOf, declaresThis } from '../semantics/ast.ts';
 import { isAsync, isStatic } from '../semantics/throws.ts';
 import { isCoreDeclaration } from '../program/core-facts.ts';
-import { methodValues } from '../semantics/lang.ts';
+import { builtinConstructorSlot, methodValues } from '../semantics/lang.ts';
 import { baseMethod } from '../semantics/classes.ts';
 import { isUntyped, spelledType } from '../semantics/types.ts';
 
@@ -235,10 +235,8 @@ export const functionsMethods = {
 		if (e.text === 'Array') return 'jsArrayBuiltin';
 		const conversion = ({ Number: [RT.jsToNumber, 'Double'], String: [RT.jsToString, 'String'], Boolean: [RT.jsTruthy, 'Bool'] } as Record<string, [string, string]>)[e.text];
 		if (!conversion) return null;
-		const context = this.checker.getContextualType(e);
-		const slot = context && this.checker.getNonNullableType(context).getCallSignatures()[0];
-		// Placed untyped (`const f: any = Number`, `s.constructor === String`): singleton builtin constructor.
-		if (!slot) return `js${e.text}Constructor`;
+		const { singleton, slot } = builtinConstructorSlot(e, this.checker, (c) => isUntyped(spelledType(this.type(c, e))));
+		if (singleton) return singleton;
 		const param = slot?.getParameters()[0];
 		const t = param ? this.type(this.checker.getTypeOfSymbolAtLocation(param, e), e) : 'Any?';
 		const call = p && ts.isCallExpression(p) && p.arguments[0] === e && ts.isPropertyAccessExpression(p.expression) ? p.expression.expression : null;
@@ -367,6 +365,7 @@ export const functionsMethods = {
 		const throws = !isAsync(fn) && this.throwsInfo.fn(fn) ? 'throws ' : '';
 		// A function expression's name is only for itself: one that never refers to itself is an anonymous function.
 		if (fn.name && refersTo(fn.body, this.checker.getSymbolAtLocation(fn.name), this.checker)) {
+			this.refuseNamedGenerator(fn);
 			const fnName = ident(fn.name.text);
 			const extra = this.unusedParameters(fn).map((t, k) => `_ __unused${k}: ${t}`);
 			const fnParams = [this.params(fn, false), ...extra, ...pad.map((p) => (p.startsWith('_ ') ? p : `_ ${p}`))].filter(Boolean).join(', ');

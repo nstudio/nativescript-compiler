@@ -27,7 +27,7 @@ private fun jsJSONInternalize(holder: Any, key: String, reviver: Any?): Any? {
             @Suppress("UNCHECKED_CAST") val array = value as JSArray<Any?>
             for (i in 0 until array.size) if (i < array.size) array.setAt(i, jsJSONInternalize(array, i.toString(), reviver))
         }
-        is JSObject -> for (k in value.keys) {
+        is JSObject -> for (k in value.keys.toList()) {
             val revived = jsJSONInternalize(value, k, reviver)
             if (revived == null) value.delete(k) else value[k] = revived
         }

@@ -610,7 +610,7 @@ class JSDateTimeFormat(locales: Any? = null, options: Any? = null, required: Str
     }
 
     private fun zoneName(ms: Long, long: Boolean): String {
-        if (timeZoneId == "UTC") return if (long) "Coordinated Universal Time" else "UTC"
+        if (timeZoneId == "UTC" || timeZoneId == "Etc/UTC") return if (long) "Coordinated Universal Time" else "UTC"
         // ICU's zone names start in 1970; before, a zone is its offset from GMT.
         if (ms < 0) return offsetName(ms, long)
         val dst = timeZone.inDaylightTime(java.util.Date(ms))

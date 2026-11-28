@@ -274,6 +274,11 @@ export const loweringMethods = {
 			}
 		}
 	},
+
+	/** Refuses a self-referencing named generator expression (`function* f() { yield f; }`). */
+	refuseNamedGenerator(this: RefusalHost, fn: ts.FunctionLikeDeclaration): void {
+		if (fn.asteriskToken) throw this.error(fn, 'a named function expression', 'named-function-expression');
+	},
 };
 
 export type LoweringMethods = typeof loweringMethods;

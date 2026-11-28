@@ -66,7 +66,7 @@ commit where CI's differential and `wtfjs.ts --check` steps pass. To compare it 
 | 38 | Nested labels | matches Node: 1549 ✓ | matches Node: 1549 ✓ |  |  |
 | 39 | Insidious `try..catch` | matches Node, the rest refused: 1549 ✓, 1568 R | matches Node: 1549 ✓, 1568 ✓ | finally-jump (Swift) |  |
 | 40 | Is this multiple inheritance? | refused: 1574 R | refused: 1574 R | unsupported-base |  |
-| 41 | A generator which yields itself | matches Node, the rest refused: 1551 ✓, 1569 R | matches Node, the rest refused: 1551 ✓, 1569 R | ? |  |
+| 41 | A generator which yields itself | matches Node, the rest refused: 1551 ✓, 1569 R | matches Node, the rest refused: 1551 ✓, 1569 R | named-function-expression |  |
 | 42 | A class of class | matches Node: 1550 ✓, 1570 ✓ | matches Node: 1550 ✓, 1570 ✓ |  |  |
 | 43 | Non-coercible objects | matches Node, the rest refused: 1553 ✓, 1571 R | matches Node, the rest refused: 1553 ✓, 1571 R | object-call |  |
 | 44 | Tricky arrow functions | matches Node: 1548 ✓ | matches Node: 1548 ✓ |  |  |

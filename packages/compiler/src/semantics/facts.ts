@@ -57,7 +57,7 @@ export class ProgramFacts {
 		if (this.ifaceDecls) return this.ifaceDecls;
 		const out: (ts.InterfaceDeclaration | ts.TypeAliasDeclaration)[] = [];
 		const visit = (n: ts.Node) => {
-			if (isShapeInterfaceDecl(n)) out.push(n);
+			if (isShapeInterfaceDecl(n) && !(this.checker.getSymbolAtLocation(n.name)?.flags! & ts.SymbolFlags.Class)) out.push(n);
 			ts.forEachChild(n, visit);
 		};
 		for (const f of this.files) visit(f);

@@ -614,3 +614,17 @@ export function spellInstantiatedCollection(type: ts.Type, checker: ts.TypeCheck
 	const args = info.typeArgs.map(render);
 	return info.kind === 'Map' ? `JSMap<${args[0] ?? 'Any?'}, ${args[1] ?? 'Any?'}>` : `JS${info.kind}<${args[0] ?? 'Any?'}>`;
 }
+
+/** Own instance methods of `cls` eligible for non-enumerable registration on `JSPrototypes.of(...)`. */
+export function prototypeMethodList(cls: ts.ClassDeclaration, options: { skip: (m: ts.MethodDeclaration, key: string) => boolean }): { method: ts.MethodDeclaration; key: string }[] {
+	const seen = new Set<string>();
+	const out: { method: ts.MethodDeclaration; key: string }[] = [];
+	for (const m of cls.members) {
+		if (!ts.isMethodDeclaration(m) || !m.body || isStatic(m) || ts.isPrivateIdentifier(m.name) || ts.isComputedPropertyName(m.name) || m.typeParameters?.length || m.asteriskToken) continue;
+		const key = m.name.getText().replace(/^['"]|['"]$/g, '');
+		if (seen.has(key) || options.skip(m, key)) continue;
+		seen.add(key);
+		out.push({ method: m, key });
+	}
+	return out;
+}

@@ -137,10 +137,11 @@ export const expressionsMethods = {
 			const t = this.lenientRef(declared) !== declared ? optionalType(declared) : declared;
 			const exprType = this.typeOf(a);
 			const rt = isUntyped(spelledType(t)) && !isUntyped(spelledType(exprType)) && exprType !== 'Void' ? exprType : t;
+			const retType = this.lenientRef(rt) !== rt ? optionalType(rt) : rt;
 			const tp = this.tryPrefix(a);
 			const retVal = rt !== t ? this.fromAnyCode(this.expr(a.left), rt, true) : this.expr(a.left);
 			const retThrows = tp || /\btry\b/.test(retVal);
-			return `({ () ${retThrows ? 'throws ' : ''}-> ${rt} in ${tp}${this.binary(a)}; return ${retVal} }())`;
+			return `({ () ${retThrows ? 'throws ' : ''}-> ${retType} in ${tp}${this.binary(a)}; return ${retVal} }())`;
 		}
 		if (ts.isParenthesizedExpression(e)) {
 			const inner = this.expr(e.expression);

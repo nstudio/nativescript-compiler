@@ -339,7 +339,12 @@ export const literalsMethods = {
 				}
 			} else if (ts.isMethodDeclaration(p)) {
 				const key = literalKey(p.name, this.checker) ?? this.symbolMemberName(p.name) ?? p.name.getText();
-				const want = functionParts((order.find((f) => f.name === key)?.type ?? '').replace(/^\((.*)\)[?!]$/, '$1'));
+				const fieldType = order.find((f) => f.name === key)?.type ?? '';
+				if (isUntyped(spelledType(fieldType))) {
+					given.set(key, this.untypedMethod(p));
+					continue;
+				}
+				const want = functionParts(fieldType.replace(/^\((.*)\)[?!]$/, '$1'));
 				// An unannotated method returning an object literal makes it against its field's declared result, as TypeScript types the returned literal.
 				const sig = !p.type && want && want.result !== 'Void' ? this.checker.getSignatureFromDeclaration(p) : undefined;
 				const literalResult = !!sig && !!this.checker.getReturnTypeOfSignature(sig).symbol?.declarations?.some(ts.isObjectLiteralExpression);

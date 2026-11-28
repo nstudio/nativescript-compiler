@@ -11,7 +11,7 @@ import { isLibDeclaration, withoutDefault, isWriteTarget } from '../semantics/as
 import { isAsync, isStatic } from '../semantics/throws.ts';
 import { isCoreDeclaration, isShimDeclaration } from '../program/core-facts.ts';
 import { isNativePropertyDecorator } from '../program/patterns.ts';
-import { prototypeDecorated } from '../semantics/classes.ts';
+import { prototypeDecorated, prototypeMethodList } from '../semantics/classes.ts';
 import { isKit, isUntyped, spelledType } from '../semantics/types.ts';
 
 export const classesMethods = {
@@ -333,13 +333,13 @@ export const classesMethods = {
 		if (this.library || this.native.classDecl(cls) || cls.typeParameters?.some((p) => !this.erasesTypeParameter(p))) return '';
 		const i = this.indent;
 		const name = this.className(cls);
-		const seen = new Set<string>();
+		const plugin = this.pluginFiles.has(cls.getSourceFile().fileName);
+		const inherited = plugin ? this.classPlan(cls).inherited : null;
+		const kitRoot = plugin ? this.kitRootOf(cls) : null;
 		const entries: string[] = [];
-		for (const m of cls.members) {
-			if (!ts.isMethodDeclaration(m) || !m.body || isStatic(m) || ts.isPrivateIdentifier(m.name) || ts.isComputedPropertyName(m.name) || m.typeParameters?.length || m.asteriskToken || isAsync(m) || m.parameters.some((p) => p.dotDotDotToken) || this.readsArguments(m)) continue;
-			const key = m.name.getText().replace(/^['"]|['"]$/g, '');
-			if (seen.has(key)) continue;
-			seen.add(key);
+		for (const { method: m, key } of prototypeMethodList(cls, {
+			skip: (m, key) => isAsync(m) || m.parameters.some((p) => p.dotDotDotToken) || this.readsArguments(m) || (plugin && !inherited!.has(key) && !(kitRoot && this.core.kitMember(kitRoot, key)) && !this.facts.isNamed(key)),
+		})) {
 			const sig = this.emittedSignature(m);
 			const args = sig.params.map((p, k) => this.throwingConverts(() => this.presentFromAny(`${RT.jsArg}(__a, ${k})`, p.type, true, true)));
 			const call = this.marks.tryIf(this.throwsInfo.fn(m), `__o.${ident(key)}(${args.join(', ')})`);

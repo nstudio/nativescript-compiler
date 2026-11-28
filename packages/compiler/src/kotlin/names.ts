@@ -4,7 +4,7 @@ import { KIT_NAMES_ANDROID } from './library.ts';
 import { ERRORS } from '../semantics/globals.ts';
 import { IOS_TYPINGS, ident, isThisParameter, kotlinString, lambda, optionalType, RT } from './syntax.ts';
 import type { Translator } from './translator.ts';
-import { accessedDeclaration, canReadArguments, isArguments, objectMethod } from '../semantics/lang.ts';
+import { accessedDeclaration, builtinConstructorSlot, canReadArguments, isArguments, objectMethod } from '../semantics/lang.ts';
 import { hasModifier, isAppDeclarationFile, isLibDeclaration, isWriteTarget } from '../semantics/ast.ts';
 import { isCoreDeclaration } from '../program/core-facts.ts';
 import { isStatic } from '../semantics/throws.ts';
@@ -21,8 +21,8 @@ export const namesMethods = {
 		if (asValue && (ERRORS[e.text] || ['Number', 'String', 'Boolean'].includes(e.text)) && isLibDeclaration(builtinDecl)) {
 			if (ERRORS[e.text]) return `${ERRORS[e.text]}::class.java`;
 			// Placed untyped or compared (`const f: any = Number`, `s.constructor === String`): singleton builtin constructor.
-			const context = this.checker.getContextualType(e);
-			if (!context || !this.checker.getNonNullableType(context).getCallSignatures()[0]) return `js${e.text}Constructor`;
+			const { singleton } = builtinConstructorSlot(e, this.checker, (c) => isUntyped(spelledType(this.type(c, e))));
+			if (singleton) return singleton;
 			return `{ value: Any? -> ${e.text === 'Number' ? RT.jsToNumber : e.text === 'String' ? RT.jsToString : RT.jsTruthy}(value) }`;
 		}
 		// `Promise`, `Date`, `Array`, `Object` as values (`const { isArray } = Array`, a `PromiseConstructorLike` default): the runtime's.

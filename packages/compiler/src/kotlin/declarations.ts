@@ -19,7 +19,7 @@ export const declarationsMethods = {
 	isStringBuilderLocal(this: Translator, d: ts.VariableDeclaration): boolean {
 		if (!ts.isIdentifier(d.name) || !d.initializer) return false;
 		const ownerFn = ts.findAncestor(d, (n): n is ts.FunctionLikeDeclaration => ts.isFunctionLike(n) && 'body' in n && !!(n as ts.FunctionLikeDeclaration).body);
-		if (!ownerFn || !ownerFn.body || ts.isSourceFile(d.parent.parent.parent)) return false;
+		if (!ownerFn || !ownerFn.body || ts.isConstructorDeclaration(ownerFn) || ts.isSourceFile(d.parent.parent.parent)) return false;
 		const sym = this.checker.getSymbolAtLocation(d.name);
 		if (!sym || (sym.declarations?.length ?? 0) !== 1) return false;
 		let appendedInLoop = false;

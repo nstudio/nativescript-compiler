@@ -17,7 +17,6 @@ export const staticCallsMethods = {
 		const s = staticFunction(owner, member);
 		if (!s) throw this.error(e, `${owner}.${member}`, 'library-member');
 		const method = s.name;
-		const a = () => this.args(e);
 		const arg = (k: number) => e.arguments[k];
 		const T = () => this.typeOf(e);
 		if (TYPED_ARRAYS.includes(owner) && (method === 'of' || method === 'from')) {
@@ -114,7 +113,7 @@ export const staticCallsMethods = {
 					});
 				}
 				if (method === 'from' && (e.arguments.length === 2 || e.arguments.length === 3)) return this.ignoringThisArg(e, arg(0), () => `JSArray<${this.elementTypeOf(arg(0))}>.from(${this.iterable(arg(0))}).map(${this.expr(arg(1))})`);
-				if (method === 'of') return `${T()}([${a().join(', ')}])`;
+				if (method === 'of') return e.arguments.some(ts.isSpreadElement) ? this.packed(e.arguments, T()) : `${T()}([${e.arguments.map((x) => this.restArgument(e, x, T().replace(/^JSArray<(.*)>$/, '$1'))).join(', ')}])`;
 				// `Array.apply(thisArg, list)`: `Array(...list)`, a length when the list is one number.
 				if (method === 'apply' && e.arguments.length === 2) {
 					const made = `${RT.jsArrayConstruct}(${this.restArgument(e, arg(1), 'JSArray<Any?>')}.storage)`;
@@ -140,7 +139,7 @@ export const staticCallsMethods = {
 				break;
 			case 'String':
 				if (method === 'fromCharCode' && e.arguments.some(ts.isSpreadElement)) return `${RT.jsFromCharCode}(codes: ${this.packed(e.arguments, 'JSArray<Double>')}.storage)`;
-				if (method === 'fromCharCode') return `${RT.jsFromCharCode}(${a().join(', ')})`;
+				if (method === 'fromCharCode') return `${RT.jsFromCharCode}(${e.arguments.map((x) => this.restArgument(e, x, 'Double')).join(', ')})`;
 				if (method === 'fromCodePoint' && e.arguments.some(ts.isSpreadElement)) return `${RT.jsFromCodePoint}(codes: ${this.packed(e.arguments, 'JSArray<Double>')}.storage)`;
 				if (method === 'fromCodePoint') return `${RT.jsFromCodePoint}(${e.arguments.map((x) => this.restArgument(e, x, 'Double')).join(', ')})`;
 				break;

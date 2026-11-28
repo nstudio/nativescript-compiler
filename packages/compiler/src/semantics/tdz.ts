@@ -40,12 +40,13 @@ function addSameModuleTdz(checker: ts.TypeChecker, sf: ts.SourceFile, out: Set<t
 	}
 	if (!decls.size) return;
 
-	// Track which statement indices have executable code before them.
-	const runnableBefore = new Array<boolean>(sf.statements.length).fill(false);
-	let ran = false;
-	for (let i = 0; i < sf.statements.length; i++) {
-		runnableBefore[i] = ran;
-		if (canRunCode(sf.statements[i])) ran = true;
+	// Track which hoisted function declarations are reachable from executable statements before each statement index.
+	const hoistedFns = new Map<ts.Symbol, ts.FunctionDeclaration>();
+	for (const st of sf.statements) {
+		if (ts.isFunctionDeclaration(st) && st.name && st.body) {
+			const sym = checker.getSymbolAtLocation(st.name);
+			if (sym) hoistedFns.set(sym, st);
+		}
 	}
 
 	const isRef = (n: ts.Identifier): boolean => {
@@ -57,30 +58,68 @@ function addSameModuleTdz(checker: ts.TypeChecker, sf: ts.SourceFile, out: Set<t
 		return true;
 	};
 
-	const walk = (node: ts.Node, stmtIndex: number, inHoistedFn: boolean, inDeferredScope: boolean) => {
+	const referencedFnsIn = (root: ts.Node): Set<ts.Symbol> => {
+		const refs = new Set<ts.Symbol>();
+		const visit = (n: ts.Node) => {
+			if (ts.isIdentifier(n) && isRef(n)) {
+				const sym = resolveSymbol(n, checker);
+				if (sym && hoistedFns.has(sym)) refs.add(sym);
+			}
+			ts.forEachChild(n, visit);
+		};
+		ts.forEachChild(root, visit);
+		return refs;
+	};
+
+	const fnCalls = new Map<ts.Symbol, Set<ts.Symbol>>();
+	for (const [sym, fn] of hoistedFns) fnCalls.set(sym, referencedFnsIn(fn.body!));
+
+	const closeReach = (seeds: Set<ts.Symbol>): Set<ts.Symbol> => {
+		const reached = new Set<ts.Symbol>(seeds);
+		const queue = [...seeds];
+		while (queue.length) {
+			const cur = queue.pop()!;
+			for (const next of fnCalls.get(cur) ?? []) {
+				if (!reached.has(next)) {
+					reached.add(next);
+					queue.push(next);
+				}
+			}
+		}
+		return reached;
+	};
+
+	const reachableFnsBefore: Set<ts.Symbol>[] = new Array(sf.statements.length);
+	const seenBefore = new Set<ts.Symbol>();
+	for (let i = 0; i < sf.statements.length; i++) {
+		reachableFnsBefore[i] = closeReach(seenBefore);
+		const st = sf.statements[i];
+		if (!ts.isFunctionDeclaration(st) && canRunCode(st)) {
+			for (const s of referencedFnsIn(st)) seenBefore.add(s);
+		}
+	}
+
+	const walk = (node: ts.Node, stmtIndex: number, hoistedSym: ts.Symbol | null, inDeferredScope: boolean) => {
 		if (ts.isIdentifier(node) && isRef(node)) {
 			const sym = resolveSymbol(node, checker);
 			const entry = sym ? decls.get(sym) : undefined;
 			if (entry) {
-				const priorExecutable =
-					runnableBefore[entry.stmtIndex] ||
-					(stmtIndex === entry.stmtIndex &&
-						ts.isVariableStatement(sf.statements[stmtIndex]) &&
-						sf.statements[stmtIndex].declarationList.declarations.slice(0, entry.declIndex).some((prev) => !!prev.initializer && exprCanRunCode(prev.initializer)));
 				const beforeDecl = stmtIndex < entry.stmtIndex;
 				const inOwnInit = !inDeferredScope && stmtIndex === entry.stmtIndex && node.pos >= entry.decl.initializer!.pos && node.end <= entry.decl.initializer!.end;
-				if ((beforeDecl && (!inDeferredScope || priorExecutable)) || (inHoistedFn && priorExecutable) || inOwnInit) {
+				const fnReachableEarly = !!hoistedSym && reachableFnsBefore[entry.stmtIndex].has(hoistedSym);
+				if ((beforeDecl && !inDeferredScope) || fnReachableEarly || inOwnInit) {
 					out.add(entry.decl);
 				}
 			}
 		}
 		const entersDeferred = ts.isFunctionLike(node) || ts.isClassStaticBlockDeclaration(node);
-		ts.forEachChild(node, (child) => walk(child, stmtIndex, inHoistedFn, inDeferredScope || entersDeferred));
+		ts.forEachChild(node, (child) => walk(child, stmtIndex, hoistedSym, inDeferredScope || entersDeferred));
 	};
 
 	for (let i = 0; i < sf.statements.length; i++) {
 		const st = sf.statements[i];
-		walk(st, i, ts.isFunctionDeclaration(st), false);
+		const hoistedSym = ts.isFunctionDeclaration(st) && st.name ? (checker.getSymbolAtLocation(st.name) ?? null) : null;
+		walk(st, i, hoistedSym, false);
 	}
 }
 

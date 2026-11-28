@@ -294,3 +294,13 @@ export function untypedVariableInitializer(n: ts.Node, resolve: (id: ts.Identifi
 	const d = ts.isVariableDeclaration(n) ? n : ts.isIdentifier(n) ? (ts.isVariableDeclaration(n.parent) && n.parent.name === n ? n.parent : resolve(n)?.valueDeclaration) : undefined;
 	return d && ts.isVariableDeclaration(d) && !d.type && d.initializer ? ts.skipOuterExpressions(d.initializer, ts.OuterExpressionKinds.Parentheses) : null;
 }
+
+/** Whether a built-in primitive constructor value (`Number`, `String`, `Boolean`) is a singleton constructor reference (`jsNumberConstructor`) or a typed converter slot. */
+export function builtinConstructorSlot(e: ts.Identifier, checker: ts.TypeChecker, isUntypedContext: (t: ts.Type) => boolean): { singleton?: string; slot?: ts.Signature } {
+	const context = checker.getContextualType(e);
+	const slot = context && checker.getNonNullableType(context).getCallSignatures()[0];
+	if (slot) return { slot };
+	const p = e.parent;
+	const untyped = (!!context && isUntypedContext(context)) || (ts.isBinaryExpression(p) && [ts.SyntaxKind.EqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsToken, ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken].includes(p.operatorToken.kind));
+	return untyped ? { singleton: `js${e.text}Constructor` } : {};
+}
