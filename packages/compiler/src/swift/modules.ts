@@ -639,7 +639,7 @@ export const modulesMethods = {
 		});
 		const signature = (m: (typeof methods)[0]) => `func ${m.name}(${m.params.map((p) => `_ ${p.name}: ${isFunctionType(p.type) ? `@escaping ${p.type}` : p.type}`).join(', ')}) throws${m.ret === 'Void' ? '' : ` -> ${m.ret}`}`;
 		const fnType = (m: (typeof methods)[0]) => `(${m.params.map((p) => p.type).join(', ')}) throws -> ${m.ret.replace(/!$/, '?')}`;
-		const lines = [`protocol ${name}: JSDynamic {`];
+		const lines = [`@MainActor protocol ${name}: JSDynamic {`];
 		const params = (m: (typeof methods)[0]) => m.params.map((p) => `_ ${p.name}: ${isFunctionType(p.type) ? `@escaping ${p.type}` : p.type}`).join(', ');
 		const requirements = (owner: string) => {
 			for (const f of fields) this.declare(f.name, { kind: 'var', type: f.type }, owner);

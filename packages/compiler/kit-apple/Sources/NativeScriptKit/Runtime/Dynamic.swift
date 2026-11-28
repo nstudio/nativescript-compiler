@@ -252,6 +252,7 @@ public func jsDefineProperty(_ object: Any?, _ key: String, _ descriptor: Any?) 
 
 /// An object of a program class whose declared fields `Object.defineProperty` may give a descriptor (an accessor, read-only,
 /// hidden): such a field's reads and writes go through `subscript(jsKey:)`, which defers to the descriptor kept beside the object.
+@MainActor
 public protocol JSDefinable: JSDynamic {
     func jsDefinable(_ key: String) -> Bool
 }
@@ -399,6 +400,7 @@ public func jsObjectFromEntries<S: Sequence>(_ entries: S) throws -> JSRecord<An
 }
 
 /// An object that can lose an own property (`delete o.x`).
+@MainActor
 public protocol JSDeletable: AnyObject {
     func jsDeleteOwn(_ key: String) -> Bool
 }

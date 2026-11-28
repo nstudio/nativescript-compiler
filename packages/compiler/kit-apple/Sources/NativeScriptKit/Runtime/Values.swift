@@ -23,6 +23,7 @@ public typealias JSFunction = ([Any?]) throws -> Any?
 /// An object whose properties dynamic code reaches by name (`o[key]`, JSON, `console.log`):
 /// plain objects (`JSObject`) and the classes generated for TypeScript classes and interfaces.
 /// A nil `jsClassName` prints as a plain object (`{ a: 1 }`), otherwise as `Name { a: 1 }`.
+@MainActor
 public protocol JSDynamic: AnyObject {
     subscript(jsKey key: String) -> Any? { get set }
     var jsKeys: [String] { get }

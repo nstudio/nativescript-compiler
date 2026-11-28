@@ -1,4 +1,5 @@
 /// A native object that is another in every JavaScript sense: `===`, Map and Set keys, WeakMap keys see that one.
+@MainActor
 public protocol JSStandIn: AnyObject {
     /// The object this one is, or nil where it is itself.
     var jsStandingFor: AnyObject? { get }
@@ -6,6 +7,7 @@ public protocol JSStandIn: AnyObject {
 
 /// An object of one shape's class standing for an object of another class (`T.jsView`): it keeps no fields of its
 /// own and reads and writes its root's keys, so it is the root in every JavaScript sense.
+@MainActor
 public protocol JSViewing: JSDynamic, JSStandIn {
     var jsViewRoot: JSDynamic? { get }
 }

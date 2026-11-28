@@ -89,6 +89,7 @@ public func jsPropertyKey(_ value: Any?) -> String {
 public func jsIsSymbolKey(_ key: String) -> Bool { key.utf8.first == 0 }
 
 /// An object with symbol-keyed properties, which print after its other keys.
+@MainActor
 public protocol JSSymbolKeyed: AnyObject {
     var jsSymbolKeys: [String] { get }
 }

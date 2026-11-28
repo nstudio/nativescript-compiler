@@ -380,6 +380,7 @@ public func jsDecorate(_ cls: AnyClass, _ decorators: [Any?]) throws {
 /// An instance of a class generated from core: the properties script gives it beyond the
 /// fields it declares (`this[key] = v`, symbol-keyed ones included), its methods named by
 /// symbols (`[prop.setNative](value)`), and what its class's prototype defines.
+@MainActor
 public protocol JSExpando: JSDynamic, JSSymbolKeyed, JSDeletable {
     var jsExpando: JSObject? { get set }
     /// The method a class declares under the symbol whose key this is; the method takes its receiver as `this`.
