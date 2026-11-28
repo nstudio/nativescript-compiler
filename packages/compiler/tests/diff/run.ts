@@ -108,7 +108,7 @@ const expected = new Map(cases.map((c): [string, Outcome] => {
   const key = program && hash(nodeBase, ...program.flatMap((f) => [relative(js, f), existsSync(f) ? local(readFileSync(f, 'utf8')) : '']));
   const hit = key ? nodeCache.get(key) : null;
   if (hit) return [c, hit];
-  const outcome = outcomeOf(spawnSync('node', ['--expose-gc', '--import', shim, entry], { encoding: 'utf8' }));
+  const outcome = outcomeOf(spawnSync('node', ['--stack-size=4096', '--expose-gc', '--import', shim, entry], { encoding: 'utf8' }));
   if (key) nodeCache.put(key, outcome);
   return [c, outcome];
 }));
