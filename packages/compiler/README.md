@@ -3,8 +3,11 @@
 NativeScript CLI extension (`ns compile`) that compiles NativeScript apps directly to native Swift (iOS) and Kotlin (Android) with no JavaScript runtime.
 
 - **No JavaScript engine in release builds.** App TypeScript, npm dependencies, and `@nativescript/core` compile directly to Swift and Kotlin and are built with Xcode and Gradle.
+- **Direct, deterministic native platform APIs.** Unlike JS-to-native compilers that stall behind untyped bridges or restricted dialects, NativeScript's 1:1 TypeScript platform declarations (`@nativescript/types-ios` and `@nativescript/types-android`) let the compiler resolve UIKit, Foundation, and Android SDK classes, overloads, protocols, and subclasses deterministically at compile time — emitting direct Swift and Kotlin calls with no C ABI or JNI hop.
 - **Source-mapped crash traces.** Generated native code preserves TypeScript source lines so release stack traces resolve back to your app source via `ns compile retrace`.
 - **NativeScriptKit built from `@nativescript/core`.** Views, layout, and CSS are compiled from `@nativescript/core` and linked natively.
+
+See [Why NativeScript Makes This Possible](https://github.com/nstudio/nativescript-compiler/blob/main/README.md#why-nativescript-makes-this-possible) and [ARCHITECTURE.md](https://github.com/nstudio/nativescript-compiler/blob/main/packages/compiler/docs/ARCHITECTURE.md#related-work-and-why-swift-and-kotlin-source) for how this compares with prior AOT JS/TS compilers.
 
 ## Requirements
 

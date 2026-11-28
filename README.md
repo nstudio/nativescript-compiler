@@ -2,9 +2,25 @@
 
 Official nStudio NativeScript CLI plugin (`ns compile`) and framework adapters that compile NativeScript apps (TypeScript, `@nativescript/core`, framework templates, and plugins) directly to native **Swift** (iOS) and **Kotlin** (Android) — with **no JavaScript runtime** in the release binary.
 
-[Packages](#packages) · [Quick Start](#quick-start-end-users) · [Examples](#examples) · [Crash Traces](#crash-traces) · [Speed & Footprint](#speed-and-footprint-compiled-vs-js-v8-release) · [Local Development](#local-development) · [Generating Kits](#generating-swift--kotlin-kits-from-nativescriptcore)
+[Why NativeScript](#why-nativescript-makes-this-possible) · [Packages](#packages) · [Quick Start](#quick-start-end-users) · [Examples](#examples) · [Crash Traces](#crash-traces) · [Speed & Footprint](#speed-and-footprint-compiled-vs-js-v8-release) · [Local Development](#local-development) · [Generating Kits](#generating-swift--kotlin-kits-from-nativescriptcore)
 
 ---
+
+## Why NativeScript Makes This Possible
+
+Ahead-of-time (AOT) compilation of JavaScript and TypeScript to native code has a long history of research and production experiments — from academic systems (**Safe TypeScript / TS\***, **StrongScript**, **Static TypeScript**, **Hopc**) to modern compilers (**Static Hermes**, **AssemblyScript**, **Porffor**, **ScriptC**). Across that prior art, two structural walls explain why general-purpose JS/TS-to-native compilers either stall, fall back to shipping a JavaScript engine, or force developers into a restricted non-JS dialect:
+
+1. **The unsoundness wall:** TypeScript's type system is structurally unsound (`any`, type assertions, dynamic property lookups, prototype chains, JSON payloads). Blindly trusting type annotations like C structs causes memory corruption or traps; checking every operation dynamically without whole-program analysis erases the benefits of compiling natively.
+2. **The platform-boundary wall:** In typical cross-platform JS frameworks (React Native, Capacitor, Cordova, web views), native UI and OS APIs sit behind untyped message bridges, hand-written C++/JSI bindings, or dynamic runtime marshalling. Even if business logic compiles to C, LLVM, or WebAssembly, every UI update, layout pass, gesture, and plugin call still crosses an opaque foreign boundary — forcing either an embedded JS runtime (Static Hermes, Bun) or a separate restricted language (AssemblyScript) that cannot compile existing frameworks and packages.
+
+NativeScript is uniquely positioned to clear both walls because of how its architecture was built from day one:
+
+- **1:1 typed native platform APIs directly in TypeScript (`@nativescript/types-ios` & `@nativescript/types-android`):** NativeScript already exposes the entire Apple SDK (`UIKit`, `Foundation`, `CoreGraphics`, `Metal`, Objective-C/Swift classes & protocols) and Android SDK (`android.*`, `java.*`, `androidx.*`) directly in TypeScript through machine-generated `.d.ts` declarations. Every native class, selector, overload, struct, enum, delegate/protocol, and Android subclass resolves **deterministically at compile time** against the real Xcode Apple SDK headers/Swift modules and Android SDK `.class`/`.jar` bytecode — with no bridge, no C ABI, and no JNI hop.
+- **NativeScript itself compiles natively:** Because `@nativescript/core`, framework adapters, plugins, and application code are all written directly against those typed platform APIs in TypeScript, the compiler translates the **entire stack** — views, layout, CSS, gestures, navigation, and app logic — into idiomatic **Swift** and **Kotlin** source running directly on ARC and ART.
+- **Whole-program semantic analysis with explicit runtime guardrails:** Drawing directly from sound-typing research, the compiler never blindly trusts TypeScript annotations at runtime. A shared semantic front (`packages/compiler/src/semantics/`) resolves value representations, `null`/`undefined` distinctions, and object shapes once for both backends, inserting targeted runtime checks only where untyped values cross into typed slots — and explicitly refusing uncompilable dynamic features (`eval`, `with`, `Proxy`) in [LIMITS.md](packages/compiler/docs/LIMITS.md).
+- **Native toolchains & differential verification against Node.js (V8):** Emitting Swift and Kotlin source lets Xcode/LLVM and Gradle/R8 optimize, tree-shake, sign, and symbolicate the final binary natively while preserving `.ts` source lines in release crash traces. Rather than inventing a "JS-like dialect," behavior is continuously verified against Node.js across ~1,000 differential TypeScript cases, `wtfjs` edge cases, and `tc39/test262`.
+
+See [ARCHITECTURE.md](packages/compiler/docs/ARCHITECTURE.md#related-work-and-why-swift-and-kotlin-source) for a deeper comparison with related AOT compilers.
 
 ## Packages
 
@@ -142,9 +158,10 @@ Measured in alternating 5-round A/B runs (`ns compile` vs `--release --no-compil
 | **`nav-round-trip`** | 16.0 ms | 24.9 ms | 1.56× | 84.3 ms | **85.6 ms** | **parity** |
 | **`json-parse` / `json-stringify`** | 3.8 / 1.9 ms | 12.9 / 11.4 ms | 3.4× / 5.9× | 3.4 / 1.3 ms | 6.1 / 11.1 ms | 1.8× / 8.9× |
 
-**Recent iOS runtime optimizations (`-Osize -wmo` on 5-level `View`/`Label`/`Style` `Property.set` workloads):**
-- `views-500-build-sim`: **87.53 ms → 40.25 ms** (**2.17× faster**, −54.0%)
-- `relayout-200-sim`: **25.85 ms → 13.81 ms** (**1.87× faster**, −46.6%)
+**Recent runtime & compiler optimizations:**
+- **iOS UI hot paths (`-Osize -wmo`, 5-level `View`/`Label`/`Style` `Property.set`):** `views-500-build-sim` **87.53 ms → 40.25 ms** (**2.17× faster**, −54.0%), `relayout-200-sim` **25.85 ms → 13.81 ms** (**1.87× faster**, −46.6%).
+- **Swift `JSON.stringify` (`-Osize` direct `JSJSONFastSerializable` + UTF-8 buffer):** **24.8 ms → 4.65 ms** (**5.3× faster**; **2.6× faster** than V8 JIT on the `json-stringify` benchmark).
+- **Kotlin `number[]` hot loops & fused pipelines:** unboxed `DoubleArray` fast paths + zero-allocation fused `.map().filter().reduce()` (`matmul` **2.20 ms**, **1.04×** vs V8 JIT).
 
 **Where compiled wins today:** dropping the JavaScript engine cuts package size dramatically (**2.5 MB vs 94.5 MB** universal Android APK; **29.9 MB vs 55.9 MB** iOS `.app`), cuts memory roughly in half on iOS and by **61%** under load on Android (80 MB flat vs 205 MB), speeds up cold launch on both platforms, and — because iOS forbids JIT — runs the full iOS compute suite **1.5× faster overall** (up to **99× faster** on typed class methods and **13× faster** on `nbody`, with **0.00%** list jank). On Android, UI benchmarks (`list-open`, `views-500-to-frame`, `nav-round-trip`) are at parity or faster.
 
@@ -164,12 +181,12 @@ Every case runs under Node.js and as a compiled native binary (Swift on macOS, K
 
 | Suite | Swift (iOS) | Kotlin (Android) |
 | --- | ---: | ---: |
-| **Runnable cases matching Node** | **926 / 933 (99.2%)** *(46 declared refusals, 7 known failures)* | **874 / 877 (99.7%)** *(40 declared refusals, 3 known failures)* |
+| **Runnable cases matching Node** | **932 / 936 (99.6%)** *(44 declared refusals, 4 known failures)* | **884 / 886 (99.8%)** *(39 declared refusals, 2 known failures)* |
 | **wtfjs edge cases (61 applicable)** | **54 / 54 runnable match Node** *(0 failures, 7 refused)* | **54 / 54 runnable match Node** *(0 failures, 7 refused)* |
-| **Shared-front decision parity** | **8,825,940** decisions across 48 cases — **0** answered differently | *(same)* |
-| **Architecture &amp; layering gates** | **306** modules, **0** cycles · **23 / 23** semantics tests · **85 / 85** expression-parser checks | *(same)* |
+| **Shared-front decision parity** | **8,885,451** decisions across 48 cases — **0** answered differently | *(same)* |
+| **Architecture &amp; layering gates** | **307** modules, **0** cycles · **29 / 29** semantics tests · **85 / 85** expression-parser checks | *(same)* |
 
-*(2 of Swift's 7 remaining known failures are inherent UTF-16 lone-surrogate limits of Swift `String`; full details in [tests/README.md](packages/compiler/tests/README.md#the-suite-today) and [WTFJS.md](packages/compiler/tests/diff/WTFJS.md).)*
+*(2 of Swift's 4 remaining known failures are inherent UTF-16 lone-surrogate limits of Swift `String`; full details in [tests/README.md](packages/compiler/tests/README.md#the-suite-today) and [WTFJS.md](packages/compiler/tests/diff/WTFJS.md).)*
 
 #### 2. ECMA-262 `tc39/test262` Native Conformance
 

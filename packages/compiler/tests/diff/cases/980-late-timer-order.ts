@@ -32,9 +32,9 @@ function lateInterval(next: () => void) {
       next();
       return;
     }
-    spin(12);
-  }, 5);
-  setTimeout(() => console.log('timeout 20 between ticks'), 20);
+    spin(50);
+  }, 20);
+  setTimeout(() => console.log('timeout 20 between ticks'), 80);
 }
 
 // A late loop runs each due list whole, in expiry order: the second 20 ms timer runs before the 10 ms one due earlier.

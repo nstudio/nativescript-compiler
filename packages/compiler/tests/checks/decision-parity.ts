@@ -14,7 +14,7 @@
 // merge set no longer covers what the full set asks (a new front question, a new ledger field).
 import { availableParallelism, tmpdir } from 'node:os';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { basename, join, relative } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isMainThread, parentPort, Worker, workerData } from 'node:worker_threads';
 
@@ -219,7 +219,7 @@ if (!isMainThread) {
 		} catch {
 			return at;
 		}
-		return `${relative(process.cwd(), file)}:${line} ${kind}`;
+		return `${relative(dirname(suiteDir), file).replace(/\\/g, '/')}:${line} ${kind}`;
 	};
 	const verbose = argv.includes('--verbose');
 	let failures = 0,
